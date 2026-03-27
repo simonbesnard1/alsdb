@@ -1,7 +1,7 @@
 [project]
 name = "alsdb"
 version = "0.1.0"
-description = "ALS point cloud database — ingest LAZ files into TileDB on S3"
+description = "ALS point cloud database — ingest PNOA LAZ tiles into TileDB on S3"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -24,8 +24,10 @@ python-pdal = ">=3.4"
 tiledb = ">=0.28"
 numpy = ">=1.26"
 click = ">=8.1"
-pydantic = ">=2.5"
-pydantic-settings = ">=2.2"
+xarray = ">=2024.1"
+pandas = ">=2.0"
+scipy = ">=1.12"
+matplotlib = ">=3.8"
 pytest = ">=8.0"
 
 [tool.pixi.pypi-dependencies]
@@ -34,6 +36,10 @@ alsdb = { path = ".", editable = true }
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
 ingest = "alsdb ingest"
+info = "alsdb info"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
