@@ -91,10 +91,19 @@ class TileDBProvider:
         max_threads = min(cores * 4, 64)
         max_s3_ops = min(cores * 8, 256)
 
+        # Strip scheme from url — endpoint_override must be host[:port] only
+        scheme = "https"
+        host = url
+        for prefix in ("https://", "http://"):
+            if url.startswith(prefix):
+                scheme = prefix.rstrip(":/")
+                host = url[len(prefix):]
+                break
+
         cfg: Dict[str, str] = {
-            "vfs.s3.endpoint_override": url,
+            "vfs.s3.endpoint_override": host,
             "vfs.s3.region": region,
-            "vfs.s3.scheme": "https",
+            "vfs.s3.scheme": scheme,
             "vfs.s3.use_virtual_addressing": "true",
             "vfs.s3.max_parallel_ops": str(max_s3_ops),
             "vfs.s3.multipart_part_size": str(64 * 1024**2),   # 64 MB
