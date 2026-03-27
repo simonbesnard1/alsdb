@@ -1,0 +1,39 @@
+[project]
+name = "alsdb"
+version = "0.1.0"
+description = "ALS point cloud database — ingest LAZ files into TileDB on S3"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+alsdb = "alsdb.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pixi.project]
+name = "alsdb"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+python = ">=3.11"
+pdal = ">=2.7"
+python-pdal = ">=3.4"
+tiledb = ">=0.28"
+numpy = ">=1.26"
+click = ">=8.1"
+pydantic = ">=2.5"
+pydantic-settings = ">=2.2"
+pytest = ">=8.0"
+
+[tool.pixi.pypi-dependencies]
+alsdb = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+test = "pytest tests/ -v"
+ingest = "alsdb ingest"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
