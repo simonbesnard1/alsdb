@@ -89,10 +89,12 @@ class ALSProvider(TileDBProvider):
             requested attributes.
         """
         attrs = attributes or _ALL_ATTRS
-        year_min, year_max = (year, year) if year is not None else self._year_range()
+        y0, y1_inc = (year, year) if year is not None else self._year_range()
+        # +1: TileDB-Py int-dimension slices are exclusive-end (like Python slices)
+        y1 = y1_inc + 1
 
         with self.open("r") as arr:
-            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, year_min:year_max]
+            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
 
         df = pd.DataFrame(data)
         logger.debug(

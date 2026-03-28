@@ -82,6 +82,7 @@ _PDAL_DTYPES: dict[str, type] = {
 def _query_to_array(
     provider: TileDBProvider,
     bbox: Optional[tuple[float, float, float, float]],
+    year: Optional[int] = None,
 ) -> np.ndarray:
     """
     Query the TileDB array and return a PDAL-compatible numpy structured array.
@@ -93,6 +94,8 @@ def _query_to_array(
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
         Reads the full array if ``None``.
+    year:
+        Optional survey year filter.  ``None`` returns all years.
 
     Returns
     -------
@@ -101,11 +104,15 @@ def _query_to_array(
     """
     with provider.open("r") as arr:
         attrs = list(LAS_ATTRIBUTES.keys())
+        yr_dim = arr.schema.domain.dim("Year")
+        y0 = year if year is not None else int(yr_dim.domain[0])
+        # +1: TileDB-Py int-dimension slices are exclusive-end (like Python slices)
+        y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
         if bbox is not None:
             min_x, min_y, max_x, max_y = bbox
-            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y]
+            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
         else:
-            data = arr.query(attrs=attrs)[:]
+            data = arr.query(attrs=attrs)[:, :, y0:y1]
 
     n = len(data["X"])
     logger.debug("Queried %d points from TileDB", n)

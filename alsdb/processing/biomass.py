@@ -82,14 +82,15 @@ _CRS = "EPSG:25830"
 # ---------------------------------------------------------------------------
 
 def _attach_hag(provider: TileDBProvider,
-                bbox: Optional[tuple[float, float, float, float]]) -> np.ndarray:
+                bbox: Optional[tuple[float, float, float, float]],
+                year: Optional[int] = None) -> np.ndarray:
     """
     Query TileDB and return all points with ``HeightAboveGround`` attached.
 
     Ground points (Class 2) are kept so the Delaunay TIN is complete.
     Negative HAG values are clamped to 0.
     """
-    arr = _query_to_array(provider, bbox)
+    arr = _query_to_array(provider, bbox, year=year)
 
     stages = [
         {"type": "filters.hag_delaunay"},
@@ -285,6 +286,7 @@ def compute_metrics(
     output_dir: str | Path,
     resolution: float = 10.0,
     bbox: Optional[tuple[float, float, float, float]] = None,
+    year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     nodata: float = -9999.0,
 ) -> dict[str, Path]:
@@ -317,7 +319,7 @@ def compute_metrics(
     output_dir = Path(output_dir)
     logger.info("Extracting LiDAR metrics → %s  (%.0f m resolution)", output_dir, resolution)
 
-    points = _attach_hag(provider, bbox)
+    points = _attach_hag(provider, bbox, year=year)
     metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
                                        cc_threshold=cc_threshold)
 
@@ -336,6 +338,7 @@ def compute_biomass(
     resolution: float = 10.0,
     model_fn: Optional[Callable[[dict[str, np.ndarray]], np.ndarray]] = None,
     bbox: Optional[tuple[float, float, float, float]] = None,
+    year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     nodata: float = -9999.0,
 ) -> Path:
@@ -370,7 +373,7 @@ def compute_biomass(
 
     logger.info("Computing AGB → %s  (%.0f m resolution)", output_path, resolution)
 
-    points = _attach_hag(provider, bbox)
+    points = _attach_hag(provider, bbox, year=year)
     metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
                                        cc_threshold=cc_threshold)
     agb = model_fn(metrics)
