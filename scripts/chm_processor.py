@@ -24,7 +24,7 @@ compute_all(
     provider,
     output_dir="output/",
     resolution=1.0,
-    bbox=(308000, 4688000, 310000, 4690000),
+    #bbox=(308000, 4688000, 310000, 4690000),
 )
 
 

@@ -91,7 +91,10 @@ def plot_chm(
     grid, extent = _read_raster(path)
     valid = grid[~np.isnan(grid)]
     if vmax is None:
-        vmax = float(np.percentile(valid, 98)) if valid.size else 30.0
+        # Use the 98th percentile of vegetated pixels only (>0.5 m) so that
+        # sparse tall trees are not swamped by a majority of bare-ground zeros.
+        veg = valid[valid > 0.5]
+        vmax = float(np.percentile(veg, 98)) if veg.size else float(np.nanmax(valid)) if valid.size else 30.0
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
