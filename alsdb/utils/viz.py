@@ -22,7 +22,7 @@ Typical usage::
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -332,6 +332,161 @@ def plot_classification(
     ax.set_ylabel("Northing (m)")
     ax.set_title(f"Classification  —  {resolution} m resolution")
     return ax
+
+
+# ---------------------------------------------------------------------------
+# 3-D point cloud
+# ---------------------------------------------------------------------------
+
+def plot_pointcloud_3d(
+    df: pd.DataFrame,
+    color_by: str = "Z",
+    max_points: int = 50_000,
+    point_size: float = 1.0,
+    cmap: str = "terrain",
+    percentile_clip: tuple[float, float] = (2.0, 98.0),
+    elev: float = 25.0,
+    azim: float = -60.0,
+    backend: str = "matplotlib",
+    figsize: tuple[float, float] = (10, 8),
+):
+    """
+    3-D scatter plot of the point cloud.
+
+    Always subsamples to *max_points* for performance.  With a full 11 M-point
+    PNOA tile, use ``max_points=50_000`` (matplotlib) or up to ``200_000``
+    (plotly/WebGL).
+
+    Parameters
+    ----------
+    df:
+        Point-cloud DataFrame with columns ``X``, ``Y``, ``Z``.
+    color_by:
+        Attribute used for colour:
+
+        * ``"Z"`` — elevation (default)
+        * ``"RGB"`` — true colour (requires ``Red``, ``Green``, ``Blue`` columns)
+        * ``"Intensity"`` — return intensity
+        * ``"Classification"`` — LAS class codes (uses :data:`_LAS_CLASSES` palette)
+
+    max_points:
+        Maximum number of points to render.  Random subsample if exceeded.
+    point_size:
+        Marker size in points (matplotlib) or pixels (plotly).
+    cmap:
+        Matplotlib colormap name (ignored when *color_by* is ``"RGB"`` or
+        ``"Classification"``).
+    percentile_clip:
+        Low / high percentile for colour-scale clipping.
+    elev, azim:
+        Initial viewing elevation and azimuth angles (matplotlib only).
+    backend:
+        ``"matplotlib"`` (default, static) or ``"plotly"`` (interactive,
+        requires ``plotly`` to be installed).
+    figsize:
+        Figure size in inches (matplotlib only).
+
+    Returns
+    -------
+    matplotlib.figure.Figure  or  plotly.graph_objects.Figure
+    """
+    # --- subsample ---
+    if len(df) > max_points:
+        df = df.sample(n=max_points, random_state=42)
+
+    x = df["X"].to_numpy()
+    y = df["Y"].to_numpy()
+    z = df["Z"].to_numpy()
+
+    # --- colour array ---
+    def _scalar_colour(values):
+        valid = values[np.isfinite(values)]
+        lo = np.percentile(valid, percentile_clip[0])
+        hi = np.percentile(valid, percentile_clip[1])
+        return np.clip((values - lo) / (hi - lo + 1e-9), 0, 1)
+
+    if color_by == "RGB":
+        def _ch(col):
+            v = df[col].to_numpy().astype(np.float32)
+            valid = v[np.isfinite(v)]
+            lo, hi = np.percentile(valid, percentile_clip)
+            return np.clip((v - lo) / (hi - lo + 1e-9), 0, 1)
+        colours_rgb = np.stack([_ch("Red"), _ch("Green"), _ch("Blue")], axis=1)
+        colours_scalar = None
+    elif color_by == "Classification":
+        codes = df["Classification"].to_numpy(dtype=int)
+        hex_colours = [_LAS_CLASSES.get(int(c), (None, "#999999"))[1] for c in codes]
+        colours_rgb = np.array([
+            [int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255]
+            for h in hex_colours
+        ])
+        colours_scalar = None
+    else:
+        field = "Intensity" if color_by == "Intensity" else "Z"
+        colours_scalar = _scalar_colour(df[field].to_numpy().astype(np.float64))
+        colours_rgb = None
+
+    # -------------------------------------------------------------------
+    if backend == "plotly":
+        import plotly.graph_objects as go
+
+        if colours_rgb is not None:
+            colour_arg = [
+                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
+                for r, g, b in colours_rgb
+            ]
+            marker = dict(size=point_size, color=colour_arg, opacity=0.8)
+        else:
+            import matplotlib.pyplot as plt
+            cmap_obj = plt.get_cmap(cmap)
+            rgba = cmap_obj(colours_scalar)
+            colour_arg = [
+                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
+                for r, g, b, _ in rgba
+            ]
+            marker = dict(size=point_size, color=colour_arg, opacity=0.8)
+
+        fig = go.Figure(data=[go.Scatter3d(
+            x=x, y=y, z=z,
+            mode="markers",
+            marker=marker,
+        )])
+        fig.update_layout(
+            scene=dict(
+                xaxis_title="Easting (m)",
+                yaxis_title="Northing (m)",
+                zaxis_title="Elevation (m)",
+                aspectmode="data",
+            ),
+            margin=dict(l=0, r=0, b=0, t=30),
+            title=f"Point cloud — {len(df):,} pts  |  colour: {color_by}",
+        )
+        return fig
+
+    # -------------------------------------------------------------------
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    if colours_rgb is not None:
+        ax.scatter(x, y, z, c=colours_rgb, s=point_size, linewidths=0,
+                   depthshade=True, rasterized=True)
+    else:
+        import matplotlib.cm as cm
+        cmap_obj = cm.get_cmap(cmap)
+        ax.scatter(x, y, z, c=colours_scalar, cmap=cmap_obj,
+                   s=point_size, linewidths=0, depthshade=True, rasterized=True)
+
+    ax.ticklabel_format(useOffset=False)   # show full UTM coords, not offset notation
+    ax.set_xlabel("Easting (m)", labelpad=8)
+    ax.set_ylabel("Northing (m)", labelpad=8)
+    ax.set_zlabel("Elevation (m)", labelpad=8)
+    ax.view_init(elev=elev, azim=azim)
+    ax.set_title(f"Point cloud — {len(df):,} pts  |  colour: {color_by}", pad=10)
+    fig.tight_layout()
+    return fig
 
 
 # ---------------------------------------------------------------------------
