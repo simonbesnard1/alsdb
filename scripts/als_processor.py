@@ -9,11 +9,20 @@ from alsdb import ALSDatabase
 import boto3
 from alsdb import ALSProvider
 from alsdb.utils.viz import plot_overview, plot_dsm, plot_rgb
+from pathlib import Path
 
 # Ingest a tile locally
 db = ALSDatabase(storage_type="local", uri="array_")
+
+# Skips already-ingested files automatically
 db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz",
-          overwrite=True)  # no filter — CHM needs ground (2) + vegetation (3-5)
+          overwrite=True)  # writes + records in manifest
+
+# Ingest thousands of files at once, auto-consolidates every 50
+db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/").glob("*.laz")), consolidate_every=50)
+
+# Inspect what's been ingested
+db.list_ingested()
 
 # Ingest to S3
 session = boto3.Session(profile_name="alsdb")

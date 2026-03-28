@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Mar 28 09:31:34 2026
+
+@author: simon
+"""
+
+from alsdb import ALSProvider
+from alsdb.processing.biomass import compute_biomass, compute_metrics, naesset_model
+import functools
+
+provider = ALSProvider(storage_type="local", uri="array_")
+
+# All structural metrics as separate GeoTIFFs (good for calibration)
+compute_metrics(provider, "output/metrics/", resolution=10.0)
+# → output/metrics/h50.tif, h75.tif, h95.tif, hmean.tif, cc.tif, density.tif
+
+# AGB with default Næsset model
+compute_biomass(provider, "output/agb.tif", resolution=10.0)
+
+# AGB with calibrated coefficients
+my_model = functools.partial(naesset_model, a=1.2, b=2.1, c=0.6)
+compute_biomass(provider, "output/agb.tif", resolution=10.0, model_fn=my_model)

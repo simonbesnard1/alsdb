@@ -8,23 +8,10 @@ Created on Sat Mar 28 00:32:51 2026
 
 from alsdb import ALSProvider
 from alsdb.processing.chm import compute_chm, compute_all
-import boto3
-
-
-session = boto3.Session(profile_name="alsdb")
-frozen = session.get_credentials().get_frozen_credentials()
-credentials = {
-    "AccessKeyId": frozen.access_key,
-    "SecretAccessKey": frozen.secret_key,
-}
 
 provider = ALSProvider(
-    storage_type="s3",
-    uri="s3://dog-proj-3d-abc-qian-song.new-bucket-2f37f541/test",
-    url="https://s3.gfz-potsdam.de",
-    region="eu-central-1",
-    credentials=credentials,
-)
+    storage_type="local",
+    uri="array_")
 
 # CHM for the full array
 compute_chm(provider, "output/chm.tif", resolution=1.0)
@@ -36,3 +23,18 @@ compute_all(
     resolution=1.0,
     bbox=(308000, 4688000, 310000, 4690000),
 )
+
+
+from alsdb.utils.viz_raster import plot_chm, plot_products
+
+# Single product
+plot_chm("output/chm.tif")
+
+# Three-panel overview
+fig = plot_products(
+    "output/dtm.tif",
+    "output/dsm.tif",
+    "output/chm.tif",
+    title="PNOA 2021 — tile 308/4690",
+)
+fig.savefig("output/products_overview.png", dpi=150, bbox_inches="tight")

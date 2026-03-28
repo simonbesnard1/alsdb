@@ -9,8 +9,8 @@ import tiledb
 
 # ---------------------------------------------------------------------------
 # LAS dimension registry
-# X and Y are the TileDB *dimensions* (spatial index); all others are
-# *attributes* stored alongside each point.
+# X, Y, and Year are the TileDB *dimensions* (spatial + temporal index);
+# all others are *attributes* stored alongside each point.
 # ---------------------------------------------------------------------------
 LAS_ATTRIBUTES: dict[str, type] = {
     "Z": np.float64,
@@ -51,6 +51,8 @@ class TileDBSchemaConfig:
     domain_max_x: float = 900_000.0
     domain_min_y: float = 3_000_000.0
     domain_max_y: float = 9_999_900.0
+    year_min: int = 2000
+    year_max: int = 2100
     chunk_size: int = 1_000_000
 
 
@@ -66,9 +68,11 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
     Returns
     -------
     tiledb.ArraySchema
-        A sparse 2-D schema with X/Y spatial dimensions and one attribute
-        per LAS dimension.  All attributes and coordinates use ZSTD-9 compression.
-        ``allows_duplicates=True`` accommodates multiple returns at the same XY.
+        A sparse 3-D schema with X/Y/Year dimensions and one attribute per LAS
+        field.  The Year dimension separates repeated surveys of the same tile
+        (e.g. 2019 vs 2021 flights).  All attributes and coordinates use
+        ZSTD-9 compression.  ``allows_duplicates=True`` accommodates multiple
+        returns at the same XY within a single survey.
     """
     domain = tiledb.Domain(
         tiledb.Dim(
@@ -82,6 +86,12 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
             domain=(cfg.domain_min_y, cfg.domain_max_y),
             tile=cfg.tile_extent_y,
             dtype=np.float64,
+        ),
+        tiledb.Dim(
+            name="Year",
+            domain=(cfg.year_min, cfg.year_max),
+            tile=1,
+            dtype=np.int16,
         ),
     )
     attrs = [

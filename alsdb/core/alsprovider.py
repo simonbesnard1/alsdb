@@ -26,6 +26,10 @@ class ALSProvider(TileDBProvider):
     spatial queries that return :class:`pandas.DataFrame` or
     :class:`xarray.Dataset`.
 
+    All query methods accept an optional ``year`` parameter.  When provided,
+    only points from that survey year are returned.  When ``None``, all years
+    are returned and the result DataFrame includes a ``Year`` column.
+
     Parameters
     ----------
     storage_type:
@@ -44,6 +48,15 @@ class ALSProvider(TileDBProvider):
     """
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _year_range(self) -> tuple[int, int]:
+        """Return (year_min, year_max) from the array schema."""
+        dim = self.schema.domain.dim("Year")
+        return int(dim.domain[0]), int(dim.domain[1])
+
+    # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
 
@@ -54,6 +67,7 @@ class ALSProvider(TileDBProvider):
         max_x: float,
         max_y: float,
         attributes: Optional[List[str]] = None,
+        year: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Query all points within a bounding box.
@@ -64,19 +78,26 @@ class ALSProvider(TileDBProvider):
             Bounding box in the array's native CRS (UTM metres).
         attributes:
             Subset of LAS attribute names to return.  Returns all if ``None``.
+        year:
+            If provided, restrict to this survey year only.
+            If ``None``, all years are returned (result includes a ``Year`` column).
 
         Returns
         -------
         pandas.DataFrame
-            One row per point; columns are ``X``, ``Y``, and the requested attributes.
+            One row per point; columns are ``X``, ``Y``, ``Year``, and the
+            requested attributes.
         """
         attrs = attributes or _ALL_ATTRS
+        year_min, year_max = (year, year) if year is not None else self._year_range()
+
         with self.open("r") as arr:
-            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y]
+            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, year_min:year_max]
+
         df = pd.DataFrame(data)
         logger.debug(
-            "query_bbox [%.0f–%.0f, %.0f–%.0f]: %d points",
-            min_x, max_x, min_y, max_y, len(df),
+            "query_bbox [%.0f–%.0f, %.0f–%.0f, year=%s]: %d points",
+            min_x, max_x, min_y, max_y, year or "all", len(df),
         )
         return df
 
@@ -85,6 +106,7 @@ class ALSProvider(TileDBProvider):
         tile_x_km: int,
         tile_y_km: int,
         attributes: Optional[List[str]] = None,
+        year: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Query all points within a PNOA tile identified by its km-grid coordinates.
@@ -97,6 +119,8 @@ class ALSProvider(TileDBProvider):
             Tile northing in km (e.g. ``4690`` covers 4 688 000 – 4 690 000 m).
         attributes:
             Subset of LAS attribute names to return.  Returns all if ``None``.
+        year:
+            If provided, restrict to this survey year only.
 
         Returns
         -------
@@ -106,9 +130,19 @@ class ALSProvider(TileDBProvider):
         max_x = min_x + PNOA_TILE_SIZE_M
         max_y = float(tile_y_km * 1000)
         min_y = max_y - PNOA_TILE_SIZE_M
-        logger.debug("query_tile (%d, %d) → bbox %.0f–%.0f / %.0f–%.0f",
-                     tile_x_km, tile_y_km, min_x, max_x, min_y, max_y)
-        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes)
+        logger.debug("query_tile (%d, %d, year=%s) → bbox %.0f–%.0f / %.0f–%.0f",
+                     tile_x_km, tile_y_km, year or "all", min_x, max_x, min_y, max_y)
+        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
+
+    def available_years(self) -> List[int]:
+        """
+        Return the sorted list of survey years present in the array.
+
+        Reads only the ``Year`` dimension column — no attribute data is fetched.
+        """
+        with self.open("r") as arr:
+            data = arr.query(attrs=[], dims=["Year"])[:]
+        return sorted(int(y) for y in np.unique(data["Year"]))
 
     # ------------------------------------------------------------------
     # Format helpers
@@ -121,9 +155,11 @@ class ALSProvider(TileDBProvider):
         max_x: float,
         max_y: float,
         attributes: Optional[List[str]] = None,
+        year: Optional[int] = None,
     ) -> pd.DataFrame:
         """Alias for :meth:`query_bbox` — returns a :class:`pandas.DataFrame`."""
-        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes)
+        return self.query_bbox(min_x, min_y, max_x, max_y,
+                               attributes=attributes, year=year)
 
     def to_xarray(
         self,
@@ -132,6 +168,7 @@ class ALSProvider(TileDBProvider):
         max_x: float,
         max_y: float,
         attributes: Optional[List[str]] = None,
+        year: Optional[int] = None,
     ):
         """
         Query a bounding box and return an :class:`xarray.Dataset`.
@@ -142,6 +179,8 @@ class ALSProvider(TileDBProvider):
             Bounding box in UTM metres.
         attributes:
             Subset of LAS attributes to include.
+        year:
+            If provided, restrict to this survey year only.
 
         Returns
         -------
@@ -149,11 +188,13 @@ class ALSProvider(TileDBProvider):
         """
         import xarray as xr
 
-        df = self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes)
+        df = self.query_bbox(min_x, min_y, max_x, max_y,
+                             attributes=attributes, year=year)
         ds = xr.Dataset.from_dataframe(df)
         ds.attrs.update({
             "crs": "EPSG:25830",
             "bbox": [min_x, min_y, max_x, max_y],
+            "year": year,
         })
         return ds
 
