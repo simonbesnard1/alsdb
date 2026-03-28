@@ -188,14 +188,26 @@ print(result.rh[98])     # RH98, equivalent to GEDI L2A rh98
 print(result.cover)      # canopy cover fraction
 print(result.z_ground)   # estimated ground elevation (m)
 
-# Batch over a list of (lon, lat) footprint centres
+# Batch — shots must be a DataFrame with center_x / center_y columns (UTM)
+import numpy as np
+import pandas as pd
+
+# Synthetic 60 m spaced GEDI-like shot grid over the tile
+xs, ys = np.meshgrid(
+    np.arange(308_100, 309_900, 60),
+    np.arange(4_688_500, 4_689_900, 60),
+)
+shots = pd.DataFrame({"center_x": xs.ravel(), "center_y": ys.ravel()})
+
 results = simulate_batch(
     provider=reader,
-    centres=[(308_500, 4_689_000), (309_000, 4_689_500)],
-    footprint_radius=12.5,
+    shots=shots,
     year=2021,
-    max_workers=4,
+    n_workers=4,
+    footprint_radius=12.5,
 )
+# results is a DataFrame: original columns + z_ground, home, cover, rh0…rh100
+print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
 ```
 
 The simulator builds a vertical return histogram (0.15 m bins), convolves it with a Gaussian pulse (σ = 0.64 m full-waveform, 0.93 m cover), detects the ground return, and computes cumulative RH metrics from ground up.
