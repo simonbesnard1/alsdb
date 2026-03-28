@@ -138,38 +138,73 @@ All processing functions accept a `year` parameter to restrict the query to a si
 ### Canopy Height Model / DTM / DSM
 
 ```python
-from alsdb.processing.chm import compute_chm
+from alsdb.processing.chm import compute_chm, compute_all
 
+# Single area (fits in memory)
 compute_chm(
     provider=reader,
+    output_path="outputs/chm.tif",
     bbox=(308_000, 4_688_000, 310_000, 4_690_000),
-    resolution=1.0,           # metres per pixel
-    output_dir="outputs/",
+    resolution=1.0,
     year=2021,
+)
+
+# Large area — tiled processing (500 m sub-tiles, 50 m buffer, 4 workers)
+compute_chm(
+    provider=reader,
+    output_path="outputs/chm.tif",
+    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
+    resolution=1.0,
+    year=2021,
+    tile_size=500.0,    # sub-tile size in metres
+    tile_buffer=50.0,   # overlap buffer for accurate TIN at tile edges
+    n_workers=4,
+)
+
+# All three products (DTM + DSM + CHM) in one call
+compute_all(
+    provider=reader,
+    output_dir="outputs/",
+    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
+    resolution=1.0,
+    year=2021,
+    tile_size=500.0, tile_buffer=50.0, n_workers=4,
 )
 # writes outputs/chm.tif, outputs/dtm.tif, outputs/dsm.tif
 ```
 
-The pipeline queries the array, injects the point cloud into a PDAL pipeline (`filters.hag_delaunay` for height-above-ground), and writes GeoTIFFs via `writers.gdal`.
+The pipeline queries the array, injects the point cloud into a PDAL pipeline (`filters.hag_delaunay` for height-above-ground), and writes GeoTIFFs via `writers.gdal`.  Sub-tiles with no data (outside the flight swath) are silently skipped and appear as nodata in the mosaic.
+
+**Tiling parameters** apply to all three products — CHM uses a 50 m buffer to ensure accurate TIN values at tile edges; DTM and DSM require no buffer.
 
 ### Biomass estimation
 
 ```python
-from alsdb.processing.biomass import compute_biomass
+from alsdb.processing.biomass import compute_biomass, compute_metrics
 
+# Single area
 compute_biomass(
     provider=reader,
+    output_path="output/agb.tif",
     bbox=(308_000, 4_688_000, 310_000, 4_690_000),
-    resolution=25.0,          # metres per pixel for the output raster
+    resolution=25.0,
     year=2021,
-    output_path = 'output/agb.tif'
 )
-# writes outputs/agb.tif
+
+# Large area — tiled
+compute_biomass(
+    provider=reader,
+    output_path="output/agb.tif",
+    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
+    resolution=25.0,
+    year=2021,
+    tile_size=500.0, tile_buffer=50.0, n_workers=4,
+)
 ```
 
 Uses the Næsset (2002) power-law model: `AGB = a × h95^b × cc^c`, where `h95` is the 95th-percentile height, `cc` is canopy cover, and `a / b / c` are configurable coefficients.
 
-Intermediate metrics (h50, h75, h95, hmean, canopy cover, point density) are also available via `compute_metrics()`.
+Intermediate metrics (h50, h75, h95, hmean, canopy cover, point density) are also available via `compute_metrics()`, which accepts the same tiling parameters.
 
 ### GEDI waveform simulation
 
