@@ -16,7 +16,7 @@ result = simulate_waveform(
     provider=reader,
     center_x=309720.0, center_y=4689880.0,
     footprint_radius=12.5,
-    year=2021,
+    year=2021
 )
 print(result.rh)         # {"rh25": 8.1, "rh50": 14.3, "rh75": 19.7, "rh95": 23.1, ...}
 print(result.cover)      # canopy cover fraction

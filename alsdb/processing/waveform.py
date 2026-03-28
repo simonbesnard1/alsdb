@@ -280,6 +280,7 @@ def simulate_waveform(
     intensity_weighted: bool = False,
     gaussian_beam_weighting: bool = True,
     sigma_beam: Optional[float] = None,
+    slope_correction: bool = False,
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
@@ -315,6 +316,14 @@ def simulate_waveform(
     sigma_beam : float, optional
         Beam σ in metres for Gaussian weighting.  Defaults to
         ``footprint_radius / 2`` (so the 1/e² point is at the footprint edge).
+    slope_correction : bool
+        If ``True``, fit a plane to the ALS ground points (Classification == 2)
+        inside the footprint and subtract it from all Z values before building
+        the histogram.  This collapses the slope-broadened ground return back
+        to a sharp peak and measures vegetation height perpendicular to the
+        terrain surface rather than vertically.  Requires at least 3 ground
+        points; silently skipped otherwise.  Default ``False`` — only enable
+        for terrain with slopes > ~15°.
     min_points : int
         Minimum ALS points in footprint; returns ``None`` below this.
     cover_threshold : float
@@ -340,6 +349,25 @@ def simulate_waveform(
         return None
 
     z = data["Z"].astype(np.float64)
+
+    # Slope correction: fit plane to ground points, subtract from all Z
+    if slope_correction:
+        gnd = data["Classification"] == 2
+        if gnd.sum() >= 3:
+            x_gnd = data["X"][gnd].astype(np.float64)
+            y_gnd = data["Y"][gnd].astype(np.float64)
+            z_gnd = z[gnd]
+            A = np.column_stack([x_gnd, y_gnd, np.ones(gnd.sum())])
+            coeffs, _, _, _ = np.linalg.lstsq(A, z_gnd, rcond=None)
+            a, b, c = coeffs
+            slope_deg = float(np.degrees(np.arctan(np.sqrt(a**2 + b**2))))
+            plane_z = a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
+            z = z - plane_z + float(z_gnd.mean())
+            logger.debug("Slope correction applied: θ=%.1f°", slope_deg)
+        else:
+            logger.debug(
+                "Slope correction skipped: only %d ground points (need ≥ 3)", gnd.sum()
+            )
 
     # Build point weights: beam profile × optional intensity
     if gaussian_beam_weighting:
