@@ -62,13 +62,13 @@ class TileDBProvider:
             if not url:
                 raise ValueError("'url' (S3 endpoint) must be provided when storage_type='s3'.")
             self.array_uri = uri
-            self.ctx = self._initialize_s3_context(credentials, url, region)
+            self._raw_cfg, self.ctx = self._initialize_s3_context(credentials, url, region)
 
         elif self.storage_type == "local":
             if not uri:
                 raise ValueError("'uri' must be provided when storage_type='local'.")
             self.array_uri = uri
-            self.ctx = self._initialize_local_context()
+            self._raw_cfg, self.ctx = self._initialize_local_context()
 
         else:
             raise ValueError(
@@ -86,24 +86,15 @@ class TileDBProvider:
         credentials: Optional[Dict[str, str]],
         url: str,
         region: str,
-    ) -> tiledb.Ctx:
+    ) -> tuple[Dict[str, str], tiledb.Ctx]:
         cores = os.cpu_count() or 8
         max_threads = min(cores * 4, 64)
         max_s3_ops = min(cores * 8, 256)
 
-        # Strip scheme from url — endpoint_override must be host[:port] only
-        scheme = "https"
-        host = url
-        for prefix in ("https://", "http://"):
-            if url.startswith(prefix):
-                scheme = prefix.rstrip(":/")
-                host = url[len(prefix):]
-                break
-
         cfg: Dict[str, str] = {
-            "vfs.s3.endpoint_override": host,
+            "vfs.s3.endpoint_override": url,
             "vfs.s3.region": region,
-            "vfs.s3.scheme": scheme,
+            "vfs.s3.scheme": "https",
             "vfs.s3.use_virtual_addressing": "true",
             "vfs.s3.max_parallel_ops": str(max_s3_ops),
             "vfs.s3.multipart_part_size": str(64 * 1024**2),   # 64 MB
@@ -129,17 +120,18 @@ class TileDBProvider:
             cfg["vfs.s3.no_sign_request"] = "true"
 
         cfg.update(self.s3_config_overrides)
-        return tiledb.Ctx(cfg)
+        return cfg, tiledb.Ctx(cfg)
 
-    def _initialize_local_context(self) -> tiledb.Ctx:
-        return tiledb.Ctx({
+    def _initialize_local_context(self) -> tuple[Dict[str, str], tiledb.Ctx]:
+        cfg = {
             "py.init_buffer_bytes": str(4 * 1024**3),   # 4 GiB
             "sm.tile_cache_size": str(4 * 1024**3),     # 4 GiB
             "sm.num_reader_threads": "32",
             "sm.num_tiledb_threads": "32",
             "sm.compute_concurrency_level": "32",
             "sm.io_concurrency_level": "32",
-        })
+        }
+        return cfg, tiledb.Ctx(cfg)
 
     # ------------------------------------------------------------------
     # Helpers

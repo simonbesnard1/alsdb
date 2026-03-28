@@ -12,20 +12,20 @@ from alsdb.utils.viz import plot_overview, plot_dsm, plot_rgb
 
 # Ingest a tile locally
 db = ALSDatabase(storage_type="local", uri="array_")
-db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz", 
-          classification_filter=[2])
+db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz",
+          overwrite=True)  # no filter — CHM needs ground (2) + vegetation (3-5)
 
 # Ingest to S3
 session = boto3.Session(profile_name="alsdb")
-frozen = session.get_credentials().get_frozen_credentials()
+frozen = session.get_credentials()
 credentials = {
     "AccessKeyId": frozen.access_key,
-    "SecretAccessKey": frozen.secret_key,
+    "SecretAccessKey": frozen.secret_key
 }
 
 db = ALSDatabase(
     storage_type="s3",
-    uri="dog-proj-3d-abc-qian-song.new-bucket-2f37f541/test",   # ← correct bucket name
+    uri="s3://dog-proj-3d-abc-qian-song.new-bucket-2f37f541/test",
     url="https://s3.gfz-potsdam.de",
     region="eu-central-1",
     credentials=credentials,
@@ -35,12 +35,9 @@ db.ingest(
     "PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz"
 )
 
-# Query
-provider = ALSProvider(storage_type="s3", 
-                       uri="dog-proj-3d-abc-qian-song.new-bucket-2f37f541/test",
-                       url="https://s3.gfz-potsdam.de",
-                       region="eu-central-1",
-                       )
+# # Query
+provider = ALSProvider(storage_type="local", 
+                       uri="array_")
 df = provider.query_tile(308, 4690)
 ds = provider.to_xarray(308_000, 4_688_000, 310_000, 4_690_000)
 
