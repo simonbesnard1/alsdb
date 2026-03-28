@@ -4,7 +4,6 @@
 
 import json
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,6 +198,57 @@ class ALSDatabase(TileDBProvider):
             arr[x, y, year_arr] = attrs
         logger.debug("Wrote %d points (year=%d) to %s", len(x), year, self.array_uri)
 
+    def _ingest_tile(
+        self,
+        laz_path: Path,
+        chunk_size: int,
+        classification_filter: Optional[list[int]],
+        stored_crs: Optional[str],
+    ) -> Tuple[int, dict]:
+        """
+        Read a LAZ file and write its points to the array.
+
+        Does **not** touch the manifest — that is the caller's responsibility.
+        Returns ``(n_points, manifest_entry)``.
+
+        Raises ``ValueError`` on CRS mismatch.
+        """
+        filename = laz_path.name
+        tile = ALSTile(laz_path, classification_filter=classification_filter)
+        tile_name = tile.name
+        year = tile_name.year
+        crs = tile_name.crs
+
+        if stored_crs and stored_crs != crs:
+            raise ValueError(
+                f"CRS mismatch: array was created with {stored_crs!r}, "
+                f"but {filename!r} reports {crs!r}. "
+                "Use a separate array or reproject the tile."
+            )
+
+        total = 0
+        for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
+            self.write(x, y, year, attrs, crs=crs)
+            total += len(x)
+            logger.debug(
+                "Ingested %d points from %s (year=%d, crs=%s) → %s  (running total: %d)",
+                len(x), filename, year, crs, self.array_uri, total,
+            )
+
+        logger.info(
+            "Done: %d points from %s (year=%d, crs=%s) → %s",
+            total, filename, year, crs, self.array_uri,
+        )
+        entry = {
+            "year": year,
+            "crs": crs,
+            "bbox": list(tile_name.bbox_native),
+            "n_points": total,
+            "status": "ok",
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        return total, entry
+
     def ingest(
         self,
         laz_path: str | Path,
@@ -207,16 +257,15 @@ class ALSDatabase(TileDBProvider):
         overwrite: bool = False,
     ) -> int:
         """
-        Ingest a single PNOA LAZ tile into the TileDB array.
+        Ingest a single LAZ tile into the TileDB array.
 
         If the file is already recorded as successfully ingested in the
         manifest, the call is a no-op and returns 0.  Pass ``overwrite=True``
         to force re-ingestion regardless of manifest state.
 
-        If the array already exists the new points are appended as a new
-        fragment.  Points are stored under their survey year (read from the LAZ
-        file header), so the same spatial tile can be ingested multiple times
-        from different survey years without collision.
+        Points are stored under their survey year (read from the LAZ file
+        header), so the same spatial tile can be ingested multiple times from
+        different survey years without collision.
 
         Parameters
         ----------
@@ -238,50 +287,19 @@ class ALSDatabase(TileDBProvider):
         filename = laz_path.name
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
 
-        # --- manifest check ---
         manifest = self.load_manifest()
         if not overwrite and manifest.get(filename, {}).get("status") == "ok":
             logger.info("Already ingested %s — skipping (pass overwrite=True to force)", filename)
             return 0
 
-        tile = ALSTile(laz_path, classification_filter=classification_filter)
-        tile_name = tile.name
-        year = tile_name.year
-        crs = tile_name.crs
+        if overwrite and self.array_exists():
+            self.create(overwrite=True)
 
-        # Validate CRS consistency if array already exists
-        if self.array_exists():
-            stored = self.stored_crs()
-            if stored and stored != crs:
-                raise ValueError(
-                    f"CRS mismatch: array was created with {stored!r}, "
-                    f"but {filename!r} reports {crs!r}. "
-                    "Use a separate array or reproject the tile."
-                )
-            if overwrite:
-                self.create(overwrite=True, crs=crs)
-
-        total = 0
+        stored = self.stored_crs()
 
         try:
-            for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
-                self.write(x, y, year, attrs, crs=crs)
-                total += len(x)
-                logger.debug(
-                    "Ingested %d points from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                    len(x), filename, year, crs, self.array_uri, total,
-                )
-
-            manifest[filename] = {
-                "year": year,
-                "crs": crs,
-                "bbox": list(tile_name.bbox_native),
-                "n_points": total,
-                "status": "ok",
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-            logger.info("Done: %d points from %s (year=%d, crs=%s) → %s", total, filename, year, crs, self.array_uri)
-
+            total, entry = self._ingest_tile(laz_path, chunk_size, classification_filter, stored)
+            manifest[filename] = entry
         except Exception as exc:
             manifest[filename] = {
                 "status": "failed",
@@ -300,6 +318,8 @@ class ALSDatabase(TileDBProvider):
         chunk_size: Optional[int] = None,
         classification_filter: Optional[list[int]] = None,
         consolidate_every: int = 50,
+        max_workers: int = 1,
+        overwrite: bool = False,
     ) -> Dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -317,6 +337,16 @@ class ALSDatabase(TileDBProvider):
             Optional LAS classification filter applied to every tile.
         consolidate_every:
             Consolidate + vacuum after this many newly ingested tiles.
+        max_workers:
+            Number of parallel worker threads.  ``1`` (default) runs
+            sequentially.  Values > 1 use a :class:`ThreadPoolExecutor` —
+            each worker reads a different LAZ file and appends its own TileDB
+            fragment concurrently.  The manifest is written by the main thread
+            only, so there is no race condition.
+        overwrite:
+            If ``True``, wipe the array and re-ingest all files from scratch,
+            ignoring the manifest.  If ``False`` (default), files already
+            marked ``"ok"`` in the manifest are skipped.
 
         Returns
         -------
@@ -324,20 +354,65 @@ class ALSDatabase(TileDBProvider):
             ``{filename: n_points_written}`` for every path in *laz_paths*.
             Skipped files have value 0.
         """
+        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
+        laz_paths = [Path(p) for p in laz_paths]
+
+        # Pre-load manifest; filter already-ingested files unless overwrite
+        manifest = self.load_manifest()
+        pending: List[Path] = []
         results: Dict[str, int] = {}
+        for p in laz_paths:
+            if not overwrite and manifest.get(p.name, {}).get("status") == "ok":
+                logger.info("Already ingested %s — skipping", p.name)
+                results[p.name] = 0
+            else:
+                pending.append(p)
+
+        if not pending:
+            return results
+
+        # Ensure the array exists (or recreate it) before dispatching workers
+        # so they never race on array creation.
+        first_tile = ALSTile(pending[0], classification_filter=classification_filter)
+        first_crs = first_tile.name.crs
+        if overwrite and self.array_exists():
+            self.create(overwrite=True, crs=first_crs)
+        elif not self.array_exists():
+            self.create(crs=first_crs)
+
+        stored = self.stored_crs()
         newly_written = 0
 
-        for path in laz_paths:
-            filename = Path(path).name
-            n = self.ingest(path, chunk_size=chunk_size,
-                            classification_filter=classification_filter)
-            results[filename] = n
-            if n > 0:
-                newly_written += 1
+        def _worker(path: Path) -> Tuple[str, int, dict]:
+            total, entry = self._ingest_tile(path, chunk_size, classification_filter, stored)
+            return path.name, total, entry
 
-            if newly_written > 0 and newly_written % consolidate_every == 0:
-                logger.info("Consolidating after %d tiles…", newly_written)
-                tiledb.consolidate(self.array_uri, ctx=self.ctx)
-                tiledb.vacuum(self.array_uri, ctx=self.ctx)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {executor.submit(_worker, p): p for p in pending}
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    filename, n, entry = future.result()
+                    manifest[filename] = entry
+                    results[filename] = n
+                    if n > 0:
+                        newly_written += 1
+                except Exception as exc:
+                    filename = path.name
+                    logger.error("Failed to ingest %s: %s", filename, exc)
+                    manifest[filename] = {
+                        "status": "failed",
+                        "error": str(exc),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                    results[filename] = 0
+
+                # Save manifest after every tile so progress survives crashes
+                self._save_manifest(manifest)
+
+                if newly_written > 0 and newly_written % consolidate_every == 0:
+                    logger.info("Consolidating after %d tiles…", newly_written)
+                    tiledb.consolidate(self.array_uri, ctx=self.ctx)
+                    tiledb.vacuum(self.array_uri, ctx=self.ctx)
 
         return results

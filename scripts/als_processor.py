@@ -19,7 +19,10 @@ db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/PNO
           overwrite=True)  # writes + records in manifest
 
 # Ingest thousands of files at once, auto-consolidates every 50
-db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/").glob("*.laz")), consolidate_every=50)
+db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/").glob("*.laz")), 
+               max_workers=8,
+               consolidate_every=50,
+               overwrite=True)
 
 # Inspect what's been ingested
 db.list_ingested()
