@@ -26,19 +26,27 @@ print(result.z_ground)   # estimated ground elevation (m)
 import numpy as np
 import pandas as pd
 
-# Synthetic 60 m spaced GEDI-like shot grid over the tile
+provider = ALSProvider(storage_type="local", uri="array_")
+
 xs, ys = np.meshgrid(
-    np.arange(308_100, 309_900, 60),
-    np.arange(4_688_500, 4_689_900, 60),
+    np.arange(658000.0, 658442.25, 60),
+    np.arange(8901518.0, 8902000.0, 60),
 )
 shots = pd.DataFrame({"center_x": xs.ravel(), "center_y": ys.ravel()})
 
 results = simulate_batch(
-    provider=reader,
+    provider=provider,
     shots=shots,
-    year=2021,
+    year=2014,
     n_workers=4,
     footprint_radius=12.5,
 )
-# results is a DataFrame: original columns + z_ground, home, cover, rh0…rh100
+print(f"{len(results)} shots simulated")
 print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
+
+from alsdb.utils.viz import plot_waveforms_3d
+
+# Static matplotlib figure
+fig = plot_waveforms_3d(results, color_by="rh98", backend="matplotlib")
+fig.savefig("waveforms_3d.png", dpi=150, bbox_inches="tight")
+

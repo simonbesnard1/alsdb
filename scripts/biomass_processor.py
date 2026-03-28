@@ -20,12 +20,19 @@ compute_metrics(provider, "output/metrics/", resolution=10.0,
 
 # AGB with default Næsset model
 compute_biomass(provider, "output/agb_10m.tif", resolution=10.0,
-                bbox = (657500, 8901000, 659000, 8902500))
+                bbox=(658000.0, 8901518.589999999850988, 
+                      658442.25, 8901999.990000000223517))
 
 compute_biomass(provider, "output/agb_100m.tif", resolution=100.0,
-                bbox = (657500, 8901000, 659000, 8902500))
+                bbox=(658000.0, 8901518.589999999850988, 
+                      658442.25, 8901999.990000000223517))
 
 
 # AGB with calibrated coefficients
 my_model = functools.partial(naesset_model, a=1.2, b=2.1, c=0.6)
 compute_biomass(provider, "output/agb.tif", resolution=10.0, model_fn=my_model)
+
+
+
+from alsdb.utils.viz_raster import plot_agb
+plot_agb("output/agb_100m.tif", cmap="YlGn", vmin=0, vmax=None) 

@@ -25,6 +25,13 @@ Pipeline
 4. Apply an allometric model ``AGB = f(metrics)`` → Mg ha⁻¹.
 5. Write GeoTIFF via rasterio.
 
+Tiled processing
+----------------
+Large areas are split into sub-tiles with an overlap *buffer* so
+``filters.hag_delaunay`` has accurate TIN values at tile edges.  The buffer
+points are used for the TIN but the metrics grid is computed only over the
+non-buffered extent.  Sub-tiles are mosaicked into the final output.
+
 Default model
 -------------
 A Næsset-style power law::
@@ -48,6 +55,11 @@ Usage::
     # AGB with default model
     compute_biomass(provider, "output/agb.tif", resolution=10.0)
 
+    # Tiled AGB (500 m tiles, 50 m buffer, 4 parallel workers)
+    compute_biomass(provider, "output/agb.tif", resolution=10.0,
+                    bbox=(308000, 4688000, 310000, 4690000),
+                    tile_size=500.0, tile_buffer=50.0, n_workers=4)
+
     # AGB with a custom model
     def my_model(metrics):
         return 1.2 * metrics["h95"] ** 2.1 * metrics["cc"] ** 0.6
@@ -61,12 +73,15 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
 import pdal
 
+from alsdb.processing._tiling import array_domain_bbox, mosaic_tiles, tile_bboxes
 from alsdb.processing.chm import _query_to_array
 from alsdb.providers.tiledb_provider import TileDBProvider
 
@@ -165,18 +180,15 @@ def _extract_metrics(
         """binned_statistic_2d → (nx, ny); convert to (ny, nx) north-up."""
         return np.flipud(np.where(np.isnan(g), np.nan, g).T)
 
-    # Height percentiles and mean (vegetation only)
     h50 = _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(50), bins=bins).statistic)
     h75 = _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(75), bins=bins).statistic)
     h95 = _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(95), bins=bins).statistic)
     hmean = _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic)
 
-    # Point density — all points per m²
     cell_area = resolution ** 2
     n_all = binned_statistic_2d(x, y, hag, statistic="count", bins=bins).statistic
     density = _flip(n_all / cell_area)
 
-    # Canopy cover — first returns above cc_threshold
     fr = points["ReturnNumber"] == 1
     x_fr, y_fr, hag_fr = x[fr], y[fr], hag[fr]
     above = (hag_fr > cc_threshold).astype(np.float32)
@@ -278,6 +290,98 @@ def _write_raster(
 
 
 # ---------------------------------------------------------------------------
+# Per-tile worker functions
+# ---------------------------------------------------------------------------
+
+def _process_tile_biomass(
+    provider: TileDBProvider,
+    query_bbox: tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
+    tmp_dir: str,
+    tile_index: int,
+    resolution: float,
+    nodata: float,
+    year: Optional[int],
+    cc_threshold: float,
+    model_fn: Callable,
+) -> Optional[Path]:
+    """
+    Process a single AGB sub-tile.
+
+    Points are queried with a buffer for TIN accuracy; metrics are computed
+    only over the non-buffered *crop_bbox* extent.
+    """
+    arr = _query_to_array(provider, query_bbox, year=year)
+    if arr.size == 0:
+        logger.debug("AGB tile %d: no points, skipping", tile_index)
+        return None
+
+    stages = [
+        {"type": "filters.hag_delaunay"},
+        {"type": "filters.assign",
+         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+    ]
+    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+    p.execute()
+    points = p.arrays[0]
+
+    metrics, extent = _extract_metrics(points, resolution, bbox=crop_bbox,
+                                       cc_threshold=cc_threshold)
+    agb = model_fn(metrics)
+
+    if np.all(np.isnan(agb)):
+        logger.debug("AGB tile %d: all NaN after model, skipping", tile_index)
+        return None
+
+    tmp_path = Path(tmp_dir) / f"agb_tile_{tile_index:04d}.tif"
+    _write_raster(agb, tmp_path, extent, nodata)
+    logger.debug("AGB tile %d written → %s", tile_index, tmp_path)
+    return tmp_path
+
+
+def _process_tile_metrics(
+    provider: TileDBProvider,
+    query_bbox: tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
+    tmp_dir: str,
+    tile_index: int,
+    resolution: float,
+    nodata: float,
+    year: Optional[int],
+    cc_threshold: float,
+) -> Optional[dict[str, Path]]:
+    """
+    Process a single metrics sub-tile.
+
+    Returns a dict ``{metric_name: temp_path}`` or ``None`` if no points.
+    """
+    arr = _query_to_array(provider, query_bbox, year=year)
+    if arr.size == 0:
+        logger.debug("Metrics tile %d: no points, skipping", tile_index)
+        return None
+
+    stages = [
+        {"type": "filters.hag_delaunay"},
+        {"type": "filters.assign",
+         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+    ]
+    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+    p.execute()
+    points = p.arrays[0]
+
+    metrics, extent = _extract_metrics(points, resolution, bbox=crop_bbox,
+                                       cc_threshold=cc_threshold)
+
+    paths = {}
+    for name, grid in metrics.items():
+        tmp_path = Path(tmp_dir) / f"{name}_tile_{tile_index:04d}.tif"
+        _write_raster(grid, tmp_path, extent, nodata)
+        paths[name] = tmp_path
+
+    return paths
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -289,11 +393,13 @@ def compute_metrics(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     nodata: float = -9999.0,
+    *,
+    tile_size: float = 500.0,
+    tile_buffer: float = 50.0,
+    n_workers: int = 1,
 ) -> dict[str, Path]:
     """
     Compute and save all LiDAR structural metrics as individual GeoTIFFs.
-
-    Useful for model calibration, visual inspection, and downstream analysis.
 
     Parameters
     ----------
@@ -305,10 +411,18 @@ def compute_metrics(
         Grid cell size in metres (10–25 m typical for biomass).
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
+    year:
+        Optional survey year filter.
     cc_threshold:
         HAG threshold (m) used to define "canopy" for the cover metric.
     nodata:
         No-data fill value.
+    tile_size:
+        Sub-tile width and height in metres (default 500 m).
+    tile_buffer:
+        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+    n_workers:
+        Parallel workers (default 1 = sequential).
 
     Returns
     -------
@@ -319,15 +433,60 @@ def compute_metrics(
     output_dir = Path(output_dir)
     logger.info("Extracting LiDAR metrics → %s  (%.0f m resolution)", output_dir, resolution)
 
-    points = _attach_hag(provider, bbox, year=year)
-    metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
-                                       cc_threshold=cc_threshold)
+    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    n_tiles = len(tiles)
+    logger.info("  %d tile(s), %d worker(s)", n_tiles, n_workers)
 
-    paths = {}
-    for name, grid in metrics.items():
-        p = _write_raster(grid, output_dir / f"{name}.tif", extent, nodata)
-        paths[name] = p
-        logger.info("  wrote %s → %s", name, p)
+    if n_tiles == 1:
+        points = _attach_hag(provider, bbox, year=year)
+        metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
+                                           cc_threshold=cc_threshold)
+        paths = {}
+        for name, grid in metrics.items():
+            p = _write_raster(grid, output_dir / f"{name}.tif", extent, nodata)
+            paths[name] = p
+            logger.info("  wrote %s → %s", name, p)
+        return paths
+
+    # Multi-tile: collect per-tile temp paths per metric, then mosaic each
+    metric_names = ["h50", "h75", "h95", "hmean", "cc", "density"]
+    tile_paths_by_metric: dict[str, list[Path]] = {n: [] for n in metric_names}
+
+    with tempfile.TemporaryDirectory(prefix="alsdb_metrics_") as tmp_dir:
+        def _collect(idx, query_bbox, crop_bbox):
+            return _process_tile_metrics(
+                provider, query_bbox, crop_bbox, tmp_dir, idx,
+                resolution, nodata, year, cc_threshold,
+            )
+
+        if n_workers == 1:
+            results = [_collect(i, qb, cb) for i, (qb, cb) in enumerate(tiles)]
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                futures = {
+                    executor.submit(_collect, i, qb, cb): i
+                    for i, (qb, cb) in enumerate(tiles)
+                }
+                results = [None] * len(tiles)
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
+
+        for result in results:
+            if result is not None:
+                for name, path in result.items():
+                    tile_paths_by_metric[name].append(path)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = {}
+        for name in metric_names:
+            tpaths = sorted(tile_paths_by_metric[name])
+            if not tpaths:
+                continue
+            out = output_dir / f"{name}.tif"
+            mosaic_tiles(tpaths, out, nodata=nodata)
+            paths[name] = out
+            logger.info("  wrote %s → %s", name, out)
 
     return paths
 
@@ -341,6 +500,10 @@ def compute_biomass(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     nodata: float = -9999.0,
+    *,
+    tile_size: float = 500.0,
+    tile_buffer: float = 50.0,
+    n_workers: int = 1,
 ) -> Path:
     """
     Estimate Above-Ground Biomass (AGB) and write a GeoTIFF.
@@ -359,29 +522,75 @@ def compute_biomass(
         generic coefficients — calibrate for your site before use.
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
+    year:
+        Optional survey year filter.
     cc_threshold:
         HAG threshold (m) for the canopy cover metric.
     nodata:
         No-data fill value.
+    tile_size:
+        Sub-tile width and height in metres (default 500 m).
+    tile_buffer:
+        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+    n_workers:
+        Parallel workers (default 1 = sequential).
 
     Returns
     -------
     Path
     """
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     model_fn = model_fn or naesset_model
 
-    logger.info("Computing AGB → %s  (%.0f m resolution)", output_path, resolution)
+    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    n_tiles = len(tiles)
+    logger.info("Computing AGB → %s  (%.0f m, %d tile(s), %d worker(s))",
+                output_path, resolution, n_tiles, n_workers)
 
-    points = _attach_hag(provider, bbox, year=year)
-    metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
-                                       cc_threshold=cc_threshold)
-    agb = model_fn(metrics)
+    if n_tiles == 1:
+        points = _attach_hag(provider, bbox, year=year)
+        metrics, extent = _extract_metrics(points, resolution, bbox=bbox,
+                                           cc_threshold=cc_threshold)
+        agb = model_fn(metrics)
+        logger.info("AGB range: %.1f–%.1f Mg/ha  (mean %.1f)",
+                    float(np.nanmin(agb)), float(np.nanmax(agb)),
+                    float(np.nanmean(agb)))
+        _write_raster(agb, output_path, extent, nodata)
+        return output_path
 
-    logger.info(
-        "AGB range: %.1f – %.1f Mg/ha  (mean %.1f)",
-        float(np.nanmin(agb)), float(np.nanmax(agb)), float(np.nanmean(agb)),
-    )
+    with tempfile.TemporaryDirectory(prefix="alsdb_agb_") as tmp_dir:
+        tile_paths: list[Path] = []
 
-    _write_raster(agb, output_path, extent, nodata)
+        if n_workers == 1:
+            for idx, (query_bbox, crop_bbox) in enumerate(tiles):
+                result = _process_tile_biomass(
+                    provider, query_bbox, crop_bbox, tmp_dir, idx,
+                    resolution, nodata, year, cc_threshold, model_fn,
+                )
+                if result is not None:
+                    tile_paths.append(result)
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                futures = {
+                    executor.submit(
+                        _process_tile_biomass,
+                        provider, query_bbox, crop_bbox, tmp_dir, idx,
+                        resolution, nodata, year, cc_threshold, model_fn,
+                    ): idx
+                    for idx, (query_bbox, crop_bbox) in enumerate(tiles)
+                }
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        tile_paths.append(result)
+
+        if not tile_paths:
+            logger.warning("No AGB tiles produced (no points in bbox)")
+            return output_path
+
+        tile_paths.sort()
+        mosaic_tiles(tile_paths, output_path, nodata=nodata)
+
     return output_path
