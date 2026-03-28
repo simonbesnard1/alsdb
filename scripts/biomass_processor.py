@@ -15,10 +15,16 @@ alsdb.setup_logging()          # INFO by default
 provider = ALSProvider(storage_type="local", uri="array_")
 
 # All structural metrics as separate GeoTIFFs (good for calibration)
-compute_metrics(provider, "output/metrics/", resolution=10.0)
+compute_metrics(provider, "output/metrics/", resolution=10.0,
+                bbox = (657500, 8901000, 659000, 8902500))
 
 # AGB with default Næsset model
-compute_biomass(provider, "output/agb_10m.tif", resolution=10.0)
+compute_biomass(provider, "output/agb_10m.tif", resolution=10.0,
+                bbox = (657500, 8901000, 659000, 8902500))
+
+compute_biomass(provider, "output/agb_100m.tif", resolution=100.0,
+                bbox = (657500, 8901000, 659000, 8902500))
+
 
 # AGB with calibrated coefficients
 my_model = functools.partial(naesset_model, a=1.2, b=2.1, c=0.6)

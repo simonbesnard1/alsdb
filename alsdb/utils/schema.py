@@ -53,9 +53,11 @@ _CRS_DOMAINS: dict[str, dict] = {
     # British National Grid — UK (EA)
     "EPSG:27700": dict(domain_min_x=-100_000, domain_max_x=700_000,
                        domain_min_y=0, domain_max_y=1_300_000),
-    # Generic UTM (any zone) — safe fallback
-    "_utm":       dict(domain_min_x=-200_000, domain_max_x=1_200_000,
-                       domain_min_y=-1_000_000, domain_max_y=12_000_000),
+    # Global fallback — covers any projected CRS in metres (UTM, Mercator,
+    # national grids, etc.).  Values are set to ±20 000 km, which safely
+    # includes the most extreme projected coordinates on Earth.
+    "_global":    dict(domain_min_x=-20_000_000, domain_max_x=20_000_000,
+                       domain_min_y=-20_000_000, domain_max_y=20_000_000),
 }
 
 
@@ -72,10 +74,10 @@ class TileDBSchemaConfig:
 
     tile_extent_x: float = 500.0
     tile_extent_y: float = 500.0
-    domain_min_x: float = -200_000.0
-    domain_max_x: float = 1_200_000.0
-    domain_min_y: float = -1_000_000.0
-    domain_max_y: float = 12_000_000.0
+    domain_min_x: float = -20_000_000.0
+    domain_max_x: float = 20_000_000.0
+    domain_min_y: float = -20_000_000.0
+    domain_max_y: float = 20_000_000.0
     year_min: int = 2000
     year_max: int = 2100
     chunk_size: int = 1_000_000
@@ -94,7 +96,7 @@ class TileDBSchemaConfig:
         **kwargs:
             Override any field (e.g. ``chunk_size=500_000``).
         """
-        domain = _CRS_DOMAINS.get(crs, _CRS_DOMAINS["_utm"])
+        domain = _CRS_DOMAINS.get(crs, _CRS_DOMAINS["_global"])
         return cls(**{**domain, **kwargs})
 
     @classmethod

@@ -843,6 +843,141 @@ def plot_pointcloud_3d(
 
 
 # ---------------------------------------------------------------------------
+# 3-D waveform waterfall
+# ---------------------------------------------------------------------------
+
+def plot_waveforms_3d(
+    results: pd.DataFrame,
+    color_by: str = "rh98",
+    cmap: str = "YlGn",
+    alpha: float = 0.7,
+    line_width: float = 1.5,
+    backend: str = "matplotlib",
+    elev: float = 25.0,
+    azim: float = -60.0,
+    figsize: tuple[float, float] = (12, 8),
+    title: Optional[str] = None,
+):
+    """
+    3-D waterfall plot of simulated GEDI-like waveforms.
+
+    Each shot is drawn as a vertical RH(p) curve at its (X, Y) position —
+    height above ground on the Z axis, cumulative energy percentile (0–100)
+    on the Y offset.  Lines are coloured by a summary metric.
+
+    Requires ``rh0``–``rh100`` columns in *results* (as returned by
+    :func:`~alsdb.processing.waveform.simulate_batch`).
+
+    Parameters
+    ----------
+    results:
+        DataFrame from ``simulate_batch()``, must contain ``center_x``,
+        ``center_y``, and ``rh0``–``rh100`` columns.
+    color_by:
+        Column used to colour the lines (default ``"rh98"``).
+        Other useful choices: ``"cover"``, ``"rh50"``, ``"z_ground"``.
+    cmap:
+        Matplotlib colormap name.
+    alpha:
+        Line opacity.
+    line_width:
+        Line width in points.
+    backend:
+        ``"matplotlib"`` (static) or ``"plotly"`` (interactive).
+    elev / azim:
+        Matplotlib 3-D view angles (ignored for plotly).
+    figsize:
+        Figure size in inches (matplotlib only).
+    title:
+        Optional figure title.
+
+    Returns
+    -------
+    matplotlib.figure.Figure  or  plotly.graph_objects.Figure
+    """
+    rh_cols = [f"rh{p}" for p in range(101)]
+    missing = [c for c in rh_cols if c not in results.columns]
+    if missing:
+        raise ValueError(f"results is missing RH columns: {missing[:5]} …")
+    if color_by not in results.columns:
+        raise ValueError(f"color_by column {color_by!r} not found in results")
+
+    percentiles = np.arange(101, dtype=float)
+    color_vals = results[color_by].to_numpy(dtype=float)
+    vmin, vmax = np.nanmin(color_vals), np.nanmax(color_vals)
+
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    cmap_obj = plt.get_cmap(cmap)
+
+    if backend == "plotly":
+        try:
+            import plotly.graph_objects as go
+        except ImportError as exc:
+            raise ImportError("plotly is required for backend='plotly'") from exc
+
+        fig = go.Figure()
+        for _, row in results.iterrows():
+            heights = row[rh_cols].to_numpy(dtype=float)
+            rgba = cmap_obj(norm(row[color_by]))
+            hex_col = "#{:02x}{:02x}{:02x}".format(
+                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+            )
+            fig.add_trace(go.Scatter3d(
+                x=[row["center_x"]] * 101,
+                y=percentiles,
+                z=heights,
+                mode="lines",
+                line=dict(color=hex_col, width=line_width * 2),
+                showlegend=False,
+                opacity=alpha,
+            ))
+        fig.update_layout(
+            scene=dict(
+                xaxis_title="Easting (m)",
+                yaxis_title="Cumulative energy (%)",
+                zaxis_title="Height above ground (m)",
+            ),
+            title=title or "Simulated waveforms — RH profiles",
+            margin=dict(l=0, r=0, b=0, t=40),
+        )
+        return fig
+
+    # --- matplotlib ---
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    for _, row in results.iterrows():
+        heights = row[rh_cols].to_numpy(dtype=float)
+        color = cmap_obj(norm(row[color_by]))
+        ax.plot(
+            [row["center_x"]] * 101,
+            percentiles,
+            heights,
+            color=color,
+            alpha=alpha,
+            linewidth=line_width,
+        )
+
+    sm = ScalarMappable(norm=norm, cmap=cmap_obj)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, label=color_by, shrink=0.6, pad=0.1)
+
+    ax.set_xlabel("Easting (m)", labelpad=8)
+    ax.set_ylabel("Cumulative energy (%)", labelpad=8)
+    ax.set_zlabel("Height above ground (m)", labelpad=8)
+    ax.view_init(elev=elev, azim=azim)
+    if title:
+        ax.set_title(title)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Overview figure (all four panels)
 # ---------------------------------------------------------------------------
 

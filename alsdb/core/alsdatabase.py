@@ -194,6 +194,14 @@ class ALSDatabase(TileDBProvider):
         if not self.array_exists():
             self.create(crs=crs)
         year_arr = np.full(len(x), year, dtype=np.int16)
+        # Fill any schema attributes missing from this tile (e.g. RGB absent in
+        # intensity-only datasets) with zeros so TileDB always gets a complete row.
+        n = len(x)
+        with self.open("r") as _arr:
+            for i in range(_arr.schema.nattr):
+                a = _arr.schema.attr(i)
+                if a.name not in attrs:
+                    attrs[a.name] = np.zeros(n, dtype=a.dtype)
         with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as arr:
             arr[x, y, year_arr] = attrs
         logger.debug("Wrote %d points (year=%d) to %s", len(x), year, self.array_uri)

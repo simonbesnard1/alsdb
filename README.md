@@ -274,12 +274,38 @@ fig.savefig("rh_profile_308500_4689000.png", dpi=150, bbox_inches="tight")
 - **(a)** RH(p) curve — height above ground vs percent cumulative energy, with understory (green) and overstory (orange) layer shading
 - **(b)** W(h) = dE/dh — normalised waveform energy density vs height, with auto-detected layer peaks annotated, layer boundary, Δh inter-layer distance, and the fraction of energy below the split printed
 
+### 3-D waveform waterfall
+
+Visualise all simulated shots as a waterfall of RH(p) curves — each shot is a vertical ribbon at its X position, with cumulative energy (0–100 %) on the Y axis and height above ground on Z, coloured by a summary metric.
+
+```python
+from alsdb.utils.viz import plot_waveforms_3d
+
+# Static matplotlib figure, coloured by RH98
+fig = plot_waveforms_3d(results, color_by="rh98", backend="matplotlib")
+fig.savefig("waveforms_3d.png", dpi=150, bbox_inches="tight")
+
+# Interactive plotly version (better for dense grids)
+fig = plot_waveforms_3d(results, color_by="cover", backend="plotly")
+fig.show()
+```
+
+`color_by` accepts any column in the `simulate_batch` output: `"rh50"`, `"rh98"`, `"cover"`, `"z_ground"`, etc.
+
 ### Raster products (from GeoTIFF)
 
 ```python
-from alsdb.utils.viz_raster import plot_products
+from alsdb.utils.viz_raster import plot_chm, plot_agb, plot_products, plot_products_agb
 
-plot_products("outputs/chm.tif", "outputs/dtm.tif", "outputs/dsm.tif")
+# Individual panels
+plot_chm("outputs/chm.tif")
+plot_agb("outputs/agb.tif")
+
+# Three-panel overview: DTM | DSM | CHM
+plot_products("outputs/dtm.tif", "outputs/dsm.tif", "outputs/chm.tif")
+
+# Four-panel overview: DTM | DSM | CHM | AGB
+plot_products_agb("outputs/dtm.tif", "outputs/dsm.tif", "outputs/chm.tif", "outputs/agb.tif")
 ```
 
 ### 3-D point cloud

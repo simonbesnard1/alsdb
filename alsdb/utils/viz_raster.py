@@ -7,10 +7,12 @@ Visualisation helpers for raster products (CHM, DTM, DSM GeoTIFFs).
 
 Typical usage::
 
-    from alsdb.utils.viz_raster import plot_chm, plot_dtm, plot_dsm, plot_products
+    from alsdb.utils.viz_raster import plot_chm, plot_dtm, plot_dsm, plot_agb, plot_products, plot_products_agb
 
     plot_chm("output/chm.tif")
+    plot_agb("output/agb.tif")
     plot_products("output/dtm.tif", "output/dsm.tif", "output/chm.tif")
+    plot_products_agb("output/dtm.tif", "output/dsm.tif", "output/chm.tif", "output/agb.tif")
 """
 
 from __future__ import annotations
@@ -204,8 +206,52 @@ def plot_dsm(
     return ax
 
 
+def plot_agb(
+    path: str | Path,
+    cmap: str = "YlGn",
+    vmin: float = 0.0,
+    vmax: Optional[float] = None,
+    ax=None,
+):
+    """
+    Plot an Above-Ground Biomass (AGB) GeoTIFF.
+
+    Parameters
+    ----------
+    path:
+        Path to the AGB GeoTIFF.
+    cmap:
+        Matplotlib colormap (default ``"YlGn"``).
+    vmin / vmax:
+        Colour scale limits.  ``vmax`` defaults to the 98th percentile.
+    ax:
+        Matplotlib axes.  A new figure is created if ``None``.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    import matplotlib.pyplot as plt
+
+    grid, extent = _read_raster(path)
+    valid = grid[~np.isnan(grid)]
+    if vmax is None:
+        vmax = float(np.percentile(valid, 98)) if valid.size else 500.0
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 8))
+
+    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
+                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    plt.colorbar(im, ax=ax, label="AGB (Mg ha⁻¹)", shrink=0.7)
+    ax.set_xlabel("Easting (m)")
+    ax.set_ylabel("Northing (m)")
+    ax.set_title(f"AGB — {Path(path).name}")
+    return ax
+
+
 # ---------------------------------------------------------------------------
-# Three-panel overview
+# Multi-panel overviews
 # ---------------------------------------------------------------------------
 
 def plot_products(
@@ -241,6 +287,48 @@ def plot_products(
     plot_dtm(dtm_path, hillshade=hillshade, ax=axes[0])
     plot_dsm(dsm_path, hillshade=hillshade, ax=axes[1])
     plot_chm(chm_path, ax=axes[2])
+
+    if title:
+        fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    return fig
+
+
+def plot_products_agb(
+    dtm_path: str | Path,
+    dsm_path: str | Path,
+    chm_path: str | Path,
+    agb_path: str | Path,
+    figsize: tuple[float, float] = (22, 6),
+    hillshade: bool = True,
+    title: Optional[str] = None,
+):
+    """
+    Four-panel overview: DTM | DSM | CHM | AGB.
+
+    Parameters
+    ----------
+    dtm_path / dsm_path / chm_path / agb_path:
+        Paths to the respective GeoTIFFs.
+    figsize:
+        Figure size in inches.
+    hillshade:
+        Apply hillshade to DTM and DSM panels.
+    title:
+        Optional suptitle.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 4, figsize=figsize)
+
+    plot_dtm(dtm_path, hillshade=hillshade, ax=axes[0])
+    plot_dsm(dsm_path, hillshade=hillshade, ax=axes[1])
+    plot_chm(chm_path, ax=axes[2])
+    plot_agb(agb_path, ax=axes[3])
 
     if title:
         fig.suptitle(title, fontsize=13)

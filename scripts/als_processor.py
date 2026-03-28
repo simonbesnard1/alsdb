@@ -15,12 +15,12 @@ alsdb.setup_logging()          # INFO by default
 db = ALSDatabase(storage_type="local", uri="array_")
 
 # Skips already-ingested files automatically
-db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz",
+db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_0.laz",
           overwrite=True)  # writes + records in manifest
 
 # Ingest thousands of files at once, auto-consolidates every 50
-db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/").glob("*.laz")), 
-               max_workers=8,
+db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/").glob("*.laz")), 
+               max_workers=2,
                consolidate_every=50,
                overwrite=True)
 

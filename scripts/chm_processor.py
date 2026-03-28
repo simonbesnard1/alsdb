@@ -16,8 +16,10 @@ provider = ALSProvider(
     storage_type="local",
     uri="array_")
 
+
 # CHM for the full array
-compute_chm(provider, "output/chm.tif", resolution=1.0)
+compute_chm(provider, "output/chm.tif", resolution=1.0,
+            bbox = (657500, 8901000, 659000, 8902500))
 
 # Restrict to one PNOA tile.
 compute_all(
