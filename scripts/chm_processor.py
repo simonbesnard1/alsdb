@@ -8,6 +8,9 @@ Created on Sat Mar 28 00:32:51 2026
 
 from alsdb import ALSProvider
 from alsdb.processing.chm import compute_chm, compute_all
+import alsdb
+alsdb.setup_logging()          # INFO by default
+
 
 provider = ALSProvider(
     storage_type="local",

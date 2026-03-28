@@ -2,6 +2,19 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+import logging
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """Configure alsdb logging. Call once at the top of your script or notebook."""
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("alsdb").setLevel(level)
+
+
 from alsdb.core.alsdatabase import ALSDatabase
 from alsdb.core.alsprovider import ALSProvider
 from alsdb.core.alstile import ALSTile

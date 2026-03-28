@@ -9,7 +9,7 @@ from typing import Generator, Optional
 import numpy as np
 
 from alsdb.tile.Tile import Tile
-from alsdb.tile.tile_name import PNOATileName
+from alsdb.tile.tile_name import TileNameBase
 from alsdb.utils.schema import LAS_ATTRIBUTES
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ALSTile:
     """
-    Processes a single PNOA LAZ tile into arrays ready for TileDB ingestion.
+    Processes a single LAZ tile into arrays ready for TileDB ingestion.
 
     Wraps :class:`~alsdb.tile.Tile.Tile` and applies an optional point filter
     before handing data to :class:`~alsdb.core.alsdatabase.ALSDatabase`.
@@ -49,7 +49,7 @@ class ALSTile:
         return self._tile
 
     @property
-    def name(self) -> PNOATileName:
+    def name(self) -> TileNameBase:
         return self._tile.name
 
     # ------------------------------------------------------------------

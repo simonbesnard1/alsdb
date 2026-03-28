@@ -10,16 +10,18 @@ from typing import Generator, Optional
 import numpy as np
 import pdal
 
-from alsdb.tile.tile_name import PNOATileName, parse_tile_filename
+from alsdb.tile.tile_name import GenericTileName, TileNameBase
 
 logger = logging.getLogger(__name__)
 
 
 class Tile:
     """
-    Wrapper around a PNOA LAZ tile file.
+    Wrapper around any LAZ/LAS tile file.
 
     Provides lazy metadata access and a chunked point iterator backed by PDAL.
+    Year, bounding box and CRS are read directly from the file header — no
+    provider-specific filename convention is assumed.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -35,9 +37,9 @@ class Tile:
         return self._path
 
     @property
-    def name(self) -> PNOATileName:
-        """Parsed PNOA filename metadata."""
-        return parse_tile_filename(self._path)
+    def name(self) -> TileNameBase:
+        """Tile metadata (year, bbox, CRS) read from the LAZ file header."""
+        return GenericTileName.from_pdal_metadata(self._path, self.metadata)
 
     @property
     def metadata(self) -> dict:
@@ -50,7 +52,8 @@ class Tile:
                 ])
             )
             pipeline.execute()
-            self._metadata = json.loads(pipeline.metadata)
+            meta = pipeline.metadata
+            self._metadata = meta if isinstance(meta, dict) else json.loads(meta)
         return self._metadata
 
     @property

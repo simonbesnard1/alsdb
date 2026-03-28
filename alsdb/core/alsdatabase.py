@@ -4,9 +4,11 @@
 
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import tiledb
@@ -18,6 +20,7 @@ from alsdb.core.alstile import ALSTile
 logger = logging.getLogger(__name__)
 
 _MANIFEST_KEY = "ingestion_manifest"
+_CRS_KEY = "crs"
 
 
 class ALSDatabase(TileDBProvider):
@@ -77,13 +80,21 @@ class ALSDatabase(TileDBProvider):
             credentials=credentials,
             s3_config_overrides=s3_config_overrides,
         )
-        self._schema_cfg = schema_cfg or TileDBSchemaConfig()
+        # None means "derive from first tile's CRS at ingest time"
+        self._schema_cfg = schema_cfg
 
     # ------------------------------------------------------------------
     # Array lifecycle
     # ------------------------------------------------------------------
 
-    def create(self, overwrite: bool = False) -> None:
+    def stored_crs(self) -> Optional[str]:
+        """Return the CRS stored in array metadata, or ``None`` if not set."""
+        if not self.array_exists():
+            return None
+        with self.open("r") as arr:
+            return arr.meta.get(_CRS_KEY)
+
+    def create(self, overwrite: bool = False, crs: Optional[str] = None) -> None:
         """
         Explicitly create the TileDB array.
 
@@ -91,6 +102,11 @@ class ALSDatabase(TileDBProvider):
         ----------
         overwrite:
             If ``True`` and the array already exists, it is deleted first.
+        crs:
+            CRS string (e.g. ``"EPSG:25830"``) used to select domain bounds
+            when no ``schema_cfg`` was provided at construction time.
+            Stored in array metadata so subsequent ingestions can validate CRS
+            consistency.
         """
         if self.array_exists():
             if not overwrite:
@@ -100,9 +116,17 @@ class ALSDatabase(TileDBProvider):
             tiledb.remove(self.array_uri, ctx=self.ctx)
             self._schema_cache = None
 
-        schema = create_schema(self._schema_cfg)
+        cfg = self._schema_cfg
+        if cfg is None:
+            cfg = TileDBSchemaConfig.for_crs(crs) if crs else TileDBSchemaConfig()
+
+        schema = create_schema(cfg)
         tiledb.Array.create(self.array_uri, schema, ctx=self.ctx)
-        logger.info("Created array at %s", self.array_uri)
+        logger.info("Created array at %s (CRS=%s)", self.array_uri, crs or "unknown")
+
+        if crs:
+            with self.open("w") as arr:
+                arr.meta[_CRS_KEY] = crs
 
     # ------------------------------------------------------------------
     # Manifest
@@ -147,6 +171,7 @@ class ALSDatabase(TileDBProvider):
         y: np.ndarray,
         year: int,
         attrs: Dict[str, np.ndarray],
+        crs: Optional[str] = None,
     ) -> None:
         """
         Append a batch of points to the TileDB array.
@@ -163,9 +188,12 @@ class ALSDatabase(TileDBProvider):
             Acquisition year (scalar int, broadcast to all points).
         attrs:
             Dictionary mapping LAS attribute names to typed 1-D numpy arrays.
+        crs:
+            CRS string passed to :meth:`create` when the array does not yet
+            exist (ignored if the array already exists).
         """
         if not self.array_exists():
-            self.create()
+            self.create(crs=crs)
         year_arr = np.full(len(x), year, dtype=np.int16)
         with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as arr:
             arr[x, y, year_arr] = attrs
@@ -186,8 +214,8 @@ class ALSDatabase(TileDBProvider):
         to force re-ingestion regardless of manifest state.
 
         If the array already exists the new points are appended as a new
-        fragment.  Points are stored under their survey year (parsed from the
-        PNOA filename), so the same spatial tile can be ingested multiple times
+        fragment.  Points are stored under their survey year (read from the LAZ
+        file header), so the same spatial tile can be ingested multiple times
         from different survey years without collision.
 
         Parameters
@@ -208,7 +236,7 @@ class ALSDatabase(TileDBProvider):
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
-        chunk_size = chunk_size or self._schema_cfg.chunk_size
+        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
 
         # --- manifest check ---
         manifest = self.load_manifest()
@@ -216,32 +244,43 @@ class ALSDatabase(TileDBProvider):
             logger.info("Already ingested %s — skipping (pass overwrite=True to force)", filename)
             return 0
 
-        if overwrite and self.array_exists():
-            self.create(overwrite=True)
-
         tile = ALSTile(laz_path, classification_filter=classification_filter)
-        year = tile.name.year
+        tile_name = tile.name
+        year = tile_name.year
+        crs = tile_name.crs
+
+        # Validate CRS consistency if array already exists
+        if self.array_exists():
+            stored = self.stored_crs()
+            if stored and stored != crs:
+                raise ValueError(
+                    f"CRS mismatch: array was created with {stored!r}, "
+                    f"but {filename!r} reports {crs!r}. "
+                    "Use a separate array or reproject the tile."
+                )
+            if overwrite:
+                self.create(overwrite=True, crs=crs)
+
         total = 0
 
         try:
             for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
-                self.write(x, y, year, attrs)
+                self.write(x, y, year, attrs, crs=crs)
                 total += len(x)
-                logger.info(
-                    "Ingested %d points from %s (year=%d) → %s  (running total: %d)",
-                    len(x), filename, year, self.array_uri, total,
+                logger.debug(
+                    "Ingested %d points from %s (year=%d, crs=%s) → %s  (running total: %d)",
+                    len(x), filename, year, crs, self.array_uri, total,
                 )
 
             manifest[filename] = {
                 "year": year,
-                "region": tile.name.region,
-                "tile_x_km": tile.name.tile_x_km,
-                "tile_y_km": tile.name.tile_y_km,
+                "crs": crs,
+                "bbox": list(tile_name.bbox_native),
                 "n_points": total,
                 "status": "ok",
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
-            logger.info("Done: %d points from %s (year=%d) → %s", total, filename, year, self.array_uri)
+            logger.info("Done: %d points from %s (year=%d, crs=%s) → %s", total, filename, year, crs, self.array_uri)
 
         except Exception as exc:
             manifest[filename] = {
