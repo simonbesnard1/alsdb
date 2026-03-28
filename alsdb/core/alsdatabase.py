@@ -204,6 +204,7 @@ class ALSDatabase(TileDBProvider):
         chunk_size: int,
         classification_filter: Optional[list[int]],
         stored_crs: Optional[str],
+        _tile: Optional[ALSTile] = None,
     ) -> Tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
@@ -214,8 +215,8 @@ class ALSDatabase(TileDBProvider):
         Raises ``ValueError`` on CRS mismatch.
         """
         filename = laz_path.name
-        tile = ALSTile(laz_path, classification_filter=classification_filter)
-        tile_name = tile.name
+        tile = _tile or ALSTile(laz_path, classification_filter=classification_filter)
+        tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
         crs = tile_name.crs
 
@@ -292,13 +293,19 @@ class ALSDatabase(TileDBProvider):
             logger.info("Already ingested %s — skipping (pass overwrite=True to force)", filename)
             return 0
 
+        # Read tile metadata once up front so the CRS is available before the
+        # array is (re)created and is reused in _ingest_tile without a second
+        # PDAL pass.
+        tile = ALSTile(laz_path, classification_filter=classification_filter)
+        tile_crs = tile.name.crs
+
         if overwrite and self.array_exists():
-            self.create(overwrite=True)
+            self.create(overwrite=True, crs=tile_crs)
 
         stored = self.stored_crs()
 
         try:
-            total, entry = self._ingest_tile(laz_path, chunk_size, classification_filter, stored)
+            total, entry = self._ingest_tile(laz_path, chunk_size, classification_filter, stored, _tile=tile)
             manifest[filename] = entry
         except Exception as exc:
             manifest[filename] = {

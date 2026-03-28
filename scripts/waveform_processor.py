@@ -7,25 +7,26 @@ Created on Sat Mar 28 11:46:37 2026
 """
 
 from alsdb import ALSProvider
-from alsdb.processing.waveform import simulate_waveform, simulate_batch, _SIGMA_COV
+from alsdb.processing.waveform import simulate_waveform, simulate_batch
 
-provider = ALSProvider(storage_type="local", uri="array_")
+reader = ALSProvider(storage_type="local", uri="array_")
 
-# Single footprint (UTM coords)
-result = simulate_waveform(provider, center_x=309000, center_y=4689000, year=2021)
-print(result.rh)        # {10: 1.2, 25: 3.4, 50: 8.1, 75: 14.3, ...}
-print(result.home)      # 8.1 m
-print(result.cover)     # 0.72
+# Single footprint (25 m diameter, like GEDI)
+result = simulate_waveform(
+    provider=reader,
+    center_x=308_500.0, center_y=4_689_000.0,
+    footprint_radius=12.5,
+    year=2021,
+)
+print(result.rh)         # {"rh25": 8.1, "rh50": 14.3, "rh75": 19.7, "rh95": 23.1, ...}
+print(result.cover)      # canopy cover fraction
+print(result.z_ground)   # estimated ground elevation (m)
 
-# Compare with real GEDI — convert lat/lon first
-from pyproj import Transformer
-t = Transformer.from_crs("EPSG:4326", "EPSG:25830", always_xy=True)
-cx, cy = t.transform(gedi_shot.lon, gedi_shot.lat)
-result = simulate_waveform(provider, cx, cy, sigma=_SIGMA_COV)  # coverage beam
-
-# Batch over all GEDI shots in the tile
-# gedi_df has columns lon, lat from gedidb
-gedi_df["center_x"], gedi_df["center_y"] = t.transform(gedi_df.lon, gedi_df.lat)
-sim = simulate_batch(provider, gedi_df, x_col="center_x", y_col="center_y",
-                     year=2021, n_workers=8)
-# sim has all original gedidb columns + rh25, rh50, rh75, rh95, home, cover
+# Batch over a list of (lon, lat) footprint centres
+results = simulate_batch(
+    provider=reader,
+    centres=[(308_500, 4_689_000), (309_000, 4_689_500)],
+    footprint_radius=12.5,
+    year=2021,
+    max_workers=4,
+)

@@ -20,24 +20,15 @@ The package is dataset-agnostic: CRS, bounding box, and acquisition year are rea
 
 ## Installation
 
-The recommended way is [pixi](https://pixi.sh), which resolves the full conda + PyPI dependency stack in one step:
+The recommended way is [pixi](https://pixi.sh), which resolves the full conda dependency stack and creates an isolated environment:
 
 ```bash
-git clone https://github.com/your-org/alsdb.git
+git clone https://github.com/simonbesnard1/alsdb.git
 cd alsdb
-pixi install
-pixi shell          # activates the environment
+pixi install          # installs all conda-forge dependencies
+pixi shell            # activates the environment
+pip install -e .      # installs the alsdb package itself (editable)
 ```
-
-### Manual (conda + pip)
-
-```bash
-conda create -n alsdb python=3.12
-conda activate alsdb
-conda install -c conda-forge pdal python-pdal tiledb numpy scipy rasterio matplotlib click xarray pandas pyproj
-pip install -e .
-```
-
 ### Dependencies
 
 | Package | Purpose |
@@ -166,13 +157,14 @@ The pipeline queries the array, injects the point cloud into a PDAL pipeline (`f
 ```python
 from alsdb.processing.biomass import compute_biomass
 
-agb = compute_biomass(
+compute_biomass(
     provider=reader,
     bbox=(308_000, 4_688_000, 310_000, 4_690_000),
     resolution=25.0,          # metres per pixel for the output raster
     year=2021,
+    output_path = 'output/agb.tif'
 )
-# agb is a numpy array of AGB (Mg/ha) per pixel
+# writes outputs/agb.tif
 ```
 
 Uses the Næsset (2002) power-law model: `AGB = a × h95^b × cc^c`, where `h95` is the 95th-percentile height, `cc` is canopy cover, and `a / b / c` are configurable coefficients.
@@ -187,11 +179,12 @@ from alsdb.processing.waveform import simulate_waveform, simulate_batch
 # Single footprint (25 m diameter, like GEDI)
 result = simulate_waveform(
     provider=reader,
-    lon=308_500.0, lat=4_689_000.0,
+    center_x=308_500.0, center_y=4_689_000.0,
     footprint_radius=12.5,
     year=2021,
 )
-print(result.rh)         # {"rh25": 8.1, "rh50": 14.3, "rh75": 19.7, "rh95": 23.1, ...}
+print(result.rh[50])     # RH50 height above ground (m) — dict has integer keys RH0–RH100
+print(result.rh[98])     # RH98, equivalent to GEDI L2A rh98
 print(result.cover)      # canopy cover fraction
 print(result.z_ground)   # estimated ground elevation (m)
 
@@ -211,7 +204,65 @@ The simulator builds a vertical return histogram (0.15 m bins), convolves it wit
 
 ## Visualisation
 
-### Raster products
+All 2-D plot functions accept a point-cloud DataFrame from `query_bbox()` and rasterize it to a regular grid before rendering, so they stay fast even for multi-million-point tiles.
+
+### 4-panel overview
+
+```python
+from alsdb.utils.viz import plot_overview
+
+df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
+
+fig = plot_overview(df, resolution=1.0)
+fig.savefig("tile_308_4690.png", dpi=150, bbox_inches="tight")
+```
+
+Produces a 2×2 figure with DSM+hillshade, RGB orthoimage, intensity, and classification map.
+
+### Individual 2-D panels
+
+```python
+from alsdb.utils.viz import plot_dsm, plot_rgb, plot_intensity, plot_classification
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+plot_dsm(df, resolution=1.0, hillshade=True, ax=axes[0])
+plot_rgb(df, resolution=1.0, ax=axes[1])
+```
+
+| Function | What it shows |
+|----------|--------------|
+| `plot_dsm()` | Max-Z raster with optional hillshade |
+| `plot_rgb()` | RGB orthoimage (percentile contrast stretch) |
+| `plot_intensity()` | Mean return intensity (greyscale) |
+| `plot_classification()` | LAS class codes with standard colour palette |
+
+### GEDI waveform
+
+```python
+from alsdb.utils.viz import plot_waveform, plot_rh_profile
+
+result = simulate_waveform(reader, center_x=308_500, center_y=4_689_000, year=2021)
+
+# Raw waveform vs elevation with annotated RH levels
+fig = plot_waveform(result)
+fig.savefig("waveform_308500_4689000.png", dpi=150, bbox_inches="tight")
+
+# GEDI L2A style: RH(p) curve + W(h) waveform with layer detection
+fig = plot_rh_profile(result)
+fig.savefig("rh_profile_308500_4689000.png", dpi=150, bbox_inches="tight")
+```
+
+`plot_waveform` has two panels:
+
+- **Left** — normalised waveform energy vs elevation, with the ground return shaded brown, the canopy layer shaded green, and RH25/50/75/95/100 annotated as horizontal lines. An info box shows canopy cover, HOME (RH50), and point count.
+- **Right** — horizontal bar chart of RH heights above ground for quick comparison across footprints.
+
+`plot_rh_profile` matches the GEDI L2A canonical representation:
+
+- **(a)** RH(p) curve — height above ground vs percent cumulative energy, with understory (green) and overstory (orange) layer shading
+- **(b)** W(h) = dE/dh — normalised waveform energy density vs height, with auto-detected layer peaks annotated, layer boundary, Δh inter-layer distance, and the fraction of energy below the split printed
+
+### Raster products (from GeoTIFF)
 
 ```python
 from alsdb.utils.viz_raster import plot_products
@@ -223,8 +274,6 @@ plot_products("outputs/chm.tif", "outputs/dtm.tif", "outputs/dsm.tif")
 
 ```python
 from alsdb.utils.viz import plot_pointcloud_3d
-
-df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
 
 plot_pointcloud_3d(df, color_by="Z",              backend="matplotlib")
 plot_pointcloud_3d(df, color_by="RGB",            backend="plotly")

@@ -58,7 +58,7 @@ _Z_STEP: float = 0.15               # m  native vertical resolution
 _SIGMA_FULL: float = 0.64           # m  full-power beam pulse σ
 _SIGMA_COV: float = 0.93            # m  coverage beam pulse σ
 _MIN_POINTS: int = 25
-_RH_LEVELS: tuple[int, ...] = (10, 25, 50, 75, 90, 95, 98, 100)
+_RH_LEVELS: tuple[int, ...] = tuple(range(101))   # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0       # m  above ground
 
 
@@ -118,7 +118,7 @@ class WaveformResult:
             "cover": self.cover,
             "n_points": self.n_points,
         }
-        d.update({f"rh{l}": self.rh.get(l, np.nan) for l in _RH_LEVELS})
+        d.update({f"rh{l}": v for l, v in sorted(self.rh.items())})
         return d
 
 
@@ -280,6 +280,7 @@ def simulate_waveform(
     intensity_weighted: bool = False,
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
+    rh_levels: tuple[int, ...] = _RH_LEVELS,
 ) -> Optional[WaveformResult]:
     """
     Simulate a GEDI large-footprint waveform at a given UTM location.
@@ -308,15 +309,25 @@ def simulate_waveform(
         Minimum ALS points in footprint; returns ``None`` below this.
     cover_threshold : float
         HAG threshold (m) for canopy cover calculation.
+    rh_levels : tuple of int
+        RH percentile levels to compute.
+        Default: ``(10, 25, 50, 75, 90, 95, 98, 100)``.
+        Result ``rh`` dict has integer keys, e.g. ``result.rh[50]`` → RH50.
 
     Returns
     -------
     WaveformResult or None
     """
     data = _query_footprint(provider, center_x, center_y, footprint_radius, year)
-    if data is None or len(data["Z"]) < min_points:
-        logger.debug("Skipping (%.0f, %.0f): only %d points in footprint",
-                     center_x, center_y, 0 if data is None else len(data["Z"]))
+    n_pts = 0 if data is None else int(len(data["Z"]))
+    if data is None or n_pts < min_points:
+        logger.warning(
+            "simulate_waveform: footprint at (%.0f, %.0f) year=%s has only %d points "
+            "(min_points=%d) — returning None.  "
+            "Hint: call provider.available_years() and provider.query_bbox() to verify "
+            "data coverage.",
+            center_x, center_y, year, n_pts, min_points,
+        )
         return None
 
     z = data["Z"].astype(np.float64)
@@ -339,7 +350,7 @@ def simulate_waveform(
 
     # 5. Ground detection + metrics
     z_ground = _detect_ground(waveform, z_bins)
-    rh = _rh_metrics(waveform, z_bins, z_ground)
+    rh = _rh_metrics(waveform, z_bins, z_ground, levels=rh_levels)
     cover = _canopy_cover(waveform, z_bins, z_ground, cover_threshold)
 
     return WaveformResult(

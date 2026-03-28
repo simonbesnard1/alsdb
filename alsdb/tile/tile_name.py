@@ -112,7 +112,7 @@ def parse_tile_filename(filename: str | Path) -> PNOATileName:
 # Generic — reads year, bbox, and CRS from LAZ header via PDAL metadata
 # ---------------------------------------------------------------------------
 
-_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -174,11 +174,16 @@ class GenericTileName:
         reader_meta: dict = meta.get(reader_key, {}) if reader_key else {}
 
         # --- Year ---
-        year = int(reader_meta.get("creation_year", 0) or 0)
-        if year < 1980 or year > 2100:
-            # fallback: scan filename for a 4-digit year
-            m = _YEAR_RE.search(Path(path).name)
-            year = int(m.group()) if m else 0
+        # Filename year (e.g. "PNOA_2021_...", "AHN_2020_...") is the survey
+        # year and takes priority.  The LAZ header creation_year is often the
+        # file processing/delivery year, which can differ by 1–2 years.
+        m = _YEAR_RE.search(Path(path).name)
+        if m:
+            year = int(m.group())
+        else:
+            year = int(reader_meta.get("creation_year", 0) or 0)
+            if year < 1980 or year > 2100:
+                year = 0
 
         # --- BBox ---
         minx = reader_meta.get("minx") or reader_meta.get("maxx", 0)
