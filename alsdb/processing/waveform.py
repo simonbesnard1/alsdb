@@ -278,6 +278,8 @@ def simulate_waveform(
     sigma: float = _SIGMA_FULL,
     noise_std: float = 0.0,
     intensity_weighted: bool = False,
+    gaussian_beam_weighting: bool = True,
+    sigma_beam: Optional[float] = None,
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
@@ -305,13 +307,20 @@ def simulate_waveform(
         Standard deviation of additive Gaussian noise (0 = noise-free).
     intensity_weighted : bool
         Weight histogram by return intensity rather than point count.
+    gaussian_beam_weighting : bool
+        If ``True`` (default), weight each ALS point by the GEDI Gaussian beam
+        profile: ``exp(-r² / (2 σ_beam²))``.  Points near the footprint edge
+        contribute less than those at the centre, matching the real instrument
+        response and reducing systematic bias in heterogeneous canopy.
+    sigma_beam : float, optional
+        Beam σ in metres for Gaussian weighting.  Defaults to
+        ``footprint_radius / 2`` (so the 1/e² point is at the footprint edge).
     min_points : int
         Minimum ALS points in footprint; returns ``None`` below this.
     cover_threshold : float
         HAG threshold (m) for canopy cover calculation.
     rh_levels : tuple of int
-        RH percentile levels to compute.
-        Default: ``(10, 25, 50, 75, 90, 95, 98, 100)``.
+        RH percentile levels to compute.  Default: RH0–RH100 (GEDI L2A).
         Result ``rh`` dict has integer keys, e.g. ``result.rh[50]`` → RH50.
 
     Returns
@@ -331,7 +340,19 @@ def simulate_waveform(
         return None
 
     z = data["Z"].astype(np.float64)
-    weights = data["Intensity"].astype(np.float64) if intensity_weighted else np.ones(len(z))
+
+    # Build point weights: beam profile × optional intensity
+    if gaussian_beam_weighting:
+        sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
+        r2 = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2
+        beam_w = np.exp(-r2 / (2.0 * sb ** 2))
+    else:
+        beam_w = np.ones(len(z))
+
+    if intensity_weighted:
+        weights = data["Intensity"].astype(np.float64) * beam_w
+    else:
+        weights = beam_w
 
     # 1. Vertical histogram
     z_bins, hist = _build_histogram(z, weights, z_step)
