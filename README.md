@@ -206,6 +206,47 @@ Uses the Næsset (2002) power-law model: `AGB = a × h95^b × cc^c`, where `h95`
 
 Intermediate metrics (h50, h75, h95, hmean, canopy cover, point density) are also available via `compute_metrics()`, which accepts the same tiling parameters.
 
+### Gap fraction and effective LAI
+
+```python
+from alsdb.processing.gap import compute_gap_fraction
+
+# Gap fraction only — no assumptions
+compute_gap_fraction(
+    provider=reader,
+    output_path="output/gap.tif",
+    bbox=(308_000, 4_688_000, 310_000, 4_690_000),
+    resolution=10.0,
+    year=2021,
+)
+
+# Gap fraction + effective LAI (Beer-Lambert, must supply k explicitly)
+compute_gap_fraction(
+    provider=reader,
+    output_path="output/gap.tif",
+    resolution=10.0,
+    year=2021,
+    lai=True,
+    k=0.5,                      # spherical leaf angle distribution
+    lai_path="output/lai.tif",
+)
+
+# Tiled for large areas
+compute_gap_fraction(
+    provider=reader,
+    output_path="output/gap.tif",
+    resolution=10.0,
+    year=2021,
+    tile_size=500.0, tile_buffer=50.0, n_workers=4,
+)
+```
+
+Gap fraction is the MacArthur-Wilson return-count estimator — a direct observable with no canopy-structure assumptions:
+
+    P_gap = N_ground_first / (N_ground_first + N_veg_first)
+
+Effective LAI is opt-in via `lai=True` and requires an explicit extinction coefficient `k` (Beer-Lambert: `L_e = -ln(P_gap) / k`).  The result is effective LAI, not true LAI — ALS cannot separate leaves from woody material.  LAI is capped at 10 m²/m² to avoid `ln(0)` artefacts in fully closed canopy cells.
+
 ### GEDI waveform simulation
 
 ```python
