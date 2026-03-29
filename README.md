@@ -1,6 +1,6 @@
 <p align="center">
 <a href="https://github.com/simonbesnard1/alsdb">
-        <img src="https://raw.githubusercontent.com/simonbesnard1/alsdb/main/doc/_static/logos/alsdb_logo.png"
+        <img src="https://github.com/simonbesnard1/alsdb/blob/main/doc/_static/logos/alsdb_logo.png"
          alt="alsdb Logo" height="180px" hspace="0px" vspace="30px">
 </a>
 </p>
