@@ -1,34 +1,37 @@
-<table>
-<tr>
-<td width="160px">
-<a href="https://github.com/simonbesnard1/alsdb">
-<img src="https://github.com/simonbesnard1/alsdb/blob/main/doc/_static/logos/alsdb_logo.png"
-     alt="alsdb Logo" width="140px">
-</a>
-</td>
-<td>
+<p align="center">
+  <a href="https://github.com/simonbesnard1/alsdb">
+    <img src="https://github.com/simonbesnard1/alsdb/blob/main/doc/_static/logos/alsdb_logo.png"
+         alt="alsdb Logo" height="160px">
+  </a>
+</p>
 
-# alsDB
+<h3 align="center">Airborne Laser Scanning point clouds — from LAZ to TileDB at scale</h3>
 
-**alsDB** is a Python package for ingesting, storing, and processing Airborne Laser Scanning (ALS/LiDAR) point clouds at scale. It reads LAZ/LAS files via [PDAL](https://pdal.io), stores them in a [TileDB](https://tiledb.com) sparse array (locally or on S3-compatible object storage), and provides a processing pipeline for canopy height models (CHM), digital terrain/surface models (DTM/DSM), above-ground biomass (AGB) estimation, and GEDI waveform simulation.
-
-The package is dataset-agnostic: CRS, bounding box, and acquisition year are read directly from the LAZ file header, so any national or global ALS dataset works without custom filename parsers.
-
-</td>
-</tr>
-</table>
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python"></a>
+  <a href="https://tiledb.com"><img src="https://img.shields.io/badge/storage-TileDB-orange.svg" alt="TileDB"></a>
+  <a href="https://pdal.io"><img src="https://img.shields.io/badge/processing-PDAL-green.svg" alt="PDAL"></a>
+  <a href="https://opensource.org/licenses/EUPL-1.2"><img src="https://img.shields.io/badge/license-EUPL--1.2-blue.svg" alt="License"></a>
+</p>
 
 ---
 
+**alsDB** reads LAZ/LAS files via [PDAL](https://pdal.io), stores them in a [TileDB](https://tiledb.com) sparse array (locally or on S3-compatible object storage), and provides a full processing pipeline for forest structure and biomass products.
+
+The package is dataset-agnostic — CRS, bounding box, and acquisition year are read directly from the LAZ file header, so any national or global ALS dataset works without custom parsers.
+
 ## Features
 
-- **Scalable ingestion** — append LAZ tiles one at a time or in parallel batches; each tile becomes a new TileDB fragment
-- **Multi-temporal** — X / Y / Year as TileDB dimensions; repeated surveys of the same area are stored and queryable independently
-- **Ingestion manifest** — tracks which files have been ingested, their CRS, bounding box, point count, and status; re-ingestion is a no-op by default
-- **CRS-aware schema** — TileDB domain bounds are selected automatically from the tile CRS (EPSG:25830, 28992, 2154, 27700, or generic UTM fallback)
-- **Local and S3 storage** — identical API for filesystem paths and `s3://` URIs (tested on GFZ Ceph / RadosGW)
-- **Processing pipelines** — CHM, DTM, DSM (via PDAL + GDAL), biomass estimation (Næsset power-law model), GEDI full-waveform simulation
-- **CLI** — `alsdb ingest` and `alsdb info` commands
+| | |
+|---|---|
+| **Scalable ingestion** | Parallel batch ingest; each tile becomes a TileDB fragment |
+| **Multi-temporal** | X / Y / Year dimensions; repeated surveys stored and queryable independently |
+| **Ingestion manifest** | Tracks CRS, bbox, point count and status; re-ingestion is a no-op by default |
+| **CRS-aware schema** | Domain bounds selected automatically from tile CRS or global fallback |
+| **Local + S3 storage** | Identical API for filesystem paths and `s3://` URIs (tested on Ceph / RadosGW) |
+| **Tiled processing** | CHM, DTM, DSM, AGB, gap fraction — all support `tile_size` / `n_workers` for large areas |
+| **GEDI simulation** | Full-waveform simulation and batch RH metric extraction at GEDI footprint scale |
+| **CLI** | `alsdb ingest` and `alsdb info` commands |
 
 ---
 
