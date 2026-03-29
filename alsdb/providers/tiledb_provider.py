@@ -91,36 +91,39 @@ class TileDBProvider:
         max_threads = min(cores * 4, 64)
         max_s3_ops = min(cores * 8, 256)
 
+        # endpoint_override must be hostname[:port] only — strip scheme if present
+        endpoint = url.removeprefix("https://").removeprefix("http://").rstrip("/")
+
         cfg: Dict[str, str] = {
-            "vfs.s3.endpoint_override": url,
+            # Endpoint (Ceph/MinIO — path-style, no virtual addressing)
+            "vfs.s3.endpoint_override": endpoint,
             "vfs.s3.region": region,
             "vfs.s3.scheme": "https",
-            "vfs.s3.use_virtual_addressing": "true",
-            "vfs.s3.max_parallel_ops": str(max_s3_ops),
-            "vfs.s3.multipart_part_size": str(64 * 1024**2),   # 64 MB
+            "vfs.s3.use_virtual_addressing": "false",
+            # Multipart upload — required for large LAZ files
+            "vfs.s3.use_multipart_upload": "true",
+            "vfs.s3.multipart_part_size": "52428800",   # 50 MB
+            "vfs.s3.multipart_threshold": "52428800",
+            "vfs.s3.max_parallel_ops": "8",
+            # Timeouts and retries
             "vfs.s3.connect_timeout_ms": "60000",
             "vfs.s3.request_timeout_ms": "600000",
-            "sm.compute_concurrency_level": str(max_threads),
-            "sm.io_concurrency_level": str(max_threads),
-            "sm.num_reader_threads": str(max_threads),
-            "sm.num_tiledb_threads": str(max_threads),
-            "py.init_buffer_bytes": str(2 * 1024**3),   # 2 GiB
-            "sm.tile_cache_size": str(8 * 1024**3),     # 8 GiB
-            "sm.enable_signal_handlers": "false",
+            "vfs.s3.backoff_scale": "2.0",
+            "vfs.s3.backoff_max_ms": "120000",
         }
 
         if credentials:
-            cfg.update({
-                "vfs.s3.aws_access_key_id": credentials.get("AccessKeyId", ""),
-                "vfs.s3.aws_secret_access_key": credentials.get("SecretAccessKey", ""),
-                "vfs.s3.aws_session_token": credentials.get("SessionToken", ""),
-                "vfs.s3.no_sign_request": "false",
-            })
+            cfg["vfs.s3.aws_access_key_id"] = credentials.get("AccessKeyId", "")
+            cfg["vfs.s3.aws_secret_access_key"] = credentials.get("SecretAccessKey", "")
+            # Only set session token when actually present — empty string confuses TileDB
+            if credentials.get("SessionToken"):
+                cfg["vfs.s3.aws_session_token"] = credentials["SessionToken"]
+            cfg["vfs.s3.no_sign_request"] = "false"
         else:
             cfg["vfs.s3.no_sign_request"] = "true"
 
         cfg.update(self.s3_config_overrides)
-        return cfg, tiledb.Ctx(cfg)
+        return cfg, tiledb.Ctx(tiledb.Config(cfg))
 
     def _initialize_local_context(self) -> tuple[Dict[str, str], tiledb.Ctx]:
         cfg = {
