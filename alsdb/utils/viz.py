@@ -56,7 +56,7 @@ def _bin_counts(
     resolution: float,
 ) -> tuple[int, int, np.ndarray, np.ndarray]:
     """Return (nx, ny, x_edges, y_edges) for a given resolution."""
-    from scipy.stats import binned_statistic_2d  # noqa: F401 — checked at call site
+
 
     x_min, x_max, y_min, y_max = _extent(df)
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))

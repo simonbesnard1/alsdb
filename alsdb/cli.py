@@ -117,8 +117,11 @@ def info_cmd(laz_path: Path) -> None:
 
     click.echo(f"File    : {laz_path.name}")
     click.echo(f"Year    : {name.year}")
-    click.echo(f"Region  : {name.region}")
-    click.echo(f"Tile    : {name.tile_x_km} km E  /  {name.tile_y_km} km N")
-    click.echo(f"Product : {name.product}")
+    if hasattr(name, "region"):
+        click.echo(f"Region  : {name.region}")
+    if hasattr(name, "tile_x_km"):
+        click.echo(f"Tile    : {name.tile_x_km} km E  /  {name.tile_y_km} km N")
+    if hasattr(name, "product"):
+        click.echo(f"Product : {name.product}")
     click.echo(f"BBox    : X [{bbox[0]:.0f} – {bbox[2]:.0f}]  Y [{bbox[1]:.0f} – {bbox[3]:.0f}]")
     click.echo(f"Points  : {tile.n_points:,}")

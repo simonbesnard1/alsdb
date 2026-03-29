@@ -81,8 +81,9 @@ from typing import Callable, Optional
 import numpy as np
 import pdal
 
-from alsdb.processing._tiling import array_domain_bbox, mosaic_tiles, tile_bboxes
-from alsdb.processing.chm import _query_to_array
+from alsdb.processing._tiling import (
+    array_domain_bbox, mosaic_tiles, tile_bboxes, query_to_array,
+)
 from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def _attach_hag(provider: TileDBProvider,
     Ground points (Class 2) are kept so the Delaunay TIN is complete.
     Negative HAG values are clamped to 0.
     """
-    arr = _query_to_array(provider, bbox, year=year)
+    arr = query_to_array(provider, bbox, year=year)
 
     stages = [
         {"type": "filters.hag_delaunay"},
@@ -311,7 +312,7 @@ def _process_tile_biomass(
     Points are queried with a buffer for TIN accuracy; metrics are computed
     only over the non-buffered *crop_bbox* extent.
     """
-    arr = _query_to_array(provider, query_bbox, year=year)
+    arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("AGB tile %d: no points, skipping", tile_index)
         return None
@@ -355,7 +356,7 @@ def _process_tile_metrics(
 
     Returns a dict ``{metric_name: temp_path}`` or ``None`` if no points.
     """
-    arr = _query_to_array(provider, query_bbox, year=year)
+    arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("Metrics tile %d: no points, skipping", tile_index)
         return None

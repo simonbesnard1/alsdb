@@ -241,7 +241,7 @@ def _parse_crs(srs: dict) -> str:
         auth = crs_obj.to_authority()
         if auth:
             return f"{auth[0]}:{auth[1]}"
-    except Exception:
+    except (ImportError, AttributeError, ValueError):
         pass
 
     # Last resort: first 120 chars of WKT name

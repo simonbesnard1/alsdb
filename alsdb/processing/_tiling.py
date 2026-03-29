@@ -13,9 +13,67 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+import numpy as np
+
+from alsdb.utils.schema import LAS_ATTRIBUTES
+
+if TYPE_CHECKING:
+    from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
+
+# Canonical PDAL dtype mapping shared by chm.py and biomass.py
+PDAL_DTYPES: dict[str, type] = {
+    "X": np.float64,
+    "Y": np.float64,
+    **LAS_ATTRIBUTES,
+}
+
+
+def query_to_array(
+    provider: "TileDBProvider",
+    bbox: Optional[tuple[float, float, float, float]],
+    year: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Query the TileDB array and return a PDAL-compatible numpy structured array.
+
+    Parameters
+    ----------
+    provider:
+        TileDB provider (ALSProvider or ALSDatabase).
+    bbox:
+        Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
+        Reads the full array if ``None``.
+    year:
+        Optional survey year filter.  ``None`` returns all years.
+
+    Returns
+    -------
+    np.ndarray
+        Structured numpy array with X, Y and all LAS attribute fields.
+    """
+    with provider.open("r") as arr:
+        attrs = list(LAS_ATTRIBUTES.keys())
+        yr_dim = arr.schema.domain.dim("Year")
+        y0 = year if year is not None else int(yr_dim.domain[0])
+        y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
+        if bbox is not None:
+            min_x, min_y, max_x, max_y = bbox
+            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
+        else:
+            data = arr.query(attrs=attrs)[:, :, y0:y1]
+
+    n = len(data["X"])
+    logger.debug("Queried %d points from TileDB", n)
+
+    dtype = [(name, PDAL_DTYPES[name]) for name in PDAL_DTYPES]
+    out = np.empty(n, dtype=dtype)
+    for name in PDAL_DTYPES:
+        out[name] = data[name].astype(PDAL_DTYPES[name])
+    return out
 
 
 def array_domain_bbox(provider) -> tuple[float, float, float, float]:

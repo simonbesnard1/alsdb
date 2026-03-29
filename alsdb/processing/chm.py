@@ -69,69 +69,15 @@ from typing import Optional
 import numpy as np
 import pdal
 
-from alsdb.processing._tiling import array_domain_bbox, mosaic_tiles, tile_bboxes
+from alsdb.processing._tiling import (
+    array_domain_bbox, mosaic_tiles, tile_bboxes, query_to_array,
+)
 from alsdb.providers.tiledb_provider import TileDBProvider
-from alsdb.utils.schema import LAS_ATTRIBUTES
 
 logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
 _VEG_CLASSES = (3, 4, 5)
-
-# Canonical PDAL dtype mapping for LAS dimensions
-_PDAL_DTYPES: dict[str, type] = {
-    "X": np.float64,
-    "Y": np.float64,
-    **LAS_ATTRIBUTES,
-}
-
-
-# ---------------------------------------------------------------------------
-# TileDB → numpy structured array
-# ---------------------------------------------------------------------------
-
-def _query_to_array(
-    provider: TileDBProvider,
-    bbox: Optional[tuple[float, float, float, float]],
-    year: Optional[int] = None,
-) -> np.ndarray:
-    """
-    Query the TileDB array and return a PDAL-compatible numpy structured array.
-
-    Parameters
-    ----------
-    provider:
-        TileDB provider (ALSProvider or ALSDatabase).
-    bbox:
-        Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
-        Reads the full array if ``None``.
-    year:
-        Optional survey year filter.  ``None`` returns all years.
-
-    Returns
-    -------
-    np.ndarray
-        Structured numpy array with X, Y and all LAS attribute fields.
-    """
-    with provider.open("r") as arr:
-        attrs = list(LAS_ATTRIBUTES.keys())
-        yr_dim = arr.schema.domain.dim("Year")
-        y0 = year if year is not None else int(yr_dim.domain[0])
-        y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
-        if bbox is not None:
-            min_x, min_y, max_x, max_y = bbox
-            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
-        else:
-            data = arr.query(attrs=attrs)[:, :, y0:y1]
-
-    n = len(data["X"])
-    logger.debug("Queried %d points from TileDB", n)
-
-    dtype = [(name, _PDAL_DTYPES[name]) for name in _PDAL_DTYPES]
-    out = np.empty(n, dtype=dtype)
-    for name in _PDAL_DTYPES:
-        out[name] = data[name].astype(_PDAL_DTYPES[name])
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +125,7 @@ def _process_tile_chm(
     year: Optional[int],
 ) -> Optional[Path]:
     """Process a single CHM sub-tile (with HAG buffer)."""
-    arr = _query_to_array(provider, query_bbox, year=year)
+    arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("CHM tile %d: no points, skipping", tile_index)
         return None
@@ -221,7 +167,7 @@ def _process_tile_dtm(
     year: Optional[int],
 ) -> Optional[Path]:
     """Process a single DTM sub-tile (ground points only, no buffer needed)."""
-    arr = _query_to_array(provider, query_bbox, year=year)
+    arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("DTM tile %d: no points, skipping", tile_index)
         return None
@@ -260,7 +206,7 @@ def _process_tile_dsm(
     first_returns_only: bool,
 ) -> Optional[Path]:
     """Process a single DSM sub-tile (no buffer needed)."""
-    arr = _query_to_array(provider, query_bbox, year=year)
+    arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("DSM tile %d: no points, skipping", tile_index)
         return None
@@ -386,7 +332,7 @@ def compute_chm(
 
     if n_tiles == 1:
         query_bbox, crop_bbox = tiles[0]
-        arr = _query_to_array(provider, query_bbox, year=year)
+        arr = query_to_array(provider, query_bbox, year=year)
         cx0, cy0, cx1, cy1 = crop_bbox
         stages = [
             {"type": "filters.hag_delaunay"},
@@ -463,7 +409,8 @@ def compute_dtm(
                 output_path, resolution, n_tiles, n_workers)
 
     if n_tiles == 1:
-        arr = _query_to_array(provider, bbox, year=year)
+        query_bbox, _ = tiles[0]
+        arr = query_to_array(provider, query_bbox, year=year)
         stages = [
             {"type": "filters.range",
              "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
@@ -536,7 +483,8 @@ def compute_dsm(
                 output_path, resolution, n_tiles, n_workers)
 
     if n_tiles == 1:
-        arr = _query_to_array(provider, bbox, year=year)
+        query_bbox, _ = tiles[0]
+        arr = query_to_array(provider, query_bbox, year=year)
         stages: list = []
         if first_returns_only:
             stages.append({"type": "filters.range", "limits": "ReturnNumber[1:1]"})
@@ -587,8 +535,11 @@ def compute_all(
         No-data fill value.
     year:
         Optional survey year filter.
-    tile_size / tile_buffer / n_workers:
+    tile_size / n_workers:
         Tiling parameters forwarded to all three products.
+    tile_buffer:
+        Overlap buffer forwarded to :func:`compute_chm` only (CHM needs ground
+        points beyond tile edges for accurate ``hag_delaunay``; DTM and DSM do not).
 
     Returns
     -------
