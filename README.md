@@ -37,15 +37,16 @@ The package is dataset-agnostic - CRS, bounding box, and acquisition year are re
 
 ## Installation
 
-The recommended way is [pixi](https://pixi.sh), which resolves the full conda dependency stack and creates an isolated environment:
+[pixi](https://pixi.sh) is the **only supported install method** — `pdal` and `python-pdal` are conda-only packages and cannot be installed via pip alone.
 
 ```bash
 git clone https://github.com/simonbesnard1/alsdb.git
 cd alsdb
-pixi install          # installs all conda-forge dependencies
-pixi shell            # activates the environment
-pip install -e .      # installs the alsdb package itself (editable)
+pixi install          # resolves all conda-forge + pip dependencies in one step
+pixi shell            # activate the environment
 ```
+
+> **Note:** `pip install alsdb` will install the pure-Python dependencies but will fail to import without `pdal` present in your environment.
 ### Dependencies
 
 | Package | Purpose |
