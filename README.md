@@ -1,3 +1,10 @@
+<p align="center">
+<a href="https://github.com/simonbesnard1/alsdb">
+        <img src="https://raw.githubusercontent.com/simonbesnard1/alsdb/main/doc/_static/logos/alsdb_logo.png"
+         alt="alsdb Logo" height="180px" hspace="0px" vspace="30px">
+</a>
+</p>
+
 # alsDB
 
 **alsDB** is a Python package for ingesting, storing, and processing Airborne Laser Scanning (ALS/LiDAR) point clouds at scale. It reads LAZ/LAS files via [PDAL](https://pdal.io), stores them in a [TileDB](https://tiledb.com) sparse array (locally or on S3-compatible object storage), and provides a processing pipeline for canopy height models (CHM), digital terrain/surface models (DTM/DSM), above-ground biomass (AGB) estimation, and GEDI waveform simulation.
