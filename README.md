@@ -5,7 +5,7 @@
   </a>
 </p>
 
-<h3 align="center">Airborne Laser Scanning point clouds — from LAZ to TileDB at scale</h3>
+<h3 align="center">Airborne Laser Scanning point clouds - from LAZ to TileDB at scale</h3>
 
 <p align="center">
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python"></a>
@@ -18,7 +18,7 @@
 
 **alsDB** reads LAZ/LAS files via [PDAL](https://pdal.io), stores them in a [TileDB](https://tiledb.com) sparse array (locally or on S3-compatible object storage), and provides a full processing pipeline for forest structure and biomass products.
 
-The package is dataset-agnostic — CRS, bounding box, and acquisition year are read directly from the LAZ file header, so any national or global ALS dataset works without custom parsers.
+The package is dataset-agnostic - CRS, bounding box, and acquisition year are read directly from the LAZ file header, so any national or global ALS dataset works without custom parsers.
 
 ## Features
 
@@ -29,7 +29,7 @@ The package is dataset-agnostic — CRS, bounding box, and acquisition year are 
 | **Ingestion manifest** | Tracks CRS, bbox, point count and status; re-ingestion is a no-op by default |
 | **CRS-aware schema** | Domain bounds selected automatically from tile CRS or global fallback |
 | **Local + S3 storage** | Identical API for filesystem paths and `s3://` URIs (tested on Ceph / RadosGW) |
-| **Tiled processing** | CHM, DTM, DSM, AGB, gap fraction — all support `tile_size` / `n_workers` for large areas |
+| **Tiled processing** | CHM, DTM, DSM, AGB, gap fraction - all support `tile_size` / `n_workers` for large areas |
 | **GEDI simulation** | Full-waveform simulation and batch RH metric extraction at GEDI footprint scale |
 | **CLI** | `alsdb ingest` and `alsdb info` commands |
 
@@ -166,7 +166,7 @@ compute_chm(
     year=2021,
 )
 
-# Large area — tiled processing (500 m sub-tiles, 50 m buffer, 4 workers)
+# Large area - tiled processing (500 m sub-tiles, 50 m buffer, 4 workers)
 compute_chm(
     provider=reader,
     output_path="outputs/chm.tif",
@@ -192,7 +192,7 @@ compute_all(
 
 The pipeline queries the array, injects the point cloud into a PDAL pipeline (`filters.hag_delaunay` for height-above-ground), and writes GeoTIFFs via `writers.gdal`.  Sub-tiles with no data (outside the flight swath) are silently skipped and appear as nodata in the mosaic.
 
-**Tiling parameters** apply to all three products — CHM uses a 50 m buffer to ensure accurate TIN values at tile edges; DTM and DSM require no buffer.
+**Tiling parameters** apply to all three products - CHM uses a 50 m buffer to ensure accurate TIN values at tile edges; DTM and DSM require no buffer.
 
 ### Biomass estimation
 
@@ -208,7 +208,7 @@ compute_biomass(
     year=2021,
 )
 
-# Large area — tiled
+# Large area - tiled
 compute_biomass(
     provider=reader,
     output_path="output/agb.tif",
@@ -228,7 +228,7 @@ Intermediate metrics (h50, h75, h95, hmean, canopy cover, point density) are als
 ```python
 from alsdb.processing.gap import compute_gap_fraction
 
-# Gap fraction only — no assumptions
+# Gap fraction only - no assumptions
 compute_gap_fraction(
     provider=reader,
     output_path="output/gap.tif",
@@ -258,11 +258,11 @@ compute_gap_fraction(
 )
 ```
 
-Gap fraction is the MacArthur-Wilson return-count estimator — a direct observable with no canopy-structure assumptions:
+Gap fraction is the MacArthur-Wilson return-count estimator - a direct observable with no canopy-structure assumptions:
 
     P_gap = N_ground_first / (N_ground_first + N_veg_first)
 
-Effective LAI is opt-in via `lai=True` and requires an explicit extinction coefficient `k` (Beer-Lambert: `L_e = -ln(P_gap) / k`).  The result is effective LAI, not true LAI — ALS cannot separate leaves from woody material.  LAI is capped at 10 m²/m² to avoid `ln(0)` artefacts in fully closed canopy cells.
+Effective LAI is opt-in via `lai=True` and requires an explicit extinction coefficient `k` (Beer-Lambert: `L_e = -ln(P_gap) / k`).  The result is effective LAI, not true LAI - ALS cannot separate leaves from woody material.  LAI is capped at 10 m²/m² to avoid `ln(0)` artefacts in fully closed canopy cells.
 
 ### GEDI waveform simulation
 
@@ -276,12 +276,12 @@ result = simulate_waveform(
     footprint_radius=12.5,
     year=2021,
 )
-print(result.rh[50])     # RH50 height above ground (m) — dict has integer keys RH0–RH100
+print(result.rh[50])     # RH50 height above ground (m) - dict has integer keys RH0–RH100
 print(result.rh[98])     # RH98, equivalent to GEDI L2A rh98
 print(result.cover)      # canopy cover fraction
 print(result.z_ground)   # estimated ground elevation (m)
 
-# Batch — shots must be a DataFrame with center_x / center_y columns (UTM)
+# Batch - shots must be a DataFrame with center_x / center_y columns (UTM)
 import numpy as np
 import pandas as pd
 
@@ -359,17 +359,17 @@ fig.savefig("rh_profile_308500_4689000.png", dpi=150, bbox_inches="tight")
 
 `plot_waveform` has two panels:
 
-- **Left** — normalised waveform energy vs elevation, with the ground return shaded brown, the canopy layer shaded green, and RH25/50/75/95/100 annotated as horizontal lines. An info box shows canopy cover, HOME (RH50), and point count.
-- **Right** — horizontal bar chart of RH heights above ground for quick comparison across footprints.
+- **Left** - normalised waveform energy vs elevation, with the ground return shaded brown, the canopy layer shaded green, and RH25/50/75/95/100 annotated as horizontal lines. An info box shows canopy cover, HOME (RH50), and point count.
+- **Right** - horizontal bar chart of RH heights above ground for quick comparison across footprints.
 
 `plot_rh_profile` matches the GEDI L2A canonical representation:
 
-- **(a)** RH(p) curve — height above ground vs percent cumulative energy, with understory (green) and overstory (orange) layer shading
-- **(b)** W(h) = dE/dh — normalised waveform energy density vs height, with auto-detected layer peaks annotated, layer boundary, Δh inter-layer distance, and the fraction of energy below the split printed
+- **(a)** RH(p) curve - height above ground vs percent cumulative energy, with understory (green) and overstory (orange) layer shading
+- **(b)** W(h) = dE/dh - normalised waveform energy density vs height, with auto-detected layer peaks annotated, layer boundary, Δh inter-layer distance, and the fraction of energy below the split printed
 
 ### 3-D waveform waterfall
 
-Visualise all simulated shots as a waterfall of RH(p) curves — each shot is a vertical ribbon at its X position, with cumulative energy (0–100 %) on the Y axis and height above ground on Z, coloured by a summary metric.
+Visualise all simulated shots as a waterfall of RH(p) curves - each shot is a vertical ribbon at its X position, with cumulative energy (0–100 %) on the Y axis and height above ground on Z, coloured by a summary metric.
 
 ```python
 from alsdb.utils.viz import plot_waveforms_3d
@@ -478,6 +478,6 @@ Each ingested tile becomes a new TileDB **fragment**. Fragments are consolidated
 
 ## License
 
-EUPL-1.2 — see [LICENSE](LICENSE).
+EUPL-1.2 - see [LICENSE](LICENSE).
 
 © 2026 Simon Besnard, Helmholtz Centre Potsdam – GFZ German Research Centre for Geosciences.
