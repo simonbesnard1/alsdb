@@ -402,32 +402,39 @@ class ALSDatabase(TileDBProvider):
             total, entry = self._ingest_tile(path, chunk_size, classification_filter, stored)
             return path.name, total, entry
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_path = {executor.submit(_worker, p): p for p in pending}
-            for future in as_completed(future_to_path):
-                path = future_to_path[future]
-                try:
-                    filename, n, entry = future.result()
-                    manifest[filename] = entry
-                    results[filename] = n
-                    if n > 0:
-                        newly_written += 1
-                except Exception as exc:
-                    filename = path.name
-                    logger.error("Failed to ingest %s: %s", filename, exc)
-                    manifest[filename] = {
-                        "status": "failed",
-                        "error": str(exc),
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                    }
-                    results[filename] = 0
+        # Process in batches so consolidation only runs after all workers in a
+        # batch have finished — avoids the race where consolidate() tries to
+        # access .wrt commit files that concurrent writers are still using.
+        for batch_start in range(0, len(pending), consolidate_every):
+            batch = pending[batch_start : batch_start + consolidate_every]
 
-                # Save manifest after every tile so progress survives crashes
-                self._save_manifest(manifest)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_path = {executor.submit(_worker, p): p for p in batch}
+                for future in as_completed(future_to_path):
+                    path = future_to_path[future]
+                    try:
+                        filename, n, entry = future.result()
+                        manifest[filename] = entry
+                        results[filename] = n
+                        if n > 0:
+                            newly_written += 1
+                    except Exception as exc:
+                        filename = path.name
+                        logger.error("Failed to ingest %s: %s", filename, exc)
+                        manifest[filename] = {
+                            "status": "failed",
+                            "error": str(exc),
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+                        results[filename] = 0
 
-                if newly_written > 0 and newly_written % consolidate_every == 0:
-                    logger.info("Consolidating after %d tiles…", newly_written)
-                    tiledb.consolidate(self.array_uri, ctx=self.ctx)
-                    tiledb.vacuum(self.array_uri, ctx=self.ctx)
+                    # Save manifest after every tile so progress survives crashes
+                    self._save_manifest(manifest)
+
+            # All workers in this batch are done — safe to consolidate
+            if newly_written > 0:
+                logger.info("Consolidating after %d tiles…", newly_written)
+                tiledb.consolidate(self.array_uri, ctx=self.ctx)
+                tiledb.vacuum(self.array_uri, ctx=self.ctx)
 
         return results
