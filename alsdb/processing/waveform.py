@@ -10,7 +10,7 @@ Pipeline
 1. Query TileDB for all ALS points within a 25 m diameter circular footprint.
 2. Build a vertical histogram of Z values (0.15 m bins — GEDI native resolution),
    optionally weighted by return intensity.
-3. Convolve with a Gaussian pulse kernel to simulate the GEDI instrument response.
+3. Convolve with the TX pulse kernel (per-beam mean shape, or Gaussian fallback).
 4. Detect the ground peak (lowest significant peak in the waveform).
 5. Extract GEDI-style metrics: RH10–RH100, HOME, canopy cover.
 
@@ -38,9 +38,11 @@ observed waveforms to derive calibration offsets::
 
 from __future__ import annotations
 
+import functools
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Optional
 
 import numpy as np
@@ -60,6 +62,32 @@ _SIGMA_COV: float = 0.93            # m  coverage beam pulse σ
 _MIN_POINTS: int = 25
 _RH_LEVELS: tuple[int, ...] = tuple(range(101))   # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0       # m  above ground
+
+# Mean TX pulse shapes derived from real GEDI L1B data (Hancock et al. gediSimulator).
+# Full-power beams: 0000, 0001, 0010, 0011, 1000, 1011
+# Coverage beams:  0101, 0110
+_BEAM_IDS: frozenset[str] = frozenset({
+    "BEAM0000", "BEAM0001", "BEAM0010", "BEAM0011",
+    "BEAM0101", "BEAM0110", "BEAM1000", "BEAM1011",
+})
+
+
+@functools.lru_cache(maxsize=8)
+def _load_pulse(beam_id: str) -> np.ndarray:
+    """
+    Load and return the normalised TX pulse kernel for *beam_id*.
+
+    The kernel is read from the bundled mean-pulse ASCII file, centered on its
+    peak bin, and normalised to unit sum so that convolution preserves total
+    waveform energy.
+
+    Returns a 1-D float64 array ready for ``np.convolve(..., mode="same")``.
+    """
+    path = files("alsdb") / "data" / "pulse_shapes" / f"meanPulse.{beam_id}.txt"
+    data = np.loadtxt(str(path))           # (N, 2): col0 = position (m), col1 = amplitude
+    amp = data[:, 1].astype(np.float64)
+    amp /= amp.sum()
+    return amp
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +304,7 @@ def simulate_waveform(
     footprint_radius: float = _FOOTPRINT_RADIUS,
     z_step: float = _Z_STEP,
     sigma: float = _SIGMA_FULL,
+    beam_id: Optional[str] = None,
     noise_std: float = 0.0,
     intensity_weighted: bool = False,
     gaussian_beam_weighting: bool = True,
@@ -302,8 +331,16 @@ def simulate_waveform(
     z_step : float
         Vertical bin size in metres (GEDI native = 0.15 m).
     sigma : float
-        Gaussian pulse width σ in metres.  Use ``_SIGMA_FULL`` (0.64 m) for
-        full-power beams, ``_SIGMA_COV`` (0.93 m) for coverage beams.
+        Gaussian pulse width σ in metres.  Used only when ``beam_id`` is
+        ``None``.  Use ``_SIGMA_FULL`` (0.64 m) for full-power beams or
+        ``_SIGMA_COV`` (0.93 m) for coverage beams.
+    beam_id : str, optional
+        GEDI beam identifier (e.g. ``"BEAM0000"``).  When provided, the
+        bundled mean TX pulse shape for that beam is used as the convolution
+        kernel instead of a symmetric Gaussian, giving a more physically
+        accurate waveform (the real GEDI pulse has an asymmetric tail).
+        Must be one of ``_BEAM_IDS``; silently falls back to Gaussian if
+        unrecognised.
     noise_std : float
         Standard deviation of additive Gaussian noise (0 = noise-free).
     intensity_weighted : bool
@@ -385,8 +422,12 @@ def simulate_waveform(
     # 1. Vertical histogram
     z_bins, hist = _build_histogram(z, weights, z_step)
 
-    # 2. Convolve with Gaussian pulse
-    waveform = gaussian_filter1d(hist, sigma=sigma / z_step)
+    # 2. Convolve with TX pulse kernel
+    if beam_id is not None and beam_id in _BEAM_IDS:
+        kernel = _load_pulse(beam_id)
+        waveform = np.convolve(hist, kernel, mode="same")
+    else:
+        waveform = gaussian_filter1d(hist, sigma=sigma / z_step)
 
     # 3. Add noise
     if noise_std > 0.0:
@@ -420,6 +461,7 @@ def simulate_batch(
     shots: pd.DataFrame,
     x_col: str = "center_x",
     y_col: str = "center_y",
+    beam_col: str = "beam",
     year: Optional[int] = None,
     n_workers: int = 4,
     **kwargs,
@@ -432,9 +474,15 @@ def simulate_batch(
     provider : TileDBProvider
     shots : pd.DataFrame
         Must contain ``x_col`` and ``y_col`` columns (UTM metres).
+        If a ``beam_col`` column is present (e.g. ``"BEAM0000"``), the
+        per-beam mean TX pulse is used for each shot automatically.
         All other columns are preserved in the output.
     x_col, y_col : str
         Column names for easting and northing.
+    beam_col : str
+        Column name for the GEDI beam identifier.  Ignored if not present in
+        ``shots``.  Per-row beam overrides any ``beam_id`` passed via
+        ``**kwargs``.
     year : int, optional
         Survey year filter applied to all shots.
     n_workers : int
@@ -449,13 +497,18 @@ def simulate_batch(
         ``n_points``, ``rh10`` … ``rh100``.
         Shots with insufficient ALS coverage have NaN metric values.
     """
+    has_beam_col = beam_col in shots.columns
+
     def _run(row):
+        row_kwargs = dict(kwargs)
+        if has_beam_col:
+            row_kwargs["beam_id"] = str(row[beam_col])
         return row.name, simulate_waveform(
             provider,
             center_x=float(row[x_col]),
             center_y=float(row[y_col]),
             year=year,
-            **kwargs,
+            **row_kwargs,
         )
 
     results: dict = {}
