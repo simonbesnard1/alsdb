@@ -467,7 +467,7 @@ def simulate_batch(
     y_col: str = "center_y",
     beam_col: str = "beam",
     year: Optional[int] = None,
-    n_workers: int = 4,
+    n_workers: int = 1,
     **kwargs,
 ) -> pd.DataFrame:
     """

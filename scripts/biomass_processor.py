@@ -35,4 +35,4 @@ compute_biomass(provider, "output/agb.tif", resolution=10.0, model_fn=my_model)
 
 
 from alsdb.utils.viz_raster import plot_agb
-plot_agb("output/agb_100m.tif", cmap="YlGn", vmin=0, vmax=None) 
+plot_agb("output/agb_10m.tif", cmap="YlGn", vmin=0, vmax=None) 
