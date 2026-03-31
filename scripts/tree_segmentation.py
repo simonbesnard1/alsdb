@@ -9,20 +9,22 @@ Created on Tue Mar 31 13:58:19 2026
 from alsdb import ALSProvider
 from alsdb.processing.trees import segment_trees
 from alsdb.utils.viz_trees import plot_trees, plot_trees_3d
+import alsdb
+alsdb.setup_logging()          # INFO by default
+
 
 provider = ALSProvider(storage_type="local", uri="array_")
 
-
 points, trees = segment_trees(
     provider,
-    bbox=(655000.0, 8901000.0, 656000.0, 8902000.0),
+    bbox=(655000.0, 8901000.0, 655200.0, 8901200.0),  # 300 × 300 m
     year=2014,
-    min_height=3.0,
+    #tile_size=300.0,     # 300 m × 300 m sub-tiles (~11 tiles for 1 km²)
+    #tile_buffer=30.0,    # 30 m buffer so edge trees are fully captured
+    n_workers=4,
     voxel_size=0.5,
+    min_height=3.0,
 )
-
-print(trees[["tree_id", "height", "crown_area", "n_points"]].head(10))
-print(f"{len(trees)} trees detected")
 
 # 2-D crown map (circles or convex hulls when points provided)
 plot_trees(trees, points=points, output_path="trees_2d.png")
