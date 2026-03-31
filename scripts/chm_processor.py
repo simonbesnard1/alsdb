@@ -25,8 +25,6 @@ compute_chm(
     provider, "output/chm.tif", resolution=1.0,
     bbox=(657430, 8900970, 659010, 8902550),
     year=2014,
-    tile_size=500.0,    # 500×500 m sub-tiles → 3×3 = 9 tiles for 2.5 km²
-    tile_buffer=50.0,   # 50 m overlap for accurate TIN at edges
     n_workers=6,        # parallel workers
 )
 

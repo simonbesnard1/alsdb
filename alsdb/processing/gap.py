@@ -157,6 +157,31 @@ def _gap_to_lai(gap: np.ndarray, k: float) -> np.ndarray:
 # Rasterio writer
 # ---------------------------------------------------------------------------
 
+def _clip_to_data_extent(
+    grid: np.ndarray,
+    bbox: tuple[float, float, float, float],
+    resolution: float,
+) -> tuple[Optional[np.ndarray], Optional[tuple[float, float, float, float]]]:
+    """
+    Clip a (ny, nx) north-up grid to the tight bounding box of non-NaN cells.
+
+    Returns ``(clipped_grid, clipped_bbox)`` or ``(None, None)`` if all NaN.
+    """
+    rows = np.any(~np.isnan(grid), axis=1)
+    cols = np.any(~np.isnan(grid), axis=0)
+    if not rows.any():
+        return None, None
+    r0, r1 = int(np.where(rows)[0][0]), int(np.where(rows)[0][-1])
+    c0, c1 = int(np.where(cols)[0][0]), int(np.where(cols)[0][-1])
+    clipped = grid[r0 : r1 + 1, c0 : c1 + 1]
+    min_x, _, _, max_y = bbox
+    new_min_x = min_x + c0 * resolution
+    new_max_x = min_x + (c1 + 1) * resolution
+    new_max_y = max_y - r0 * resolution
+    new_min_y = max_y - (r1 + 1) * resolution
+    return clipped, (new_min_x, new_min_y, new_max_x, new_max_y)
+
+
 def _write_raster(
     grid: np.ndarray,
     path: Path,
@@ -227,20 +252,23 @@ def _process_tile(
 
     gap = _compute_gap_grid(points, resolution, crop_bbox)
 
-    if np.all(np.isnan(gap)):
-        logger.debug("Gap tile %d: all NaN, skipping", tile_index)
+    # Clip grid to tight bounding box of non-NaN cells so the tile GeoTIFF
+    # covers only where data exists — same as PDAL's writers.gdal behaviour.
+    gap, tight_bbox = _clip_to_data_extent(gap, crop_bbox, resolution)
+    if gap is None:
+        logger.debug("Gap tile %d: all NaN after clipping, skipping", tile_index)
         return None
 
     out: dict[str, Path] = {}
 
     gap_path = Path(tmp_dir) / f"gap_tile_{tile_index:04d}.tif"
-    _write_raster(gap, gap_path, crop_bbox, nodata)
+    _write_raster(gap, gap_path, tight_bbox, nodata)
     out["gap"] = gap_path
 
     if lai:
         lai_grid = _gap_to_lai(gap, k)
         lai_path = Path(tmp_dir) / f"lai_tile_{tile_index:04d}.tif"
-        _write_raster(lai_grid, lai_path, crop_bbox, nodata)
+        _write_raster(lai_grid, lai_path, tight_bbox, nodata)
         out["lai"] = lai_path
 
     return out

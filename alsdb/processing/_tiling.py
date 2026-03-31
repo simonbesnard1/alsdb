@@ -148,18 +148,37 @@ def mosaic_tiles(
     tile_paths: list[Path],
     output_path: Path,
     nodata: float,
+    bounds: Optional[tuple[float, float, float, float]] = None,
 ) -> None:
     """
     Merge *tile_paths* into *output_path* using ``rasterio.merge``.
+
+    Parameters
+    ----------
+    tile_paths:
+        List of GeoTIFF paths to merge.
+    output_path:
+        Destination GeoTIFF path.
+    nodata:
+        No-data value.
+    bounds:
+        Optional ``(min_x, min_y, max_x, max_y)`` to clip the merged output.
+        When provided, the output is exactly this extent (padded with nodata if
+        needed).  Pass *effective_bbox* here to avoid the merged raster
+        extending beyond the requested area due to floating-point tile alignment.
 
     Source files are deleted after a successful write.
     """
     import rasterio
     from rasterio.merge import merge as rasterio_merge
 
+    merge_kwargs: dict = {"nodata": nodata}
+    if bounds is not None:
+        merge_kwargs["bounds"] = bounds
+
     sources = [rasterio.open(p) for p in tile_paths]
     try:
-        mosaic, transform = rasterio_merge(sources, nodata=nodata)
+        mosaic, transform = rasterio_merge(sources, **merge_kwargs)
         profile = sources[0].profile.copy()
         profile.update(
             driver="GTiff",
