@@ -12,11 +12,11 @@ import alsdb
 alsdb.setup_logging()          # INFO by default
 
 # # Ingest a tile locally
-# db = ALSDatabase(storage_type="local", uri="array_")
+db = ALSDatabase(storage_type="local", uri="array_")
 
-# # Skips already-ingested files automatically
-# db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_0.laz",
-#           overwrite=True)  # writes + records in manifest
+# Skips already-ingested files automatically
+db.ingest("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_6.laz",
+          overwrite=True)  # writes + records in manifest
 
 # # Ingest thousands of files at once, auto-consolidates every 50
 # db.ingest_many(sorted(Path("/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/").glob("*.laz")), 

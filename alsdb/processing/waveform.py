@@ -376,11 +376,9 @@ def simulate_waveform(
     data = _query_footprint(provider, center_x, center_y, footprint_radius, year)
     n_pts = 0 if data is None else int(len(data["Z"]))
     if data is None or n_pts < min_points:
-        logger.warning(
+        logger.debug(
             "simulate_waveform: footprint at (%.0f, %.0f) year=%s has only %d points "
-            "(min_points=%d) — returning None.  "
-            "Hint: call provider.available_years() and provider.query_bbox() to verify "
-            "data coverage.",
+            "(min_points=%d) — skipped.",
             center_x, center_y, year, n_pts, min_points,
         )
         return None
@@ -425,7 +423,13 @@ def simulate_waveform(
     # 2. Convolve with TX pulse kernel
     if beam_id is not None and beam_id in _BEAM_IDS:
         kernel = _load_pulse(beam_id)
-        waveform = np.convolve(hist, kernel, mode="same")
+        # np.convolve mode="same" returns max(len(hist), len(kernel)) elements.
+        # When the kernel is longer than the histogram the output is kernel-length
+        # and z_bins-indexing breaks.  Use mode="full" and centre-trim to
+        # histogram length so z_bins and waveform always align.
+        conv = np.convolve(hist, kernel, mode="full")
+        pad = (len(kernel) - 1) // 2
+        waveform = conv[pad: pad + len(hist)]
     else:
         waveform = gaussian_filter1d(hist, sigma=sigma / z_step)
 
@@ -517,6 +521,16 @@ def simulate_batch(
         for future in as_completed(futures):
             idx, result = future.result()
             results[idx] = result
+
+    n_total = len(shots)
+    n_ok = sum(1 for r in results.values() if r is not None)
+    n_skipped = n_total - n_ok
+    if n_skipped:
+        logger.warning(
+            "simulate_batch: %d/%d footprints skipped (insufficient points). "
+            "Run with logging.DEBUG for per-footprint details.",
+            n_skipped, n_total,
+        )
 
     _nan_metrics = {
         "z_ground": np.nan, "home": np.nan, "cover": np.nan, "n_points": 0,

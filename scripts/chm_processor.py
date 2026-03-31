@@ -23,13 +23,24 @@ provider = ALSProvider(
 # CHM for the full array
 compute_chm(
     provider, "output/chm.tif", resolution=1.0,
-    bbox=(657430, 8900970, 659010, 8902550),
+    bbox=(655000.0, 8901000.0, 656000.0, 8902000.0),
     year=2014,
     n_workers=6,        # parallel workers
 )
 
 print("--- %s seconds ---" % (time.time() - start_time_))
 
+
+from alsdb.processing.gap import compute_gap_fraction
+
+# Gap fraction only - no assumptions
+compute_gap_fraction(
+    provider=provider,
+    output_path="output/gap.tif",
+    bbox=(657430, 8900970, 659010, 8902550),
+    resolution=10.0,
+    year=2014,
+)
 # # Restrict to one PNOA tile.
 # compute_all(
 #     provider,
