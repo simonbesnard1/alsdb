@@ -99,6 +99,8 @@ def _pdal_stages(
 
 def _tree_metrics(points: np.ndarray) -> list[dict]:
     """Compute per-tree metrics from a point array that already has TreeID."""
+    if "TreeID" not in points.dtype.names:
+        return []
     tree_ids = np.unique(points["TreeID"])
     tree_ids = tree_ids[tree_ids > 0]
     records = []
