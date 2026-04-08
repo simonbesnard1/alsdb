@@ -161,6 +161,56 @@ class ALSDatabase(TileDBProvider):
         return sorted(entries, key=lambda e: e.get("ts", ""))
 
     # ------------------------------------------------------------------
+    # Consolidation
+    # ------------------------------------------------------------------
+
+    def consolidate(
+        self,
+        fragment_size: int = 2_000_000_000,
+        memory_budget: int = 4_000_000_000,
+        step_size_ratio: float = 0.0,
+    ) -> None:
+        """
+        Consolidate and vacuum the TileDB array.
+
+        TileDB's consolidation is size-tiered: it merges fragments whose sizes
+        fall within *step_size_ratio* of each other, up to *fragment_size*.
+        Setting ``step_size_ratio=0.0`` ignores size differences and merges
+        all fragments regardless of size — effectively a full compaction.
+
+        Parameters
+        ----------
+        fragment_size:
+            Target consolidated fragment size in bytes (default 2 GB).
+            Fragments smaller than this are candidates for merging.
+        memory_budget:
+            Total memory budget for the consolidation pass (bytes).
+            Should be set to available RAM for large arrays.
+        step_size_ratio:
+            Size ratio window for fragment eligibility (0.0 = merge all,
+            1.0 = only merge identically-sized fragments).
+        """
+        cfg = tiledb.Config({
+            "sm.consolidation.mode":            "fragments",
+            "sm.consolidation.buffer_size":     str(fragment_size),
+            "sm.consolidation.total_buffer_size": str(memory_budget),
+            "sm.consolidation.step_min_frags":  "2",
+            "sm.consolidation.step_max_frags":  "200",
+            "sm.consolidation.step_size_ratio": str(step_size_ratio),
+            "sm.consolidation.amplification":   "1.0",
+        })
+        vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
+        n_frags = len(tiledb.array_fragments(self.array_uri).uri)
+        logger.info(
+            "Consolidating %d fragments (fragment_size=%.0f MB, "
+            "memory_budget=%.0f MB)…",
+            n_frags, fragment_size / 1e6, memory_budget / 1e6,
+        )
+        tiledb.consolidate(self.array_uri, config=cfg, ctx=self.ctx)
+        tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
+        logger.info("Consolidation done.")
+
+    # ------------------------------------------------------------------
     # Writing
     # ------------------------------------------------------------------
 
@@ -431,10 +481,18 @@ class ALSDatabase(TileDBProvider):
                     # Save manifest after every tile so progress survives crashes
                     self._save_manifest(manifest)
 
-            # All workers in this batch are done — safe to consolidate
+            # All workers in this batch are done — safe to consolidate.
+            # Size-tiered config keeps fragment count manageable during ingest
+            # without over-merging (small fragments won't be merged into the
+            # large consolidated ones from previous batches until the final pass).
             if newly_written > 0:
-                logger.info("Consolidating after %d tiles…", newly_written)
-                tiledb.consolidate(self.array_uri, ctx=self.ctx)
-                tiledb.vacuum(self.array_uri, ctx=self.ctx)
+                self.consolidate()
+
+        # Final full compaction: step_size_ratio=0.0 ignores size differences
+        # and merges ALL remaining fragments into one regardless of size.
+        n_batches = max(1, len(pending) // consolidate_every)
+        if newly_written > 0 and n_batches > 1:
+            logger.info("Final compaction — merging all batch fragments…")
+            self.consolidate(step_size_ratio=0.0)
 
         return results
