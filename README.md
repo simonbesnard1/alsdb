@@ -245,6 +245,36 @@ LiDAR structural metrics (h50, h75, h95, hmean, canopy cover, point density) are
 compute_metrics(provider=reader, store=store, resolution=10.0, year=2021)
 ```
 
+#### Using a trained machine-learning model
+
+Any scikit-learn-compatible estimator (Random Forest, Gradient Boosting, Linear Regression, Ridge, XGBoost, a `Pipeline` with preprocessing, …) can be used via `wrap_sklearn_model()`, which handles reshaping the per-cell metric grids into the `(n_samples, n_features)` matrix sklearn expects and masks NaN pixels automatically.
+
+```python
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge
+from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
+
+# --- Random Forest ---
+rf = RandomForestRegressor(n_estimators=200, random_state=42)
+rf.fit(X_train, y_agb)   # X columns: h50, h75, h95, hmean, cc, density (in order)
+
+compute_biomass(provider=reader, store=store, resolution=10.0, year=2021,
+                model_fn=wrap_sklearn_model(rf))
+
+# --- Linear model ---
+lr = Ridge(alpha=1.0)
+lr.fit(X_train, y_agb)
+
+compute_biomass(provider=reader, store=store, resolution=10.0, year=2021,
+                model_fn=wrap_sklearn_model(lr))
+
+# --- Custom feature subset (must match training order) ---
+compute_biomass(provider=reader, store=store, resolution=10.0, year=2021,
+                model_fn=wrap_sklearn_model(rf, features=["h95", "cc", "density"]))
+```
+
+The default feature order is `["h50", "h75", "h95", "hmean", "cc", "density"]`, matching the output of `compute_metrics()`.  The `features` argument lets you use any subset in any order, as long as it matches the column order used during training.
+
 ### Gap fraction and effective LAI
 
 ```python

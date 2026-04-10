@@ -37,7 +37,7 @@ Usage::
 
     from alsdb import ALSProvider
     from alsdb.storage import ALSZarrStore
-    from alsdb.processing.biomass import compute_biomass, compute_metrics
+    from alsdb.processing.biomass import compute_biomass, compute_metrics, wrap_sklearn_model
 
     provider = ALSProvider(storage_type="local", uri="array_")
     store = ALSZarrStore("output/spain.zarr")
@@ -198,6 +198,70 @@ def naesset_model(
             a * np.power(np.where(h95 > 0, h95, 0), b) * np.power(cc, c),
         )
     return agb.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Model helpers
+# ---------------------------------------------------------------------------
+
+def wrap_sklearn_model(
+    estimator,
+    features: Optional[list[str]] = None,
+) -> Callable:
+    """
+    Wrap a fitted scikit-learn estimator as a ``model_fn`` for
+    :func:`compute_biomass`.
+
+    Handles the reshaping between the per-cell metric dict used internally
+    and the ``(n_samples, n_features)`` matrix expected by sklearn, and
+    masks NaN pixels so they are never passed to ``predict()``.
+
+    Parameters
+    ----------
+    estimator:
+        Any fitted sklearn-compatible estimator that exposes a
+        ``predict(X)`` method (e.g. ``RandomForestRegressor``,
+        ``GradientBoostingRegressor``, ``Pipeline``, …).
+    features:
+        Ordered list of metric names to use as model features.
+        Defaults to all six standard metrics:
+        ``["h50", "h75", "h95", "hmean", "cc", "density"]``.
+        The order must match the feature order used during training.
+
+    Returns
+    -------
+    Callable
+        A function ``model_fn(metrics) → np.ndarray`` compatible with
+        the ``model_fn`` parameter of :func:`compute_biomass`.
+
+    Examples
+    --------
+    ::
+
+        from sklearn.ensemble import RandomForestRegressor
+        from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
+
+        rf = RandomForestRegressor(n_estimators=200)
+        rf.fit(X_train, y_train)          # X columns = h50, h75, h95, hmean, cc, density
+
+        model_fn = wrap_sklearn_model(rf)
+        compute_biomass(provider, store, resolution=10.0, year=2021,
+                        model_fn=model_fn)
+    """
+    _default_features = ["h50", "h75", "h95", "hmean", "cc", "density"]
+    feat = features or _default_features
+
+    def _model(metrics: dict[str, np.ndarray]) -> np.ndarray:
+        shape = metrics[feat[0]].shape
+        # Stack into (n_pixels, n_features); ravel preserves north-up order
+        X = np.column_stack([metrics[k].ravel() for k in feat])
+        valid = ~np.any(np.isnan(X), axis=1)
+        result = np.full(X.shape[0], np.nan, dtype=np.float32)
+        if valid.any():
+            result[valid] = estimator.predict(X[valid]).astype(np.float32)
+        return result.reshape(shape)
+
+    return _model
 
 
 # ---------------------------------------------------------------------------

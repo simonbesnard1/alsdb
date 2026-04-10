@@ -7,7 +7,7 @@ Created on Sat Mar 28 09:31:34 2026
 """
 
 from alsdb import ALSProvider
-from alsdb.processing.biomass import compute_biomass, compute_metrics, naesset_model
+from alsdb.processing.biomass import compute_biomass, compute_metrics
 from alsdb.storage import ALSZarrStore
 import alsdb
 alsdb.setup_logging()
@@ -24,10 +24,4 @@ compute_metrics(provider, store, resolution=10.0, year=2019)
 compute_biomass(provider, store, resolution=10.0, year=2014, n_workers=6)
 compute_biomass(provider, store, resolution=100.0, year=2021, n_workers=6)
 
-# AGB with calibrated coefficients
-my_model = functools.partial(naesset_model, a=1.2, b=2.1, c=0.6)
-compute_biomass(provider, store, resolution=100.0, my_model, bbox=bbox, year=2021, n_workers=6)
 
-
-from alsdb.utils.viz_raster import plot_agb
-plot_agb("output/agb_10m.tif", cmap="YlGn", vmin=0, vmax=None) 
