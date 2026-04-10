@@ -271,6 +271,7 @@ def compute_metrics(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
@@ -307,6 +308,12 @@ def compute_metrics(
         return
     if year is not None and not check_year_exists(year, provider):
         return
+    if not overwrite and year is not None:
+        if all(store.has_data(v, resolution, year)
+               for v in ["h50", "h75", "h95", "hmean", "cc", "density"]):
+            logger.info("LiDAR metrics already present for year %d at %.0f m — skipping",
+                        year, resolution)
+            return
     crs = array_crs(provider)
     for var in ["h50", "h75", "h95", "hmean", "cc", "density"]:
         store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
@@ -338,6 +345,7 @@ def compute_biomass(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
@@ -362,6 +370,9 @@ def compute_biomass(
         Survey year filter.
     cc_threshold:
         HAG threshold (m) for the canopy cover metric.
+    overwrite:
+        If ``False`` (default) and biomass data for *year* already exists
+        in the store, the computation is skipped.
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
@@ -374,6 +385,10 @@ def compute_biomass(
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
     if year is not None and not check_year_exists(year, provider):
+        return
+    if not overwrite and year is not None and store.has_data("biomass", resolution, year):
+        logger.info("Biomass already present for year %d at %.0f m — skipping",
+                    year, resolution)
         return
     store.ensure_group("biomass", resolution, effective_bbox,
                        array_crs(provider), tile_size)

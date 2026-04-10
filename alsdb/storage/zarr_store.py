@@ -417,6 +417,34 @@ class ALSZarrStore:
     # Introspection
     # ------------------------------------------------------------------
 
+    def has_data(self, variable: str, resolution: float, year: int) -> bool:
+        """
+        Return ``True`` if *variable* already has a time slice for *year*.
+
+        Used by compute functions to skip work that is already done.
+        The check is at the year level — it does not verify that every
+        spatial tile was written (e.g. after a partial run).
+
+        Parameters
+        ----------
+        variable:
+            Variable name, e.g. ``"chm"``.
+        resolution:
+            Resolution group in metres.
+        year:
+            Survey year to check.
+        """
+        res_key = _res_str(resolution)
+        if res_key not in self._root:
+            return False
+        grp = self._root[res_key]
+        if variable not in grp:
+            return False
+        time_arr = grp["time"]
+        if time_arr.shape[0] == 0:
+            return False
+        return bool(year in time_arr[:])
+
     @property
     def resolutions(self) -> list[float]:
         """Resolution values present in the store."""

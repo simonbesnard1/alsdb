@@ -239,6 +239,107 @@ def _process_tile_dsm(
 
 
 # ---------------------------------------------------------------------------
+# Combined tile worker (used by compute_all)
+# ---------------------------------------------------------------------------
+
+def _process_tile_all(
+    provider: "TileDBProvider",
+    query_bbox: tuple[float, float, float, float],
+    crop_bbox:  tuple[float, float, float, float],
+    store: "ALSZarrStore",
+    tile_index: int,
+    resolution: float,
+    year: Optional[int],
+    first_returns_only: bool,
+    need_dtm: bool,
+    need_dsm: bool,
+    need_chm: bool,
+) -> None:
+    """
+    Single-pass tile worker for :func:`compute_all`.
+
+    Performs one TileDB query and at most one ``filters.hag_delaunay`` call
+    to produce DTM, DSM, and CHM simultaneously.  Products already present
+    in the store for *year* are skipped via the ``need_*`` flags.
+    """
+    if not (need_dtm or need_dsm or need_chm):
+        logger.debug("All tile %d: all products already present, skipping", tile_index)
+        return
+
+    arr = query_to_array(provider, query_bbox, year=year)
+    if arr.size == 0:
+        logger.debug("All tile %d: no points, skipping", tile_index)
+        return
+
+    cx0, cy0, cx1, cy1 = crop_bbox
+
+    # --- DTM (ground points, max Z) —— no HAG needed --------------------
+    if need_dtm:
+        stages = [
+            {"type": "filters.range",
+             "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
+            {"type": "filters.crop",
+             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        ]
+        try:
+            pts = _run(stages, arr)
+            if len(pts):
+                store.write_tile("dtm", resolution, year,
+                                 _rasterise(pts["X"], pts["Y"], pts["Z"],
+                                            crop_bbox, resolution, "max"),
+                                 crop_bbox)
+        except RuntimeError as exc:
+            if "no points" not in str(exc).lower():
+                raise
+
+    # --- DSM (first returns, max Z) —— no HAG needed --------------------
+    if need_dsm:
+        stages = [
+            {"type": "filters.range", "limits": "ReturnNumber[1:1]"},
+            {"type": "filters.crop",
+             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        ]
+        try:
+            pts = _run(stages, arr)
+            if len(pts):
+                store.write_tile("dsm", resolution, year,
+                                 _rasterise(pts["X"], pts["Y"], pts["Z"],
+                                            crop_bbox, resolution, "max"),
+                                 crop_bbox)
+        except RuntimeError as exc:
+            if "no points" not in str(exc).lower():
+                raise
+
+    # --- CHM (hag_delaunay + veg first returns) -------------------------
+    if need_chm:
+        veg_limits = f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"
+        if first_returns_only:
+            veg_limits += ",ReturnNumber[1:1]"
+        stages = [
+            {"type": "filters.hag_delaunay"},
+            {"type": "filters.range", "limits": veg_limits},
+            {"type": "filters.assign",
+             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+            {"type": "filters.crop",
+             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        ]
+        try:
+            pts = _run(stages, arr)
+            if len(pts):
+                store.write_tile("chm", resolution, year,
+                                 _rasterise(pts["X"], pts["Y"],
+                                            pts["HeightAboveGround"],
+                                            crop_bbox, resolution, "max"),
+                                 crop_bbox)
+        except RuntimeError as exc:
+            if "no points" not in str(exc).lower():
+                raise
+
+    logger.debug("All tile %d written (dtm=%s dsm=%s chm=%s)",
+                 tile_index, need_dtm, need_dsm, need_chm)
+
+
+# ---------------------------------------------------------------------------
 # Shared tiled executor
 # ---------------------------------------------------------------------------
 
@@ -271,6 +372,7 @@ def compute_chm(
     year: Optional[int] = None,
     *,
     first_returns_only: bool = True,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
@@ -296,6 +398,10 @@ def compute_chm(
         laser pulse hit — i.e. the top of the canopy — which is the
         physically correct input for a CHM.  Set to ``False`` to include
         all vegetation returns (reproduces the legacy behaviour).
+    overwrite:
+        If ``False`` (default) and CHM data for *year* already exists in
+        the store, the computation is skipped entirely.  Set to ``True``
+        to force recomputation.
     tile_size:
         Sub-tile width/height in metres (default 500 m).
     tile_buffer:
@@ -307,6 +413,10 @@ def compute_chm(
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
     if year is not None and not check_year_exists(year, provider):
+        return
+    if not overwrite and year is not None and store.has_data("chm", resolution, year):
+        logger.info("CHM already present for year %d at %.1f m — skipping "
+                    "(pass overwrite=True to recompute)", year, resolution)
         return
     store.ensure_group("chm", resolution, effective_bbox,
                        array_crs(provider), tile_size)
@@ -327,6 +437,7 @@ def compute_dtm(
     bbox: Optional[tuple[float, float, float, float]] = None,
     year: Optional[int] = None,
     *,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     n_workers: int = 1,
 ) -> None:
@@ -345,6 +456,9 @@ def compute_dtm(
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
     year:
         Survey year filter.
+    overwrite:
+        If ``False`` (default) and DTM data for *year* already exists in
+        the store, the computation is skipped.
     tile_size:
         Sub-tile width/height in metres (default 500 m).
     n_workers:
@@ -354,6 +468,9 @@ def compute_dtm(
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
     if year is not None and not check_year_exists(year, provider):
+        return
+    if not overwrite and year is not None and store.has_data("dtm", resolution, year):
+        logger.info("DTM already present for year %d at %.1f m — skipping", year, resolution)
         return
     store.ensure_group("dtm", resolution, effective_bbox,
                        array_crs(provider), tile_size)
@@ -372,6 +489,7 @@ def compute_dsm(
     bbox: Optional[tuple[float, float, float, float]] = None,
     year: Optional[int] = None,
     *,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     n_workers: int = 1,
 ) -> None:
@@ -392,6 +510,9 @@ def compute_dsm(
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
     year:
         Survey year filter.
+    overwrite:
+        If ``False`` (default) and DSM data for *year* already exists in
+        the store, the computation is skipped.
     tile_size:
         Sub-tile width/height in metres (default 500 m).
     n_workers:
@@ -401,6 +522,9 @@ def compute_dsm(
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
     if year is not None and not check_year_exists(year, provider):
+        return
+    if not overwrite and year is not None and store.has_data("dsm", resolution, year):
+        logger.info("DSM already present for year %d at %.1f m — skipping", year, resolution)
         return
     store.ensure_group("dsm", resolution, effective_bbox,
                        array_crs(provider), tile_size)
@@ -422,9 +546,15 @@ def compute_all(
     tile_buffer: float = 50.0,
     n_workers: int = 1,
     first_returns_only: bool = True,
+    overwrite: bool = False,
 ) -> None:
     """
     Compute DTM, DSM, and CHM in one call, writing all into *store*.
+
+    Uses a single TileDB query and a single ``filters.hag_delaunay`` per
+    tile, shared across all three products — avoiding the redundant work
+    of calling each function separately.  Products already present in the
+    store for *year* are skipped unless ``overwrite=True``.
 
     Parameters
     ----------
@@ -439,16 +569,54 @@ def compute_all(
     year:
         Survey year filter.
     tile_size / n_workers:
-        Tiling parameters forwarded to all three products.
+        Tiling parameters.
     tile_buffer:
-        Overlap buffer forwarded to :func:`compute_chm` only.
+        Overlap buffer for ``filters.hag_delaunay`` (CHM only).
     first_returns_only:
-        Forwarded to :func:`compute_chm`.  See that function for details.
+        Use only first returns for CHM (and DSM).  See :func:`compute_chm`.
+    overwrite:
+        If ``False`` (default), skip products already present for *year*.
+        If ``True``, recompute everything regardless.
     """
-    compute_dtm(provider, store, resolution=resolution, bbox=bbox, year=year,
-                tile_size=tile_size, n_workers=n_workers)
-    compute_dsm(provider, store, resolution=resolution, bbox=bbox, year=year,
-                tile_size=tile_size, n_workers=n_workers)
-    compute_chm(provider, store, resolution=resolution, bbox=bbox, year=year,
-                first_returns_only=first_returns_only,
-                tile_size=tile_size, tile_buffer=tile_buffer, n_workers=n_workers)
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
+    if bbox is not None and not check_bbox_overlap(bbox, provider):
+        return
+    if year is not None and not check_year_exists(year, provider):
+        return
+
+    # Determine which products still need computing
+    need_dtm = overwrite or year is None or not store.has_data("dtm", resolution, year)
+    need_dsm = overwrite or year is None or not store.has_data("dsm", resolution, year)
+    need_chm = overwrite or year is None or not store.has_data("chm", resolution, year)
+
+    if not (need_dtm or need_dsm or need_chm):
+        logger.info(
+            "compute_all: DTM, DSM and CHM already present for year %d at %.1f m "
+            "— nothing to do (pass overwrite=True to recompute)", year, resolution,
+        )
+        return
+
+    crs = array_crs(provider)
+    if need_dtm:
+        store.ensure_group("dtm", resolution, effective_bbox, crs, tile_size)
+    if need_dsm:
+        store.ensure_group("dsm", resolution, effective_bbox, crs, tile_size)
+    if need_chm:
+        store.ensure_group("chm", resolution, effective_bbox, crs, tile_size)
+
+    # CHM needs the larger buffer for hag_delaunay; use it for all products
+    # so a single tile list covers everything.
+    buffer = tile_buffer if need_chm else 0.0
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=buffer)
+    logger.info(
+        "compute_all  (%.1f m, %d tile(s), %d worker(s), year=%s, "
+        "dtm=%s dsm=%s chm=%s)",
+        resolution, len(tiles), n_workers, year,
+        need_dtm, need_dsm, need_chm,
+    )
+    _run_tiled(
+        _process_tile_all, provider, tiles, store, n_workers,
+        resolution=resolution, year=year,
+        first_returns_only=first_returns_only,
+        need_dtm=need_dtm, need_dsm=need_dsm, need_chm=need_chm,
+    )

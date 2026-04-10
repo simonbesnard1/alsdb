@@ -176,6 +176,7 @@ def compute_gap_fraction(
     *,
     lai: bool = False,
     k: float = _LAI_K_DEFAULT,
+    overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
@@ -207,6 +208,9 @@ def compute_gap_fraction(
         Extinction coefficient for the Beer-Lambert LAI estimate
         (default 0.5, spherical leaf angle distribution).
         Only used when ``lai=True``.
+    overwrite:
+        If ``False`` (default) and gap (and LAI if requested) already exist
+        for *year* in the store, the computation is skipped.
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
@@ -219,6 +223,13 @@ def compute_gap_fraction(
         return
     if year is not None and not check_year_exists(year, provider):
         return
+    if not overwrite and year is not None:
+        gap_done = store.has_data("gap", resolution, year)
+        lai_done = (not lai) or store.has_data("lai", resolution, year)
+        if gap_done and lai_done:
+            logger.info("Gap fraction already present for year %d at %.0f m — skipping",
+                        year, resolution)
+            return
     crs = array_crs(provider)
     store.ensure_group("gap", resolution, effective_bbox, crs, tile_size)
     if lai:
