@@ -55,7 +55,7 @@ import pandas as pd
 import pdal
 from scipy.spatial import ConvexHull
 
-from alsdb.processing._tiling import array_domain_bbox, query_to_array, tile_bboxes
+from alsdb.processing._tiling import array_data_bbox, query_to_array, tile_bboxes
 from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
@@ -254,7 +254,7 @@ def segment_trees(
     trees : pd.DataFrame
         One row per tree, sorted by descending height.  Empty if none found.
     """
-    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
 
     # ------------------------------------------------------------------ #
     # Single-tile (no tiling) fast path                                   #

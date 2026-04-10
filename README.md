@@ -29,7 +29,8 @@ The package is dataset-agnostic - CRS, bounding box, and acquisition year are re
 | **Ingestion manifest** | Tracks CRS, bbox, point count and status; re-ingestion is a no-op by default |
 | **CRS-aware schema** | Domain bounds selected automatically from tile CRS or global fallback |
 | **Local + S3 storage** | Identical API for filesystem paths and `s3://` URIs (tested on Ceph / RadosGW) |
-| **Tiled processing** | CHM, DTM, DSM, AGB, gap fraction - all support `tile_size` / `n_workers` for large areas |
+| **Zarr gridded output** | CHM, DTM, DSM, AGB, gap fraction, LAI, and LiDAR metrics written directly to Zarr v3; no GeoTIFF intermediates, no mosaic step |
+| **Tiled processing** | All products support `tile_size` / `n_workers` for large areas; parallel writes go to non-overlapping Zarr chunks |
 | **GEDI simulation** | Full-waveform simulation and batch RH metric extraction at GEDI footprint scale |
 | **CLI** | `alsdb ingest` and `alsdb info` commands |
 
@@ -51,12 +52,14 @@ pixi shell            # activate the environment
 
 | Package | Purpose |
 |---------|---------|
-| `pdal` / `python-pdal` | LAZ/LAS reading, HAG filter, raster writing |
-| `tiledb` | Sparse array storage (local + S3) |
-| `numpy` / `scipy` | Array operations, peak detection |
+| `pdal` / `python-pdal` | LAZ/LAS reading, HAG filter |
+| `tiledb` | Sparse point-cloud storage (local + S3) |
+| `zarr` | Zarr v3 store for gridded products |
+| `numpy` / `scipy` | Array operations, rasterisation, peak detection |
 | `pandas` / `xarray` | Query result formats |
-| `rasterio` | Reading CHM/DTM/DSM GeoTIFFs |
+| `pyarrow` | Parquet I/O for waveform batch results |
 | `pyproj` | CRS parsing from WKT |
+| `rioxarray` | CRS attachment on `to_dataset()` output (optional) |
 | `matplotlib` / `plotly` | Visualisation |
 | `click` | CLI |
 
@@ -151,27 +154,38 @@ Credentials can also be supplied via environment variables (`ALSDB_S3_ACCESS_KEY
 
 ## Processing
 
-All processing functions accept a `year` parameter to restrict the query to a single survey.
+All processing functions write results directly to an **`ALSZarrStore`** — no GeoTIFFs, no temp files, no mosaic step.  A single store can hold multiple resolutions and survey years.
+
+### Store setup
+
+```python
+from alsdb import ALSProvider
+from alsdb.storage import ALSZarrStore
+
+reader = ALSProvider(storage_type="local", uri="my_array")
+store  = ALSZarrStore("output/spain.zarr")   # created automatically on first write
+```
+
+All processing functions accept a `year` parameter to restrict the query to a single survey.  If `year` or `bbox` does not overlap stored data a `WARNING` is emitted and the function returns immediately — no silent empty output.
 
 ### Canopy Height Model / DTM / DSM
 
 ```python
-from alsdb.processing.chm import compute_chm, compute_all
+from alsdb.processing.chm import compute_chm, compute_dtm, compute_dsm, compute_all
 
-# Single area (fits in memory)
+# CHM at 1 m
 compute_chm(
     provider=reader,
-    output_path="outputs/chm.tif",
-    bbox=(308_000, 4_688_000, 310_000, 4_690_000),
+    store=store,
     resolution=1.0,
+    bbox=(308_000, 4_688_000, 310_000, 4_690_000),
     year=2021,
 )
 
-# Large area - tiled processing (500 m sub-tiles, 50 m buffer, 4 workers)
+# Large area — tiled (500 m sub-tiles, 50 m buffer, 4 parallel workers)
 compute_chm(
     provider=reader,
-    output_path="outputs/chm.tif",
-    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
+    store=store,
     resolution=1.0,
     year=2021,
     tile_size=500.0,    # sub-tile size in metres
@@ -179,91 +193,110 @@ compute_chm(
     n_workers=4,
 )
 
-# All three products (DTM + DSM + CHM) in one call
+# DTM + DSM + CHM in one call
 compute_all(
     provider=reader,
-    output_dir="outputs/",
-    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
+    store=store,
     resolution=1.0,
     year=2021,
     tile_size=500.0, tile_buffer=50.0, n_workers=4,
 )
-# writes outputs/chm.tif, outputs/dtm.tif, outputs/dsm.tif
 ```
 
-The pipeline queries the array, injects the point cloud into a PDAL pipeline (`filters.hag_delaunay` for height-above-ground), and writes GeoTIFFs via `writers.gdal`.  Sub-tiles with no data (outside the flight swath) are silently skipped and appear as nodata in the mosaic.
+The pipeline queries TileDB, runs `filters.hag_delaunay` (PDAL) for height-above-ground, then rasterises directly to the Zarr store with `scipy.stats.binned_statistic_2d`.  Sub-tiles outside the flight swath are silently skipped; their cells remain `NaN` in the store.
 
-**Tiling parameters** apply to all three products - CHM uses a 50 m buffer to ensure accurate TIN values at tile edges; DTM and DSM require no buffer.
+CHM uses a 50 m buffer to ensure accurate TIN values at tile edges; DTM and DSM require no buffer.
 
 ### Biomass estimation
 
 ```python
 from alsdb.processing.biomass import compute_biomass, compute_metrics
 
-# Single area
+# AGB at 10 m
 compute_biomass(
     provider=reader,
-    output_path="output/agb.tif",
-    bbox=(308_000, 4_688_000, 310_000, 4_690_000),
-    resolution=25.0,
+    store=store,
+    resolution=10.0,
     year=2021,
 )
 
-# Large area - tiled
+# Large area — tiled
 compute_biomass(
     provider=reader,
-    output_path="output/agb.tif",
-    bbox=(308_000, 4_688_000, 318_000, 4_698_000),
-    resolution=25.0,
+    store=store,
+    resolution=10.0,
     year=2021,
     tile_size=500.0, tile_buffer=50.0, n_workers=4,
 )
+
+# Custom allometric model
+def my_model(metrics):
+    return 1.2 * metrics["h95"] ** 2.1 * metrics["cc"] ** 0.6
+
+compute_biomass(provider=reader, store=store, resolution=10.0,
+                year=2021, model_fn=my_model)
 ```
 
-Uses the Næsset (2002) power-law model: `AGB = a × h95^b × cc^c`, where `h95` is the 95th-percentile height, `cc` is canopy cover, and `a / b / c` are configurable coefficients.
+Uses the Næsset (2002) power-law model: `AGB = a × h95^b × cc^c` (default `a=0.8, b=1.8, c=0.5`).  **Calibrate against field inventory plots** before using the output scientifically.
 
-Intermediate metrics (h50, h75, h95, hmean, canopy cover, point density) are also available via `compute_metrics()`, which accepts the same tiling parameters.
+LiDAR structural metrics (h50, h75, h95, hmean, canopy cover, point density) are also available via `compute_metrics()`, which writes all six variables into the store at the requested resolution.
+
+```python
+compute_metrics(provider=reader, store=store, resolution=10.0, year=2021)
+```
 
 ### Gap fraction and effective LAI
 
 ```python
 from alsdb.processing.gap import compute_gap_fraction
 
-# Gap fraction only - no assumptions
+# Gap fraction only
 compute_gap_fraction(
     provider=reader,
-    output_path="output/gap.tif",
-    bbox=(308_000, 4_688_000, 310_000, 4_690_000),
+    store=store,
     resolution=10.0,
     year=2021,
 )
 
-# Gap fraction + effective LAI (Beer-Lambert, must supply k explicitly)
+# Gap fraction + effective LAI (Beer-Lambert)
 compute_gap_fraction(
     provider=reader,
-    output_path="output/gap.tif",
+    store=store,
     resolution=10.0,
     year=2021,
     lai=True,
-    k=0.5,                      # spherical leaf angle distribution
-    lai_path="output/lai.tif",
+    k=0.5,      # extinction coefficient for spherical leaf angle distribution
 )
 
 # Tiled for large areas
 compute_gap_fraction(
     provider=reader,
-    output_path="output/gap.tif",
+    store=store,
     resolution=10.0,
     year=2021,
     tile_size=500.0, tile_buffer=50.0, n_workers=4,
 )
 ```
 
-Gap fraction is the MacArthur-Wilson return-count estimator - a direct observable with no canopy-structure assumptions:
+Gap fraction is the MacArthur-Wilson return-count estimator — a direct observable with no canopy-structure assumptions:
 
     P_gap = N_ground_first / (N_ground_first + N_veg_first)
 
-Effective LAI is opt-in via `lai=True` and requires an explicit extinction coefficient `k` (Beer-Lambert: `L_e = -ln(P_gap) / k`).  The result is effective LAI, not true LAI - ALS cannot separate leaves from woody material.  LAI is capped at 10 m²/m² to avoid `ln(0)` artefacts in fully closed canopy cells.
+Effective LAI is opt-in via `lai=True` (`L_e = -ln(P_gap) / k`, capped at 10 m² m⁻²).
+
+### Reading results as xarray
+
+```python
+# Open the store and read any resolution as an xarray Dataset
+ds = store.to_dataset(resolution=1.0)    # coords: time, y, x
+chm = ds["chm"].sel(time=2021)           # DataArray (ny, nx)
+
+ds10 = store.to_dataset(resolution=10.0)
+agb = ds10["biomass"].sel(time=2021)
+
+# CRS is attached via rioxarray if available
+print(ds.rio.crs)
+```
 
 ### GEDI waveform simulation
 
@@ -299,6 +332,7 @@ results = simulate_batch(
     year=2021,
     n_workers=4,
     footprint_radius=12.5,
+    output_path="shots_2021.parquet",   # optional — omit to keep in-memory only
 )
 # results is a DataFrame: original columns + z_ground, home, cover, rh0…rh100
 print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
@@ -386,21 +420,40 @@ fig.show()
 
 `color_by` accepts any column in the `simulate_batch` output: `"rh50"`, `"rh98"`, `"cover"`, `"z_ground"`, etc.
 
-### Raster products (from GeoTIFF)
+### Gridded products (from Zarr store)
+
+All raster plot functions read from an `ALSZarrStore` at a given resolution and year.
 
 ```python
-from alsdb.utils.viz_raster import plot_chm, plot_agb, plot_products, plot_products_agb
+from alsdb.storage import ALSZarrStore
+from alsdb.utils.viz_raster import (
+    plot_chm, plot_dtm, plot_dsm,
+    plot_agb, plot_gap, plot_lai,
+    plot_metrics,
+    plot_products, plot_products_agb,
+)
+
+store = ALSZarrStore("output/spain.zarr")
 
 # Individual panels
-plot_chm("outputs/chm.tif")
-plot_agb("outputs/agb.tif")
+plot_chm(store, resolution=1.0,  year=2021)
+plot_dtm(store, resolution=1.0,  year=2021, hillshade=True)
+plot_dsm(store, resolution=1.0,  year=2021)
+plot_agb(store, resolution=10.0, year=2021)
+plot_gap(store, resolution=10.0, year=2021)
+plot_lai(store, resolution=10.0, year=2021)
+
+# All six structural metrics in one figure (h50, h75, h95, hmean, cc, density)
+plot_metrics(store, resolution=10.0, year=2021)
 
 # Three-panel overview: DTM | DSM | CHM
-plot_products("outputs/dtm.tif", "outputs/dsm.tif", "outputs/chm.tif")
+plot_products(store, resolution=1.0, year=2021)
 
 # Four-panel overview: DTM | DSM | CHM | AGB
-plot_products_agb("outputs/dtm.tif", "outputs/dsm.tif", "outputs/chm.tif", "outputs/agb.tif")
+plot_products_agb(store, resolution=10.0, year=2021)
 ```
+
+If the store contains only one survey year the `year=` argument can be omitted.
 
 ### 3-D point cloud
 
@@ -447,20 +500,28 @@ LAZ file
 PDAL (readers.las)
    │  year / bbox / CRS ← LAZ header
    ▼
-ALSTile.iter_chunks()       ← optional classification filter
+ALSTile.iter_chunks()           ← optional classification filter
    │  X, Y, attrs numpy arrays (1 M pts/chunk)
    ▼
 ALSDatabase.write()
    │  TileDB sparse array  (X × Y × Year)
-   │  ZSTD-9 compression on all attributes + coordinates
+   │  ByteShuffle+ZSTD for float64 X/Y; DoubleDelta+ZSTD for int16 Year
    │  allows_duplicates=True  (multiple returns per XY)
    ▼
 TileDB array (local  /  s3://)
    │
-   ├── ALSProvider.query_bbox()     → pandas / xarray
-   ├── processing.chm               → GeoTIFF (CHM / DTM / DSM)
-   ├── processing.biomass           → AGB raster
-   └── processing.waveform          → GEDI-like RH metrics
+   ├── ALSProvider.query_bbox()          → pandas / xarray
+   │
+   ├── processing.chm / gap / biomass
+   │      │  PDAL hag_delaunay + scipy binned_statistic_2d
+   │      ▼
+   │   ALSZarrStore  (Zarr v3, local / s3://)
+   │      ├── 1m/   chm, dtm, dsm          (T × ny × nx) float32
+   │      └── 10m/  gap, lai, biomass,
+   │                h50…density            (T × ny × nx) float32
+   │      store.to_dataset(resolution)     → xarray.Dataset (CRS-aware)
+   │
+   └── processing.waveform               → GEDI-like RH metrics
 ```
 
 **TileDB schema**

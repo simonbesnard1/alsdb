@@ -468,6 +468,7 @@ def simulate_batch(
     beam_col: str = "beam",
     year: Optional[int] = None,
     n_workers: int = 1,
+    output_path: Optional[str] = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -491,6 +492,10 @@ def simulate_batch(
         Survey year filter applied to all shots.
     n_workers : int
         Thread pool size (TileDB reads are thread-safe).
+    output_path : str, optional
+        If provided, the result DataFrame is written to this path as a
+        Parquet file (``pyarrow`` engine).  The file is created or
+        overwritten.  The DataFrame is still returned as usual.
     **kwargs
         Forwarded to :func:`simulate_waveform`.
 
@@ -498,7 +503,7 @@ def simulate_batch(
     -------
     pd.DataFrame
         Original columns plus ``z_ground``, ``home``, ``cover``,
-        ``n_points``, ``rh10`` … ``rh100``.
+        ``n_points``, ``rh0`` … ``rh100``.
         Shots with insufficient ALS coverage have NaN metric values.
     """
     has_beam_col = beam_col in shots.columns
@@ -544,4 +549,10 @@ def simulate_batch(
         rec.update(r.to_dict() if r is not None else _nan_metrics)
         records.append(rec)
 
-    return pd.DataFrame(records, index=shots.index)
+    result_df = pd.DataFrame(records, index=shots.index)
+
+    if output_path is not None:
+        result_df.to_parquet(output_path, engine="pyarrow", index=False)
+        logger.info("simulate_batch: results saved to %s", output_path)
+
+    return result_df

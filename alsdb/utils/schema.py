@@ -44,9 +44,18 @@ LAS_ATTRIBUTES: dict[str, type] = {
 # Benchmarks on typical ALS tiles show 15–35 % size reduction vs plain ZSTD-9.
 # ---------------------------------------------------------------------------
 
-# Floating-point coordinates (X, Y) — sorted within each tile so double-delta
-# captures the near-constant stride between adjacent coordinate values.
+# Floating-point coordinates (X, Y) — byte-shuffle exploits the regular stride
+# between adjacent sorted coordinate values before ZSTD entropy coding.
+# (DoubleDeltaFilter only accepts integer types in TileDB, so it cannot be used
+# on float64 dimensions.)
 _FILTERS_COORD = tiledb.FilterList([
+    tiledb.ByteShuffleFilter(),
+    tiledb.ZstdFilter(level=9),
+])
+
+# Integer coordinate (Year) — double-delta is ideal for a near-constant integer
+# dimension (differences between consecutive year values are tiny).
+_FILTERS_YEAR = tiledb.FilterList([
     tiledb.DoubleDeltaFilter(),
     tiledb.ZstdFilter(level=9),
 ])
@@ -205,18 +214,21 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
             domain=(cfg.domain_min_x, cfg.domain_max_x),
             tile=cfg.tile_extent_x,
             dtype=np.float64,
+            filters=_FILTERS_COORD,   # ByteShuffle → Zstd (float64 compatible)
         ),
         tiledb.Dim(
             name="Y",
             domain=(cfg.domain_min_y, cfg.domain_max_y),
             tile=cfg.tile_extent_y,
             dtype=np.float64,
+            filters=_FILTERS_COORD,   # ByteShuffle → Zstd
         ),
         tiledb.Dim(
             name="Year",
             domain=(cfg.year_min, cfg.year_max),
             tile=1,
             dtype=np.int16,
+            filters=_FILTERS_YEAR,    # DoubleDelta → Zstd (int16 compatible)
         ),
     )
     attrs = [
@@ -228,5 +240,4 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
         attrs=attrs,
         sparse=True,
         allows_duplicates=True,
-        coords_filters=_FILTERS_COORD,   # DoubleDelta → Zstd for X/Y
     )

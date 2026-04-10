@@ -5,14 +5,14 @@
 """
 Shared tiling utilities for large-area raster processing.
 
-Used by :mod:`alsdb.processing.chm` and :mod:`alsdb.processing.biomass`.
+Used by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
+and :mod:`alsdb.processing.biomass`.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -78,7 +78,11 @@ def query_to_array(
 
 def array_domain_bbox(provider) -> tuple[float, float, float, float]:
     """
-    Derive a bounding box from the X/Y dimension domains of the TileDB array.
+    Return the **declared** X/Y domain of the TileDB schema.
+
+    This is the full extent the array *could* cover, not the extent of the
+    data that has actually been written.  For processing use
+    :func:`array_data_bbox` instead so you don't tile over empty space.
 
     Returns
     -------
@@ -94,6 +98,113 @@ def array_domain_bbox(provider) -> tuple[float, float, float, float]:
         float(x_dim.domain[1]),
         float(y_dim.domain[1]),
     )
+
+
+def array_crs(provider) -> str:
+    """
+    Return the CRS string stored in the TileDB array metadata.
+
+    Returns an empty string if no CRS has been written (e.g. the array was
+    created without one).
+    """
+    with provider.open("r") as arr:
+        return arr.meta.get("crs", "")
+
+
+def array_data_bbox(provider) -> tuple[float, float, float, float]:
+    """
+    Return the bounding box of **actually stored** data via ``nonempty_domain``.
+
+    Unlike :func:`array_domain_bbox`, this reflects the real extent of points
+    in the array, not the declared schema domain.  Use this as the default
+    extent for processing so tiles are only generated where data exists.
+
+    Returns
+    -------
+    tuple[float, float, float, float]
+        ``(min_x, min_y, max_x, max_y)``
+
+    Raises
+    ------
+    RuntimeError
+        If the array is empty (no points ingested yet).
+    """
+    with provider.open("r") as arr:
+        ned = arr.nonempty_domain()
+    if ned is None:
+        raise RuntimeError("TileDB array is empty — no points have been ingested yet.")
+    # nonempty_domain() returns a tuple of (min, max) pairs in dimension order:
+    # ned[0] = (min_x, max_x), ned[1] = (min_y, max_y), ned[2] = (min_year, max_year)
+    return (
+        float(ned[0][0]),
+        float(ned[1][0]),
+        float(ned[0][1]),
+        float(ned[1][1]),
+    )
+
+
+def check_year_exists(year: int, provider) -> bool:
+    """
+    Return ``True`` if *year* falls within the ingested year range.
+
+    Logs a warning and returns ``False`` when the year is outside the stored
+    range, so callers can bail out early.
+    """
+    with provider.open("r") as arr:
+        ned = arr.nonempty_domain()
+    if ned is None:
+        logger.warning("TileDB array is empty — nothing to process.")
+        return False
+    # ned[2] = (min_year, max_year) for the Year dimension
+    y_min, y_max = int(ned[2][0]), int(ned[2][1])
+    if year < y_min or year > y_max:
+        logger.warning(
+            "Requested year %d is outside the stored year range [%d, %d] "
+            "— nothing will be computed.",
+            year, y_min, y_max,
+        )
+        return False
+    return True
+
+
+def check_bbox_overlap(
+    requested: tuple[float, float, float, float],
+    provider,
+) -> bool:
+    """
+    Return ``True`` if *requested* overlaps the stored data extent.
+
+    Logs a warning and returns ``False`` when there is no overlap, so the
+    caller can bail out early rather than processing tiles that will all be
+    empty.
+
+    Parameters
+    ----------
+    requested:
+        ``(min_x, min_y, max_x, max_y)`` passed by the user.
+    provider:
+        TileDB provider; used to read ``nonempty_domain``.
+    """
+    try:
+        data_bbox = array_data_bbox(provider)
+    except RuntimeError:
+        logger.warning("TileDB array is empty — nothing to process.")
+        return False
+
+    rx0, ry0, rx1, ry1 = requested
+    dx0, dy0, dx1, dy1 = data_bbox
+
+    if rx1 <= dx0 or rx0 >= dx1 or ry1 <= dy0 or ry0 >= dy1:
+        logger.warning(
+            "Requested bbox (%.0f, %.0f, %.0f, %.0f) does not overlap "
+            "the stored data extent (%.0f, %.0f, %.0f, %.0f) — "
+            "nothing will be computed.",
+            rx0, ry0, rx1, ry1,
+            dx0, dy0, dx1, dy1,
+        )
+        return False
+
+    return True
 
 
 def tile_bboxes(
@@ -144,61 +255,3 @@ def tile_bboxes(
     return tiles
 
 
-def mosaic_tiles(
-    tile_paths: list[Path],
-    output_path: Path,
-    nodata: float,
-    bounds: Optional[tuple[float, float, float, float]] = None,
-) -> None:
-    """
-    Merge *tile_paths* into *output_path* using ``rasterio.merge``.
-
-    Parameters
-    ----------
-    tile_paths:
-        List of GeoTIFF paths to merge.
-    output_path:
-        Destination GeoTIFF path.
-    nodata:
-        No-data value.
-    bounds:
-        Optional ``(min_x, min_y, max_x, max_y)`` to clip the merged output.
-        When provided, the output is exactly this extent (padded with nodata if
-        needed).  Pass *effective_bbox* here to avoid the merged raster
-        extending beyond the requested area due to floating-point tile alignment.
-
-    Source files are deleted after a successful write.
-    """
-    import rasterio
-    from rasterio.merge import merge as rasterio_merge
-
-    merge_kwargs: dict = {"nodata": nodata}
-    if bounds is not None:
-        merge_kwargs["bounds"] = bounds
-
-    sources = [rasterio.open(p) for p in tile_paths]
-    try:
-        mosaic, transform = rasterio_merge(sources, **merge_kwargs)
-        profile = sources[0].profile.copy()
-        profile.update(
-            driver="GTiff",
-            height=mosaic.shape[1],
-            width=mosaic.shape[2],
-            transform=transform,
-            compress="deflate",
-            predictor=3,
-            tiled=True,
-            blockxsize=256,
-            blockysize=256,
-            nodata=nodata,
-        )
-        with rasterio.open(output_path, "w", **profile) as dst:
-            dst.write(mosaic)
-    finally:
-        for src in sources:
-            src.close()
-        for p in tile_paths:
-            try:
-                p.unlink()
-            except OSError:
-                logger.warning("Could not delete temp tile %s", p)

@@ -3,47 +3,103 @@
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
 """
-Visualisation helpers for raster products (CHM, DTM, DSM GeoTIFFs).
+Visualisation helpers for gridded ALS products stored in an
+:class:`~alsdb.storage.ALSZarrStore`.
 
 Typical usage::
 
-    from alsdb.utils.viz_raster import plot_chm, plot_dtm, plot_dsm, plot_agb, plot_products, plot_products_agb
+    from alsdb.storage import ALSZarrStore
+    from alsdb.utils.viz_raster import (
+        plot_chm, plot_dtm, plot_dsm, plot_agb,
+        plot_gap, plot_lai, plot_metrics,
+        plot_products, plot_products_agb,
+    )
 
-    plot_chm("output/chm.tif")
-    plot_agb("output/agb.tif")
-    plot_products("output/dtm.tif", "output/dsm.tif", "output/chm.tif")
-    plot_products_agb("output/dtm.tif", "output/dsm.tif", "output/chm.tif", "output/agb.tif")
+    store = ALSZarrStore("output/spain.zarr")
+
+    plot_chm(store, resolution=1.0, year=2021)
+    plot_agb(store, resolution=10.0, year=2021)
+    plot_products(store, resolution=1.0, year=2021)
+    plot_products_agb(store, resolution=10.0, year=2021)
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from alsdb.storage.zarr_store import ALSZarrStore
 
-def _read_raster(path: str | Path) -> tuple[np.ndarray, list[float]]:
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _read_from_store(
+    store: "ALSZarrStore",
+    variable: str,
+    resolution: float,
+    year: Optional[int] = None,
+) -> tuple[np.ndarray, list[float]]:
     """
-    Read a single-band GeoTIFF.
+    Extract a 2-D float32 grid and imshow extent from the store.
+
+    Parameters
+    ----------
+    store:
+        Open :class:`~alsdb.storage.ALSZarrStore`.
+    variable:
+        Variable name, e.g. ``"chm"``.
+    resolution:
+        Resolution group in metres.
+    year:
+        Survey year to select.  If ``None`` and the store contains exactly
+        one time step, that step is used automatically.
 
     Returns
     -------
-    grid : np.ndarray (2-D, float32), nodata → np.nan
-    extent : [x_min, x_max, y_min, y_max]  for imshow(extent=...)
+    grid : np.ndarray (ny, nx) float32 — NaN for missing cells
+    extent : [x_min, x_max, y_min, y_max]  for ``imshow(extent=...)``
     """
-    import rasterio
+    ds = store.to_dataset(resolution)
 
-    with rasterio.open(path) as src:
-        data = src.read(1).astype("float32")
-        nodata = src.nodata
-        bounds = src.bounds  # left, bottom, right, top
+    if variable not in ds:
+        available = list(ds.data_vars)
+        raise KeyError(
+            f"Variable '{variable}' not found in store at {resolution} m. "
+            f"Available: {available}"
+        )
 
-    if nodata is not None:
-        data[data == nodata] = np.nan
+    da = ds[variable]
 
-    extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
-    return data, extent
+    if year is not None:
+        if year not in da.time.values:
+            raise ValueError(
+                f"Year {year} not in store (available: {da.time.values.tolist()})"
+            )
+        da = da.sel(time=year)
+    elif da.sizes["time"] == 1:
+        da = da.isel(time=0)
+    else:
+        raise ValueError(
+            f"Store has multiple years {da.time.values.tolist()} — "
+            "specify year= to select one."
+        )
+
+    grid = da.values.astype(np.float32)  # (ny, nx)
+
+    x = ds.x.values          # ascending cell centres
+    y = ds.y.values           # descending cell centres (north-up)
+    half = resolution / 2.0
+    extent = [
+        float(x[0]  - half),   # x_min
+        float(x[-1] + half),   # x_max
+        float(y[-1] - half),   # y_min (southernmost edge)
+        float(y[0]  + half),   # y_max (northernmost edge)
+    ]
+    return grid, extent
 
 
 def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
@@ -59,28 +115,40 @@ def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
                     vert_exag=vert_exag, blend_mode="soft")
 
 
+def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
+    year_str = f" ({year})" if year is not None else ""
+    return f"{variable.upper()}{year_str} — {store.path.name}"
+
+
 # ---------------------------------------------------------------------------
 # Individual product plots
 # ---------------------------------------------------------------------------
 
 def plot_chm(
-    path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 1.0,
+    year: Optional[int] = None,
     cmap: str = "Greens",
     vmin: float = 0.0,
     vmax: Optional[float] = None,
     ax=None,
 ):
     """
-    Plot a Canopy Height Model GeoTIFF.
+    Plot the Canopy Height Model from *store*.
 
     Parameters
     ----------
-    path:
-        Path to the CHM GeoTIFF.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"chm"`` variable.
+    resolution:
+        Resolution group in metres (default 1 m).
+    year:
+        Survey year.  Required when the store has more than one time step.
     cmap:
         Matplotlib colormap (default ``"Greens"``).
     vmin / vmax:
-        Colour scale limits.  ``vmax`` defaults to the 98th percentile.
+        Colour scale limits.  ``vmax`` defaults to the 98th percentile of
+        vegetation pixels (HAG > 0.5 m).
     ax:
         Matplotlib axes.  A new figure is created if ``None``.
 
@@ -90,11 +158,9 @@ def plot_chm(
     """
     import matplotlib.pyplot as plt
 
-    grid, extent = _read_raster(path)
+    grid, extent = _read_from_store(store, "chm", resolution, year)
     valid = grid[~np.isnan(grid)]
     if vmax is None:
-        # Use the 98th percentile of vegetated pixels only (>0.5 m) so that
-        # sparse tall trees are not swamped by a majority of bare-ground zeros.
         veg = valid[valid > 0.5]
         vmax = float(np.percentile(veg, 98)) if veg.size else float(np.nanmax(valid)) if valid.size else 30.0
 
@@ -106,30 +172,36 @@ def plot_chm(
     plt.colorbar(im, ax=ax, label="Height above ground (m)", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"CHM — {Path(path).name}")
+    ax.set_title(_label(store, "chm", year))
     return ax
 
 
 def plot_dtm(
-    path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 1.0,
+    year: Optional[int] = None,
     cmap: str = "terrain",
     hillshade: bool = True,
     vert_exag: float = 3.0,
     ax=None,
 ):
     """
-    Plot a Digital Terrain Model GeoTIFF, optionally with hillshade.
+    Plot the Digital Terrain Model from *store*, optionally with hillshade.
 
     Parameters
     ----------
-    path:
-        Path to the DTM GeoTIFF.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"dtm"`` variable.
+    resolution:
+        Resolution group in metres.
+    year:
+        Survey year.
     cmap:
         Matplotlib colormap (default ``"terrain"``).
     hillshade:
-        Blend a hillshade overlay.
+        Blend a hillshade overlay (default ``True``).
     vert_exag:
-        Vertical exaggeration for the hillshade.
+        Vertical exaggeration for the hillshade (default 3).
     ax:
         Matplotlib axes.
 
@@ -139,7 +211,7 @@ def plot_dtm(
     """
     import matplotlib.pyplot as plt
 
-    grid, extent = _read_raster(path)
+    grid, extent = _read_from_store(store, "dtm", resolution, year)
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
@@ -154,30 +226,36 @@ def plot_dtm(
 
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"DTM — {Path(path).name}")
+    ax.set_title(_label(store, "dtm", year))
     return ax
 
 
 def plot_dsm(
-    path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 1.0,
+    year: Optional[int] = None,
     cmap: str = "terrain",
     hillshade: bool = True,
     vert_exag: float = 3.0,
     ax=None,
 ):
     """
-    Plot a Digital Surface Model GeoTIFF, optionally with hillshade.
+    Plot the Digital Surface Model from *store*, optionally with hillshade.
 
     Parameters
     ----------
-    path:
-        Path to the DSM GeoTIFF.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"dsm"`` variable.
+    resolution:
+        Resolution group in metres.
+    year:
+        Survey year.
     cmap:
         Matplotlib colormap (default ``"terrain"``).
     hillshade:
-        Blend a hillshade overlay.
+        Blend a hillshade overlay (default ``True``).
     vert_exag:
-        Vertical exaggeration for the hillshade.
+        Vertical exaggeration for the hillshade (default 3).
     ax:
         Matplotlib axes.
 
@@ -187,7 +265,7 @@ def plot_dsm(
     """
     import matplotlib.pyplot as plt
 
-    grid, extent = _read_raster(path)
+    grid, extent = _read_from_store(store, "dsm", resolution, year)
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
@@ -202,30 +280,36 @@ def plot_dsm(
 
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"DSM — {Path(path).name}")
+    ax.set_title(_label(store, "dsm", year))
     return ax
 
 
 def plot_agb(
-    path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 10.0,
+    year: Optional[int] = None,
     cmap: str = "YlGn",
     vmin: float = 0.0,
     vmax: Optional[float] = None,
     ax=None,
 ):
     """
-    Plot an Above-Ground Biomass (AGB) GeoTIFF.
+    Plot Above-Ground Biomass (AGB) from *store*.
 
     Parameters
     ----------
-    path:
-        Path to the AGB GeoTIFF.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"biomass"`` variable.
+    resolution:
+        Resolution group in metres (default 10 m).
+    year:
+        Survey year.
     cmap:
         Matplotlib colormap (default ``"YlGn"``).
     vmin / vmax:
         Colour scale limits.  ``vmax`` defaults to the 98th percentile.
     ax:
-        Matplotlib axes.  A new figure is created if ``None``.
+        Matplotlib axes.
 
     Returns
     -------
@@ -233,7 +317,7 @@ def plot_agb(
     """
     import matplotlib.pyplot as plt
 
-    grid, extent = _read_raster(path)
+    grid, extent = _read_from_store(store, "biomass", resolution, year)
     valid = grid[~np.isnan(grid)]
     if vmax is None:
         vmax = float(np.percentile(valid, 98)) if valid.size else 500.0
@@ -246,8 +330,187 @@ def plot_agb(
     plt.colorbar(im, ax=ax, label="AGB (Mg ha⁻¹)", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"AGB — {Path(path).name}")
+    ax.set_title(_label(store, "biomass", year))
     return ax
+
+
+def plot_gap(
+    store: "ALSZarrStore",
+    resolution: float = 10.0,
+    year: Optional[int] = None,
+    cmap: str = "RdYlGn_r",
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    ax=None,
+):
+    """
+    Plot gap fraction from *store*.
+
+    Parameters
+    ----------
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"gap"`` variable.
+    resolution:
+        Resolution group in metres.
+    year:
+        Survey year.
+    cmap:
+        Matplotlib colormap (default ``"RdYlGn_r"``).
+    vmin / vmax:
+        Colour scale limits (default 0–1).
+    ax:
+        Matplotlib axes.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    import matplotlib.pyplot as plt
+
+    grid, extent = _read_from_store(store, "gap", resolution, year)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 8))
+
+    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
+                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    plt.colorbar(im, ax=ax, label="Gap fraction", shrink=0.7)
+    ax.set_xlabel("Easting (m)")
+    ax.set_ylabel("Northing (m)")
+    ax.set_title(_label(store, "gap", year))
+    return ax
+
+
+def plot_lai(
+    store: "ALSZarrStore",
+    resolution: float = 10.0,
+    year: Optional[int] = None,
+    cmap: str = "YlGn",
+    vmin: float = 0.0,
+    vmax: Optional[float] = None,
+    ax=None,
+):
+    """
+    Plot effective LAI from *store*.
+
+    Parameters
+    ----------
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing a ``"lai"`` variable.
+    resolution:
+        Resolution group in metres.
+    year:
+        Survey year.
+    cmap:
+        Matplotlib colormap (default ``"YlGn"``).
+    vmin / vmax:
+        Colour scale limits.  ``vmax`` defaults to the 98th percentile.
+    ax:
+        Matplotlib axes.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    import matplotlib.pyplot as plt
+
+    grid, extent = _read_from_store(store, "lai", resolution, year)
+    valid = grid[~np.isnan(grid)]
+    if vmax is None:
+        vmax = float(np.percentile(valid, 98)) if valid.size else 8.0
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 8))
+
+    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
+                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    plt.colorbar(im, ax=ax, label="Effective LAI (m² m⁻²)", shrink=0.7)
+    ax.set_xlabel("Easting (m)")
+    ax.set_ylabel("Northing (m)")
+    ax.set_title(_label(store, "lai", year))
+    return ax
+
+
+def plot_metrics(
+    store: "ALSZarrStore",
+    resolution: float = 10.0,
+    year: Optional[int] = None,
+    variables: Optional[list[str]] = None,
+    figsize: tuple[float, float] = (20, 10),
+    title: Optional[str] = None,
+):
+    """
+    Multi-panel overview of LiDAR structural metrics.
+
+    Plots up to six panels: ``h50``, ``h75``, ``h95``, ``hmean``, ``cc``,
+    ``density``.  Variables missing from the store are silently skipped.
+
+    Parameters
+    ----------
+    store:
+        :class:`~alsdb.storage.ALSZarrStore`.
+    resolution:
+        Resolution group in metres (default 10 m).
+    year:
+        Survey year.
+    variables:
+        Subset of metric names to plot.  Defaults to all six standard metrics.
+    figsize:
+        Figure size in inches.
+    title:
+        Optional suptitle.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    _default_metrics = ["h50", "h75", "h95", "hmean", "cc", "density"]
+    _cmaps = {
+        "h50": "viridis", "h75": "viridis", "h95": "viridis",
+        "hmean": "viridis", "cc": "YlGn", "density": "plasma",
+    }
+    _labels = {
+        "h50": "h50 (m)", "h75": "h75 (m)", "h95": "h95 (m)",
+        "hmean": "Mean height (m)", "cc": "Canopy cover", "density": "Density (pts m⁻²)",
+    }
+
+    vars_to_plot = variables or _default_metrics
+    available = store.variables(resolution)
+    vars_to_plot = [v for v in vars_to_plot if v in available]
+
+    if not vars_to_plot:
+        raise ValueError(
+            f"None of the requested variables are in the store at {resolution} m. "
+            f"Available: {available}"
+        )
+
+    ncols = min(3, len(vars_to_plot))
+    nrows = (len(vars_to_plot) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+
+    for idx, var in enumerate(vars_to_plot):
+        ax = axes[idx // ncols][idx % ncols]
+        grid, extent = _read_from_store(store, var, resolution, year)
+        valid = grid[~np.isnan(grid)]
+        vmax = float(np.percentile(valid, 98)) if valid.size else 1.0
+        cmap = _cmaps.get(var, "viridis")
+        im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
+                       cmap=cmap, vmin=0, vmax=vmax, interpolation="nearest")
+        plt.colorbar(im, ax=ax, label=_labels.get(var, var), shrink=0.7)
+        ax.set_xlabel("Easting (m)")
+        ax.set_ylabel("Northing (m)")
+        ax.set_title(var.upper())
+
+    # Hide unused subplots
+    for idx in range(len(vars_to_plot), nrows * ncols):
+        axes[idx // ncols][idx % ncols].set_visible(False)
+
+    year_str = f" ({year})" if year is not None else ""
+    fig.suptitle(title or f"LiDAR metrics — {store.path.name}{year_str}", fontsize=13)
+    fig.tight_layout()
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +518,9 @@ def plot_agb(
 # ---------------------------------------------------------------------------
 
 def plot_products(
-    dtm_path: str | Path,
-    dsm_path: str | Path,
-    chm_path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 1.0,
+    year: Optional[int] = None,
     figsize: tuple[float, float] = (18, 6),
     hillshade: bool = True,
     title: Optional[str] = None,
@@ -267,12 +530,17 @@ def plot_products(
 
     Parameters
     ----------
-    dtm_path / dsm_path / chm_path:
-        Paths to the respective GeoTIFFs.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing ``"dtm"``, ``"dsm"``,
+        and ``"chm"`` at *resolution*.
+    resolution:
+        Resolution group in metres (default 1 m).
+    year:
+        Survey year.
     figsize:
         Figure size in inches.
     hillshade:
-        Apply hillshade to DTM and DSM panels.
+        Apply hillshade to DTM and DSM panels (default ``True``).
     title:
         Optional suptitle.
 
@@ -284,21 +552,20 @@ def plot_products(
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-    plot_dtm(dtm_path, hillshade=hillshade, ax=axes[0])
-    plot_dsm(dsm_path, hillshade=hillshade, ax=axes[1])
-    plot_chm(chm_path, ax=axes[2])
+    plot_dtm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[0])
+    plot_dsm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[1])
+    plot_chm(store, resolution=resolution, year=year, ax=axes[2])
 
-    if title:
-        fig.suptitle(title, fontsize=13)
+    year_str = f" ({year})" if year is not None else ""
+    fig.suptitle(title or f"DTM / DSM / CHM — {store.path.name}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig
 
 
 def plot_products_agb(
-    dtm_path: str | Path,
-    dsm_path: str | Path,
-    chm_path: str | Path,
-    agb_path: str | Path,
+    store: "ALSZarrStore",
+    resolution: float = 10.0,
+    year: Optional[int] = None,
     figsize: tuple[float, float] = (22, 6),
     hillshade: bool = True,
     title: Optional[str] = None,
@@ -306,10 +573,20 @@ def plot_products_agb(
     """
     Four-panel overview: DTM | DSM | CHM | AGB.
 
+    All panels read from *store* at *resolution*.  The CHM and terrain models
+    are typically computed at 1 m while AGB is at 10 m, so this composite is
+    most useful when a single resolution holds all variables (or when the user
+    passes a coarser resolution for all).
+
     Parameters
     ----------
-    dtm_path / dsm_path / chm_path / agb_path:
-        Paths to the respective GeoTIFFs.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` containing ``"dtm"``, ``"dsm"``,
+        ``"chm"``, and ``"biomass"`` at *resolution*.
+    resolution:
+        Resolution group in metres (default 10 m).
+    year:
+        Survey year.
     figsize:
         Figure size in inches.
     hillshade:
@@ -325,12 +602,12 @@ def plot_products_agb(
 
     fig, axes = plt.subplots(1, 4, figsize=figsize)
 
-    plot_dtm(dtm_path, hillshade=hillshade, ax=axes[0])
-    plot_dsm(dsm_path, hillshade=hillshade, ax=axes[1])
-    plot_chm(chm_path, ax=axes[2])
-    plot_agb(agb_path, ax=axes[3])
+    plot_dtm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[0])
+    plot_dsm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[1])
+    plot_chm(store, resolution=resolution, year=year, ax=axes[2])
+    plot_agb(store, resolution=resolution, year=year, ax=axes[3])
 
-    if title:
-        fig.suptitle(title, fontsize=13)
+    year_str = f" ({year})" if year is not None else ""
+    fig.suptitle(title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig

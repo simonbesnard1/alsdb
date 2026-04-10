@@ -3,57 +3,37 @@
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
 """
-Canopy Height Model (CHM) computation using TileDB + PDAL.
+Canopy Height Model (CHM), DTM and DSM computation using TileDB + PDAL.
 
-Pattern (inspired by silvimetric)
-----------------------------------
-Data is queried from TileDB programmatically via
-:class:`~alsdb.core.alsprovider.ALSProvider`, then injected into a PDAL
-pipeline as a numpy structured array using PDAL's Python API
-(``pdal.Pipeline(json, arrays=[arr])``).  This avoids the fragile
-``readers.tiledb`` config-file approach entirely — PDAL only handles
-filtering and rasterisation; TileDB handles all I/O.
+Pattern
+-------
+Data is queried from TileDB via :class:`~alsdb.core.alsprovider.ALSProvider`,
+then injected into a PDAL pipeline as a numpy structured array.  PDAL handles
+filtering and height-above-ground computation; rasterisation is done in Python
+with ``scipy.stats.binned_statistic_2d`` so results can be written directly
+into an :class:`~alsdb.storage.ALSZarrStore` without any intermediate files.
 
-Pipeline (inside PDAL)
------------------------
+Pipeline (CHM)
+--------------
 numpy array input
     → ``filters.hag_delaunay``  builds a TIN from Class-2 ground points,
                                  attaches ``HeightAboveGround`` to every point
     → ``filters.range``         keeps vegetation points only (Class 3–5)
     → ``filters.assign``        clamps negative HAG values to 0
     → ``filters.crop``          clips to the non-buffered tile extent
-    → ``writers.gdal``          rasterizes max(HAG) per cell → GeoTIFF
-
-Tiled processing
-----------------
-Large areas are processed as a grid of sub-tiles.  For CHM each tile is
-queried with an overlap *buffer* so ``filters.hag_delaunay`` has enough
-ground points at edges; the buffer is removed by ``filters.crop`` before
-writing.  DTM and DSM require no buffer (no TIN).  Sub-tiles are mosaicked
-with ``rasterio.merge`` into the final GeoTIFF.
+    → rasterise max(HAG) in numpy → written to Zarr
 
 Usage::
 
     from alsdb import ALSProvider
-    from alsdb.processing.chm import compute_chm, compute_dtm, compute_dsm
+    from alsdb.storage import ALSZarrStore
+    from alsdb.processing.chm import compute_chm, compute_all
 
     provider = ALSProvider(storage_type="local", uri="array_")
+    store = ALSZarrStore("output/spain.zarr")
 
-    # Full tile CHM
-    compute_chm(provider, "output/chm.tif", resolution=1.0)
-
-    # Restrict to a bounding box
-    compute_chm(provider, "output/chm.tif", resolution=1.0,
-                bbox=(308000, 4688000, 310000, 4690000))
-
-    # Tiled CHM (500 m tiles, 50 m buffer, 4 parallel workers)
-    compute_chm(provider, "output/chm.tif", resolution=1.0,
-                bbox=(308000, 4688000, 310000, 4690000),
-                tile_size=500.0, tile_buffer=50.0, n_workers=4)
-
-    # All three products at once
-    compute_all(provider, output_dir="output/", resolution=1.0,
-                bbox=(308000, 4688000, 310000, 4690000),
+    compute_chm(provider, store, resolution=1.0, year=2021)
+    compute_all(provider, store, year=2021,
                 tile_size=500.0, tile_buffer=50.0, n_workers=4)
 """
 
@@ -61,220 +41,222 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
-    array_domain_bbox, mosaic_tiles, tile_bboxes, query_to_array,
+    array_crs, array_data_bbox, check_bbox_overlap, check_year_exists,
+    tile_bboxes, query_to_array,
 )
-from alsdb.providers.tiledb_provider import TileDBProvider
+
+if TYPE_CHECKING:
+    from alsdb.providers.tiledb_provider import TileDBProvider
+    from alsdb.storage.zarr_store import ALSZarrStore
 
 logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
-_VEG_CLASSES = (3, 4, 5)
+_VEG_CLASSES  = (3, 4, 5)
 
 
 # ---------------------------------------------------------------------------
-# PDAL pipeline builders
+# Numpy rasteriser
 # ---------------------------------------------------------------------------
 
-def _gdal_writer(
-    output_path: str,
+def _rasterise(
+    x: np.ndarray,
+    y: np.ndarray,
+    values: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
     resolution: float,
-    dimension: str = "Z",
-    output_type: str = "max",
-    nodata: float = -9999.0,
-) -> dict:
-    return {
-        "type": "writers.gdal",
-        "filename": output_path,
-        "dimension": dimension,
-        "resolution": resolution,
-        "output_type": output_type,
-        "data_type": "float32",
-        "nodata": nodata,
-        "gdalopts": "COMPRESS=DEFLATE,PREDICTOR=3",
-    }
+    statistic: str = "max",
+) -> np.ndarray:
+    """
+    Bin *values* into a regular grid over *crop_bbox*.
 
+    Returns a ``(ny, nx)`` float32 array in north-up orientation.
+    Empty bins are ``np.nan``.
+    """
+    from scipy.stats import binned_statistic_2d
 
-def _run(stages: list, arr: np.ndarray) -> None:
-    """Execute a PDAL pipeline with a numpy array as input."""
-    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
-    count = p.execute()
-    logger.debug("PDAL executed: %d points processed", count)
+    cx0, cy0, cx1, cy1 = crop_bbox
+    nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
+    ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
+    x_edges = np.linspace(cx0, cx1, nx + 1)
+    y_edges = np.linspace(cy0, cy1, ny + 1)
+
+    grid = binned_statistic_2d(
+        x, y, values, statistic=statistic, bins=[x_edges, y_edges],
+    ).statistic                              # shape (nx, ny)
+
+    return np.flipud(grid.T).astype(np.float32)   # → (ny, nx) north-up
 
 
 # ---------------------------------------------------------------------------
-# Per-tile worker functions
+# PDAL helpers
+# ---------------------------------------------------------------------------
+
+def _run(stages: list, arr: np.ndarray) -> np.ndarray:
+    """Execute a PDAL pipeline and return the output point array."""
+    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+    p.execute()
+    return p.arrays[0]
+
+
+# ---------------------------------------------------------------------------
+# Per-tile workers
 # ---------------------------------------------------------------------------
 
 def _process_tile_chm(
-    provider: TileDBProvider,
+    provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    tmp_dir: str,
+    crop_bbox:  tuple[float, float, float, float],
+    store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
-    nodata: float,
     year: Optional[int],
-) -> Optional[Path]:
-    """Process a single CHM sub-tile (with HAG buffer)."""
+    first_returns_only: bool,
+) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("CHM tile %d: no points, skipping", tile_index)
-        return None
+        return
 
-    tmp_path = Path(tmp_dir) / f"chm_tile_{tile_index:04d}.tif"
     cx0, cy0, cx1, cy1 = crop_bbox
-
+    # Filter to vegetation classes; optionally restrict to first returns so
+    # that only the top-of-canopy surface is modelled (recommended).
+    veg_limits = f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"
+    if first_returns_only:
+        veg_limits += ",ReturnNumber[1:1]"
     stages = [
         {"type": "filters.hag_delaunay"},
-        {"type": "filters.range",
-         "limits": f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"},
+        {"type": "filters.range", "limits": veg_limits},
         {"type": "filters.assign",
          "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
         {"type": "filters.crop",
          "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-        _gdal_writer(str(tmp_path), resolution,
-                     dimension="HeightAboveGround",
-                     output_type="max", nodata=nodata),
     ]
-    logger.debug("CHM tile %d: %.0f–%.0f / %.0f–%.0f", tile_index, cx0, cx1, cy0, cy1)
     try:
-        _run(stages, arr)
+        points = _run(stages, arr)
     except RuntimeError as exc:
         if "no points" in str(exc).lower():
-            logger.debug("CHM tile %d: no vegetation points after filtering, skipping", tile_index)
-            return None
+            logger.debug("CHM tile %d: no vegetation points, skipping", tile_index)
+            return
         raise
-    return tmp_path
+
+    if len(points) == 0:
+        return
+
+    grid = _rasterise(
+        points["X"], points["Y"], points["HeightAboveGround"],
+        crop_bbox, resolution, statistic="max",
+    )
+    store.write_tile("chm", resolution, year, grid, crop_bbox)
+    logger.debug("CHM tile %d written", tile_index)
 
 
 def _process_tile_dtm(
-    provider: TileDBProvider,
+    provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    tmp_dir: str,
+    crop_bbox:  tuple[float, float, float, float],
+    store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
-    nodata: float,
     year: Optional[int],
-) -> Optional[Path]:
-    """Process a single DTM sub-tile (ground points only, no buffer needed)."""
+) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("DTM tile %d: no points, skipping", tile_index)
-        return None
+        return
 
-    tmp_path = Path(tmp_dir) / f"dtm_tile_{tile_index:04d}.tif"
     cx0, cy0, cx1, cy1 = crop_bbox
-
     stages = [
         {"type": "filters.range",
          "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
         {"type": "filters.crop",
          "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-        _gdal_writer(str(tmp_path), resolution,
-                     dimension="Z", output_type="max", nodata=nodata),
     ]
-    logger.debug("DTM tile %d: %.0f–%.0f / %.0f–%.0f", tile_index, cx0, cx1, cy0, cy1)
     try:
-        _run(stages, arr)
+        points = _run(stages, arr)
     except RuntimeError as exc:
         if "no points" in str(exc).lower():
-            logger.debug("DTM tile %d: no ground points after filtering, skipping", tile_index)
-            return None
+            logger.debug("DTM tile %d: no ground points, skipping", tile_index)
+            return
         raise
-    return tmp_path
+
+    if len(points) == 0:
+        return
+
+    grid = _rasterise(
+        points["X"], points["Y"], points["Z"],
+        crop_bbox, resolution, statistic="max",
+    )
+    store.write_tile("dtm", resolution, year, grid, crop_bbox)
+    logger.debug("DTM tile %d written", tile_index)
 
 
 def _process_tile_dsm(
-    provider: TileDBProvider,
+    provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    tmp_dir: str,
+    crop_bbox:  tuple[float, float, float, float],
+    store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
-    nodata: float,
     year: Optional[int],
     first_returns_only: bool,
-) -> Optional[Path]:
-    """Process a single DSM sub-tile (no buffer needed)."""
+) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
         logger.debug("DSM tile %d: no points, skipping", tile_index)
-        return None
+        return
 
-    tmp_path = Path(tmp_dir) / f"dsm_tile_{tile_index:04d}.tif"
     cx0, cy0, cx1, cy1 = crop_bbox
-
     stages: list = []
     if first_returns_only:
         stages.append({"type": "filters.range", "limits": "ReturnNumber[1:1]"})
-    stages += [
-        {"type": "filters.crop",
-         "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-        _gdal_writer(str(tmp_path), resolution,
-                     dimension="Z", output_type="max", nodata=nodata),
-    ]
-    logger.debug("DSM tile %d: %.0f–%.0f / %.0f–%.0f", tile_index, cx0, cx1, cy0, cy1)
+    stages.append({"type": "filters.crop",
+                   "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
     try:
-        _run(stages, arr)
+        points = _run(stages, arr)
     except RuntimeError as exc:
         if "no points" in str(exc).lower():
-            logger.debug("DSM tile %d: no points after filtering, skipping", tile_index)
-            return None
+            logger.debug("DSM tile %d: no points, skipping", tile_index)
+            return
         raise
-    return tmp_path
+
+    if len(points) == 0:
+        return
+
+    grid = _rasterise(
+        points["X"], points["Y"], points["Z"],
+        crop_bbox, resolution, statistic="max",
+    )
+    store.write_tile("dsm", resolution, year, grid, crop_bbox)
+    logger.debug("DSM tile %d written", tile_index)
 
 
 # ---------------------------------------------------------------------------
 # Shared tiled executor
 # ---------------------------------------------------------------------------
 
-def _run_tiled(
-    worker_fn,
-    provider: TileDBProvider,
-    tiles: list,
-    tmp_dir: str,
-    n_workers: int,
-    **kwargs,
-) -> list[Path]:
-    """
-    Run *worker_fn* over all *tiles*, sequentially or in parallel.
-
-    Returns a sorted list of non-None output paths.
-    """
-    tile_paths: list[Path] = []
-
+def _run_tiled(worker_fn, provider, tiles, store, n_workers, **kwargs) -> None:
+    """Run *worker_fn* over all *tiles*, sequentially or in parallel."""
     if n_workers == 1:
         for idx, (query_bbox, crop_bbox) in enumerate(tiles):
-            result = worker_fn(provider, query_bbox, crop_bbox,
-                               tmp_dir, idx, **kwargs)
-            if result is not None:
-                tile_paths.append(result)
+            worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
     else:
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = {
                 executor.submit(
-                    worker_fn, provider, query_bbox, crop_bbox,
-                    tmp_dir, idx, **kwargs
+                    worker_fn, provider, query_bbox, crop_bbox, store, idx, **kwargs
                 ): idx
                 for idx, (query_bbox, crop_bbox) in enumerate(tiles)
             }
             for future in as_completed(futures):
-                result = future.result()
-                if result is not None:
-                    tile_paths.append(result)
-
-    tile_paths.sort()
-    return tile_paths
+                future.result()   # re-raise worker exceptions
 
 
 # ---------------------------------------------------------------------------
@@ -282,280 +264,191 @@ def _run_tiled(
 # ---------------------------------------------------------------------------
 
 def compute_chm(
-    provider: TileDBProvider,
-    output_path: str | Path,
+    provider: "TileDBProvider",
+    store: "ALSZarrStore",
     resolution: float = 1.0,
     bbox: Optional[tuple[float, float, float, float]] = None,
-    nodata: float = -9999.0,
+    year: Optional[int] = None,
     *,
+    first_returns_only: bool = True,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
-    year: Optional[int] = None,
-) -> Path:
+) -> None:
     """
-    Compute a Canopy Height Model from a TileDB array.
+    Compute a Canopy Height Model and write it into *store*.
 
     Parameters
     ----------
     provider:
-        :class:`~alsdb.providers.tiledb_provider.TileDBProvider` instance.
-    output_path:
-        Output GeoTIFF path.
+        TileDB provider instance.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
         Grid cell size in metres (default 1 m).
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
-    nodata:
-        No-data fill value.
+    year:
+        Survey year filter.  Written as a time slice in the store.
+    first_returns_only:
+        If ``True`` (default), only first returns are used to build the
+        canopy surface.  First returns represent the first surface the
+        laser pulse hit — i.e. the top of the canopy — which is the
+        physically correct input for a CHM.  Set to ``False`` to include
+        all vegetation returns (reproduces the legacy behaviour).
     tile_size:
-        Sub-tile width and height in metres (default 500 m).
+        Sub-tile width/height in metres (default 500 m).
     tile_buffer:
         Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
-    year:
-        Optional survey year filter.
-
-    Returns
-    -------
-    Path
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
+    if bbox is not None and not check_bbox_overlap(bbox, provider):
+        return
+    if year is not None and not check_year_exists(year, provider):
+        return
+    store.ensure_group("chm", resolution, effective_bbox,
+                       array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
-    n_tiles = len(tiles)
-    logger.info("Computing CHM → %s  (%.1f m, %d tile(s), %d worker(s))",
-                output_path, resolution, n_tiles, n_workers)
-
-    if n_tiles == 1:
-        query_bbox, crop_bbox = tiles[0]
-        arr = query_to_array(provider, query_bbox, year=year)
-        cx0, cy0, cx1, cy1 = crop_bbox
-        stages = [
-            {"type": "filters.hag_delaunay"},
-            {"type": "filters.range",
-             "limits": f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"},
-            {"type": "filters.assign",
-             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
-            {"type": "filters.crop",
-             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-            _gdal_writer(str(output_path), resolution,
-                         dimension="HeightAboveGround",
-                         output_type="max", nodata=nodata),
-        ]
-        _run(stages, arr)
-        return output_path
-
-    with tempfile.TemporaryDirectory(prefix="alsdb_chm_") as tmp_dir:
-        tile_paths = _run_tiled(
-            _process_tile_chm, provider, tiles, tmp_dir, n_workers,
-            resolution=resolution, nodata=nodata, year=year,
-        )
-        if not tile_paths:
-            logger.warning("No CHM tiles produced (no points in bbox)")
-            return output_path
-        mosaic_tiles(tile_paths, output_path, nodata=nodata)
-
-    return output_path
+    logger.info(
+        "Computing CHM  (%.1f m, %d tile(s), %d worker(s), year=%s, first_returns=%s)",
+        resolution, len(tiles), n_workers, year, first_returns_only,
+    )
+    _run_tiled(_process_tile_chm, provider, tiles, store, n_workers,
+               resolution=resolution, year=year,
+               first_returns_only=first_returns_only)
 
 
 def compute_dtm(
-    provider: TileDBProvider,
-    output_path: str | Path,
+    provider: "TileDBProvider",
+    store: "ALSZarrStore",
     resolution: float = 1.0,
     bbox: Optional[tuple[float, float, float, float]] = None,
-    nodata: float = -9999.0,
+    year: Optional[int] = None,
     *,
     tile_size: float = 500.0,
     n_workers: int = 1,
-    year: Optional[int] = None,
-) -> Path:
+) -> None:
     """
-    Rasterize ground points (Class 2) to a DTM GeoTIFF.
+    Rasterize ground points (Class 2) to a DTM and write into *store*.
 
     Parameters
     ----------
     provider:
         TileDB provider instance.
-    output_path:
-        Output GeoTIFF path.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
         Grid cell size in metres.
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
-    nodata:
-        No-data fill value.
+    year:
+        Survey year filter.
     tile_size:
-        Sub-tile width and height in metres (default 500 m).
+        Sub-tile width/height in metres (default 500 m).
     n_workers:
         Parallel workers (default 1 = sequential).
-    year:
-        Optional survey year filter.
-
-    Returns
-    -------
-    Path
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
+    if bbox is not None and not check_bbox_overlap(bbox, provider):
+        return
+    if year is not None and not check_year_exists(year, provider):
+        return
+    store.ensure_group("dtm", resolution, effective_bbox,
+                       array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
-    n_tiles = len(tiles)
-    logger.info("Computing DTM → %s  (%.1f m, %d tile(s), %d worker(s))",
-                output_path, resolution, n_tiles, n_workers)
-
-    if n_tiles == 1:
-        query_bbox, _ = tiles[0]
-        arr = query_to_array(provider, query_bbox, year=year)
-        stages = [
-            {"type": "filters.range",
-             "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
-            _gdal_writer(str(output_path), resolution,
-                         dimension="Z", output_type="max", nodata=nodata),
-        ]
-        _run(stages, arr)
-        return output_path
-
-    with tempfile.TemporaryDirectory(prefix="alsdb_dtm_") as tmp_dir:
-        tile_paths = _run_tiled(
-            _process_tile_dtm, provider, tiles, tmp_dir, n_workers,
-            resolution=resolution, nodata=nodata, year=year,
-        )
-        if not tile_paths:
-            logger.warning("No DTM tiles produced (no points in bbox)")
-            return output_path
-        mosaic_tiles(tile_paths, output_path, nodata=nodata)
-
-    return output_path
+    logger.info("Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
+                resolution, len(tiles), n_workers, year)
+    _run_tiled(_process_tile_dtm, provider, tiles, store, n_workers,
+               resolution=resolution, year=year)
 
 
 def compute_dsm(
-    provider: TileDBProvider,
-    output_path: str | Path,
+    provider: "TileDBProvider",
+    store: "ALSZarrStore",
     resolution: float = 1.0,
     first_returns_only: bool = True,
     bbox: Optional[tuple[float, float, float, float]] = None,
-    nodata: float = -9999.0,
+    year: Optional[int] = None,
     *,
     tile_size: float = 500.0,
     n_workers: int = 1,
-    year: Optional[int] = None,
-) -> Path:
+) -> None:
     """
-    Rasterize maximum return elevation to a DSM GeoTIFF.
+    Rasterize maximum return elevation to a DSM and write into *store*.
 
     Parameters
     ----------
     provider:
         TileDB provider instance.
-    output_path:
-        Output GeoTIFF path.
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
         Grid cell size in metres.
     first_returns_only:
         Use only first returns for a clean canopy-top signal.
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
-    nodata:
-        No-data fill value.
+    year:
+        Survey year filter.
     tile_size:
-        Sub-tile width and height in metres (default 500 m).
+        Sub-tile width/height in metres (default 500 m).
     n_workers:
         Parallel workers (default 1 = sequential).
-    year:
-        Optional survey year filter.
-
-    Returns
-    -------
-    Path
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    effective_bbox = bbox if bbox is not None else array_domain_bbox(provider)
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
+    if bbox is not None and not check_bbox_overlap(bbox, provider):
+        return
+    if year is not None and not check_year_exists(year, provider):
+        return
+    store.ensure_group("dsm", resolution, effective_bbox,
+                       array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
-    n_tiles = len(tiles)
-    logger.info("Computing DSM → %s  (%.1f m, %d tile(s), %d worker(s))",
-                output_path, resolution, n_tiles, n_workers)
-
-    if n_tiles == 1:
-        query_bbox, _ = tiles[0]
-        arr = query_to_array(provider, query_bbox, year=year)
-        stages: list = []
-        if first_returns_only:
-            stages.append({"type": "filters.range", "limits": "ReturnNumber[1:1]"})
-        stages.append(_gdal_writer(str(output_path), resolution,
-                                   dimension="Z", output_type="max", nodata=nodata))
-        _run(stages, arr)
-        return output_path
-
-    with tempfile.TemporaryDirectory(prefix="alsdb_dsm_") as tmp_dir:
-        tile_paths = _run_tiled(
-            _process_tile_dsm, provider, tiles, tmp_dir, n_workers,
-            resolution=resolution, nodata=nodata, year=year,
-            first_returns_only=first_returns_only,
-        )
-        if not tile_paths:
-            logger.warning("No DSM tiles produced (no points in bbox)")
-            return output_path
-        mosaic_tiles(tile_paths, output_path, nodata=nodata)
-
-    return output_path
+    logger.info("Computing DSM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
+                resolution, len(tiles), n_workers, year)
+    _run_tiled(_process_tile_dsm, provider, tiles, store, n_workers,
+               resolution=resolution, year=year,
+               first_returns_only=first_returns_only)
 
 
 def compute_all(
-    provider: TileDBProvider,
-    output_dir: str | Path,
+    provider: "TileDBProvider",
+    store: "ALSZarrStore",
     resolution: float = 1.0,
     bbox: Optional[tuple[float, float, float, float]] = None,
-    nodata: float = -9999.0,
     year: Optional[int] = None,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
-) -> dict[str, Path]:
+    first_returns_only: bool = True,
+) -> None:
     """
-    Compute DTM, DSM, and CHM in one call.
+    Compute DTM, DSM, and CHM in one call, writing all into *store*.
 
     Parameters
     ----------
     provider:
         TileDB provider instance.
-    output_dir:
-        Output directory (created if it does not exist).
+    store:
+        :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
         Grid cell size in metres.
     bbox:
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
-    nodata:
-        No-data fill value.
     year:
-        Optional survey year filter.
+        Survey year filter.
     tile_size / n_workers:
         Tiling parameters forwarded to all three products.
     tile_buffer:
-        Overlap buffer forwarded to :func:`compute_chm` only (CHM needs ground
-        points beyond tile edges for accurate ``hag_delaunay``; DTM and DSM do not).
-
-    Returns
-    -------
-    dict
-        ``{"dtm": Path, "dsm": Path, "chm": Path}``
+        Overlap buffer forwarded to :func:`compute_chm` only.
+    first_returns_only:
+        Forwarded to :func:`compute_chm`.  See that function for details.
     """
-    output_dir = Path(output_dir)
-    return {
-        "dtm": compute_dtm(provider, output_dir / "dtm.tif",
-                           resolution=resolution, bbox=bbox, nodata=nodata,
-                           tile_size=tile_size, n_workers=n_workers, year=year),
-        "dsm": compute_dsm(provider, output_dir / "dsm.tif",
-                           resolution=resolution, bbox=bbox, nodata=nodata,
-                           tile_size=tile_size, n_workers=n_workers, year=year),
-        "chm": compute_chm(provider, output_dir / "chm.tif",
-                           resolution=resolution, bbox=bbox, nodata=nodata,
-                           tile_size=tile_size, tile_buffer=tile_buffer,
-                           n_workers=n_workers, year=year),
-    }
+    compute_dtm(provider, store, resolution=resolution, bbox=bbox, year=year,
+                tile_size=tile_size, n_workers=n_workers)
+    compute_dsm(provider, store, resolution=resolution, bbox=bbox, year=year,
+                tile_size=tile_size, n_workers=n_workers)
+    compute_chm(provider, store, resolution=resolution, bbox=bbox, year=year,
+                first_returns_only=first_returns_only,
+                tile_size=tile_size, tile_buffer=tile_buffer, n_workers=n_workers)

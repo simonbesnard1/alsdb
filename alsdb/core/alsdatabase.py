@@ -145,6 +145,8 @@ class ALSDatabase(TileDBProvider):
         return json.loads(raw)
 
     def _save_manifest(self, manifest: Dict[str, dict]) -> None:
+        if not self.array_exists():
+            return
         with self.open("w") as arr:
             arr.meta[_MANIFEST_KEY] = json.dumps(manifest)
 
