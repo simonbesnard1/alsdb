@@ -44,17 +44,14 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-import pdal
 
 from alsdb.processing._tiling import (
-    array_crs, array_data_bbox, check_bbox_overlap, check_year_exists,
-    query_to_array, tile_bboxes,
+    array_crs, array_data_bbox, attach_hag, check_bbox_overlap,
+    check_year_exists, query_to_array, run_tiled, tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -139,14 +136,7 @@ def _process_tile(
         logger.debug("Gap tile %d: no points, skipping", tile_index)
         return
 
-    stages = [
-        {"type": "filters.hag_delaunay"},
-        {"type": "filters.assign",
-         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
-    ]
-    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
-    p.execute()
-    points = p.arrays[0]
+    points = attach_hag(arr)
 
     gap = _compute_gap_grid(points, resolution, crop_bbox)
 
@@ -241,18 +231,5 @@ def compute_gap_fraction(
         ", LAI" if lai else "",
     )
 
-    def _work(idx, query_bbox, crop_bbox):
-        _process_tile(provider, query_bbox, crop_bbox, store, idx,
-                      resolution, year, lai, k)
-
-    if n_workers == 1:
-        for i, (qb, cb) in enumerate(tiles):
-            _work(i, qb, cb)
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(_work, i, qb, cb): i
-                for i, (qb, cb) in enumerate(tiles)
-            }
-            for future in as_completed(futures):
-                future.result()
+    run_tiled(_process_tile, provider, tiles, store, n_workers,
+              resolution=resolution, year=year, lai=lai, k=k)

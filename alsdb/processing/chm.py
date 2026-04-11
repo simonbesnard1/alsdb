@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -49,7 +48,7 @@ import pdal
 
 from alsdb.processing._tiling import (
     array_crs, array_data_bbox, check_bbox_overlap, check_year_exists,
-    tile_bboxes, query_to_array,
+    query_to_array, run_tiled, tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -340,27 +339,6 @@ def _process_tile_all(
 
 
 # ---------------------------------------------------------------------------
-# Shared tiled executor
-# ---------------------------------------------------------------------------
-
-def _run_tiled(worker_fn, provider, tiles, store, n_workers, **kwargs) -> None:
-    """Run *worker_fn* over all *tiles*, sequentially or in parallel."""
-    if n_workers == 1:
-        for idx, (query_bbox, crop_bbox) in enumerate(tiles):
-            worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(
-                    worker_fn, provider, query_bbox, crop_bbox, store, idx, **kwargs
-                ): idx
-                for idx, (query_bbox, crop_bbox) in enumerate(tiles)
-            }
-            for future in as_completed(futures):
-                future.result()   # re-raise worker exceptions
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -425,7 +403,7 @@ def compute_chm(
         "Computing CHM  (%.1f m, %d tile(s), %d worker(s), year=%s, first_returns=%s)",
         resolution, len(tiles), n_workers, year, first_returns_only,
     )
-    _run_tiled(_process_tile_chm, provider, tiles, store, n_workers,
+    run_tiled(_process_tile_chm, provider, tiles, store, n_workers,
                resolution=resolution, year=year,
                first_returns_only=first_returns_only)
 
@@ -477,7 +455,7 @@ def compute_dtm(
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
     logger.info("Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
                 resolution, len(tiles), n_workers, year)
-    _run_tiled(_process_tile_dtm, provider, tiles, store, n_workers,
+    run_tiled(_process_tile_dtm, provider, tiles, store, n_workers,
                resolution=resolution, year=year)
 
 
@@ -531,7 +509,7 @@ def compute_dsm(
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
     logger.info("Computing DSM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
                 resolution, len(tiles), n_workers, year)
-    _run_tiled(_process_tile_dsm, provider, tiles, store, n_workers,
+    run_tiled(_process_tile_dsm, provider, tiles, store, n_workers,
                resolution=resolution, year=year,
                first_returns_only=first_returns_only)
 
@@ -614,7 +592,7 @@ def compute_all(
         resolution, len(tiles), n_workers, year,
         need_dtm, need_dsm, need_chm,
     )
-    _run_tiled(
+    run_tiled(
         _process_tile_all, provider, tiles, store, n_workers,
         resolution=resolution, year=year,
         first_returns_only=first_returns_only,

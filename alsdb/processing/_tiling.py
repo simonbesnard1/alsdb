@@ -11,11 +11,14 @@ and :mod:`alsdb.processing.biomass`.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
-from typing import TYPE_CHECKING, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
+import pdal
 
 from alsdb.utils.schema import LAS_ATTRIBUTES
 
@@ -205,6 +208,57 @@ def check_bbox_overlap(
         return False
 
     return True
+
+
+def attach_hag(arr: np.ndarray) -> np.ndarray:
+    """
+    Run ``filters.hag_delaunay`` on *arr* and return the HAG-annotated array.
+
+    Builds a Delaunay TIN from Class-2 ground points and attaches
+    ``HeightAboveGround`` to every point.  Negative HAG values (artefacts
+    from the TIN interpolation at tile edges) are clamped to zero.
+
+    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
+    and :mod:`alsdb.processing.biomass`.
+    """
+    stages = [
+        {"type": "filters.hag_delaunay"},
+        {"type": "filters.assign",
+         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+    ]
+    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+    p.execute()
+    result = p.arrays[0]
+    logger.debug("HAG attached: %d points", len(result))
+    return result
+
+
+def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int,
+              **kwargs) -> None:
+    """
+    Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
+
+    The worker signature must be::
+
+        worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)
+
+    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
+    and :mod:`alsdb.processing.biomass`.
+    """
+    if n_workers == 1:
+        for idx, (query_bbox, crop_bbox) in enumerate(tiles):
+            worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
+    else:
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(
+                    worker_fn, provider, query_bbox, crop_bbox, store, idx,
+                    **kwargs
+                ): idx
+                for idx, (query_bbox, crop_bbox) in enumerate(tiles)
+            }
+            for future in as_completed(futures):
+                future.result()   # re-raise worker exceptions
 
 
 def tile_bboxes(

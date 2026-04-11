@@ -58,17 +58,14 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
-import pdal
 
 from alsdb.processing._tiling import (
-    array_crs, array_data_bbox, check_bbox_overlap, check_year_exists,
-    tile_bboxes, query_to_array,
+    array_crs, array_data_bbox, attach_hag, check_bbox_overlap,
+    check_year_exists, query_to_array, run_tiled, tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -81,24 +78,6 @@ _VEG_CLASSES          = (3, 4, 5)
 _DEFAULT_CC_THRESHOLD = 2.0   # m — first returns above this count as "canopy"
 
 _METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density"]
-
-
-# ---------------------------------------------------------------------------
-# HAG attachment
-# ---------------------------------------------------------------------------
-
-def _attach_hag(arr: np.ndarray) -> np.ndarray:
-    """Run PDAL hag_delaunay on *arr* and return annotated point array."""
-    stages = [
-        {"type": "filters.hag_delaunay"},
-        {"type": "filters.assign",
-         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
-    ]
-    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
-    p.execute()
-    result = p.arrays[0]
-    logger.debug("HAG attached: %d points", len(result))
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +227,7 @@ def wrap_sklearn_model(
         compute_biomass(provider, store, resolution=10.0, year=2021,
                         model_fn=model_fn)
     """
-    _default_features = ["h50", "h75", "h95", "hmean", "cc", "density"]
-    feat = features or _default_features
+    feat = list(features) if features is not None else _METRIC_NAMES
 
     def _model(metrics: dict[str, np.ndarray]) -> np.ndarray:
         shape = metrics[feat[0]].shape
@@ -283,7 +261,7 @@ def _process_tile_metrics(
         logger.debug("Metrics tile %d: no points, skipping", tile_index)
         return
 
-    points = _attach_hag(arr)
+    points = attach_hag(arr)
     metrics = _extract_metrics(points, resolution, bbox=crop_bbox,
                                cc_threshold=cc_threshold)
 
@@ -310,7 +288,7 @@ def _process_tile_biomass(
         logger.debug("AGB tile %d: no points, skipping", tile_index)
         return
 
-    points = _attach_hag(arr)
+    points = attach_hag(arr)
     metrics = _extract_metrics(points, resolution, bbox=crop_bbox,
                                cc_threshold=cc_threshold)
     agb = model_fn(metrics)
@@ -373,31 +351,18 @@ def compute_metrics(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None:
-        if all(store.has_data(v, resolution, year)
-               for v in ["h50", "h75", "h95", "hmean", "cc", "density"]):
+        if all(store.has_data(v, resolution, year) for v in _METRIC_NAMES):
             logger.info("LiDAR metrics already present for year %d at %.0f m — skipping",
                         year, resolution)
             return
     crs = array_crs(provider)
-    for var in ["h50", "h75", "h95", "hmean", "cc", "density"]:
+    for var in _METRIC_NAMES:
         store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info("Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s)",
                 resolution, len(tiles), n_workers, year)
-
-    def _work(idx, qb, cb):
-        _process_tile_metrics(provider, qb, cb, store, idx,
-                              resolution, year, cc_threshold)
-
-    if n_workers == 1:
-        for i, (qb, cb) in enumerate(tiles):
-            _work(i, qb, cb)
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(_work, i, qb, cb): i
-                       for i, (qb, cb) in enumerate(tiles)}
-            for future in as_completed(futures):
-                future.result()
+    run_tiled(_process_tile_metrics, provider, tiles, store, n_workers,
+              resolution=resolution, year=year, cc_threshold=cc_threshold)
 
 
 def compute_biomass(
@@ -459,17 +424,6 @@ def compute_biomass(
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info("Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s)",
                 resolution, len(tiles), n_workers, year)
-
-    def _work(idx, qb, cb):
-        _process_tile_biomass(provider, qb, cb, store, idx,
-                              resolution, year, cc_threshold, model_fn)
-
-    if n_workers == 1:
-        for i, (qb, cb) in enumerate(tiles):
-            _work(i, qb, cb)
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(_work, i, qb, cb): i
-                       for i, (qb, cb) in enumerate(tiles)}
-            for future in as_completed(futures):
-                future.result()
+    run_tiled(_process_tile_biomass, provider, tiles, store, n_workers,
+              resolution=resolution, year=year,
+              cc_threshold=cc_threshold, model_fn=model_fn)
