@@ -6,8 +6,12 @@ Created on Sat Mar 28 11:46:37 2026
 @author: simon
 """
 
+import numpy as np
+import pandas as pd
+
 from alsdb import ALSProvider
-from alsdb.processing.waveform import simulate_waveform, simulate_batch
+from alsdb.processing.waveform import simulate_batch, simulate_waveform
+from alsdb.utils.viz import plot_waveforms_3d
 
 reader = ALSProvider(storage_type="local", uri="array_")
 
@@ -24,10 +28,6 @@ print(result.cover)  # canopy cover fraction
 print(result.z_ground)  # estimated ground elevation (m)
 
 # Batch over a list of (lon, lat) footprint centres
-import numpy as np
-import pandas as pd
-from alsdb import ALSProvider
-
 _BEAM_IDS = [
     "BEAM0000",
     "BEAM0001",
@@ -65,11 +65,8 @@ results = simulate_batch(
 print(results[["center_x", "center_y", "rh50", "rh98", "cover", "n_points"]].head(10))
 print(f"\n{results['n_points'].gt(0).sum()} / {len(results)} footprints with data")
 
-
 print(f"{len(results)} shots simulated")
 print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
-
-from alsdb.utils.viz import plot_waveforms_3d
 
 # Static matplotlib figure
 fig = plot_waveforms_3d(results.head(100), color_by="rh98", backend="matplotlib")

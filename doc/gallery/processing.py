@@ -31,7 +31,7 @@ YEAR = 2021
 # single tiled pass. Use ``tile_size`` and ``n_workers`` to parallelise over
 # large areas.
 
-from alsdb.processing.chm import compute_all
+from alsdb.processing.chm import compute_all  # noqa: E402
 
 compute_all(
     provider=reader,
@@ -51,7 +51,7 @@ compute_all(
 # Gap fraction uses the MacArthur–Wilson first-return estimator.
 # Effective LAI is computed via Beer–Lambert inversion with ``lai=True``.
 
-from alsdb.processing.gap import compute_gap_fraction
+from alsdb.processing.gap import compute_gap_fraction  # noqa: E402
 
 compute_gap_fraction(
     provider=reader,
@@ -70,7 +70,7 @@ compute_gap_fraction(
 # :py:func:`alsdb.processing.biomass.compute_metrics` writes h50, h75, h95,
 # hmean, canopy cover, and point density to the store.
 
-from alsdb.processing.biomass import compute_metrics
+from alsdb.processing.biomass import compute_metrics  # noqa: E402
 
 compute_metrics(
     provider=reader,
@@ -88,7 +88,7 @@ compute_metrics(
 # Calibrate the parameters against field inventory plots before
 # using the output scientifically.
 
-from alsdb.processing.biomass import compute_biomass
+from alsdb.processing.biomass import compute_biomass  # noqa: E402
 
 compute_biomass(
     provider=reader,
@@ -105,7 +105,6 @@ compute_biomass(
 # Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to plug in any
 # trained sklearn-compatible estimator.
 
-from alsdb.processing.biomass import wrap_sklearn_model
 
 # Example with a pre-trained Random Forest (not executed here)
 # from sklearn.ensemble import RandomForestRegressor

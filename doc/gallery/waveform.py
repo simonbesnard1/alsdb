@@ -40,7 +40,7 @@ print(f"Ground elevation = {result.z_ground:.2f} m")
 # Visualise the waveform
 # -----------------------
 
-from alsdb.utils.viz import plot_waveform, plot_rh_profile
+from alsdb.utils.viz import plot_waveform, plot_rh_profile  # noqa: E402
 
 # Energy vs elevation, annotated with RH levels
 fig = plot_waveform(result)
@@ -58,9 +58,9 @@ fig.savefig("rh_profile.png", dpi=150, bbox_inches="tight")
 # of shot centres in parallel. Results can be saved to Parquet for later
 # co-location with real GEDI observations.
 
-import numpy as np
-import pandas as pd
-from alsdb.processing.waveform import simulate_batch
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+from alsdb.processing.waveform import simulate_batch  # noqa: E402
 
 # Build a grid of GEDI-like shot centres (60 m spacing)
 xs, ys = np.meshgrid(
@@ -88,7 +88,7 @@ print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
 # :py:func:`alsdb.utils.viz.plot_waveforms_3d` shows all shots as a waterfall
 # of RH(p) curves coloured by a summary metric.
 
-from alsdb.utils.viz import plot_waveforms_3d
+from alsdb.utils.viz import plot_waveforms_3d  # noqa: E402
 
 # Static matplotlib figure
 fig = plot_waveforms_3d(results, color_by="rh98", backend="matplotlib")

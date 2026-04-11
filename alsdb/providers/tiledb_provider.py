@@ -92,8 +92,8 @@ class TileDBProvider:
         region: str,
     ) -> tuple[Dict[str, str], tiledb.Ctx]:
         cores = os.cpu_count() or 8
-        max_threads = min(cores * 4, 64)
-        max_s3_ops = min(cores * 8, 256)
+        min(cores * 4, 64)
+        min(cores * 8, 256)
 
         # endpoint_override must be hostname[:port] only — strip scheme if present
         endpoint = url.removeprefix("https://").removeprefix("http://").rstrip("/")

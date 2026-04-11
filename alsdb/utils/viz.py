@@ -157,7 +157,7 @@ def plot_dsm(
 
     if hillshade:
         ls = LightSource(azdeg=315, altdeg=45)
-        hs = ls.hillshade(
+        ls.hillshade(
             np.where(np.isnan(dsm), np.nanmin(dsm), dsm), vert_exag=vert_exag
         )
         # Blend elevation colour with hillshade
@@ -612,7 +612,7 @@ def plot_rh_profile(
     # ------------------------------------------------------------------
     levels = sorted(result.rh.keys())
     p_arr = np.array(levels, dtype=float)
-    h_arr = np.array([result.rh[l] for l in levels])
+    h_arr = np.array([result.rh[lv] for lv in levels])
 
     valid = np.isfinite(h_arr) & (h_arr >= 0)
     p_arr, h_arr = p_arr[valid], h_arr[valid]

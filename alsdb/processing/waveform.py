@@ -143,7 +143,7 @@ class WaveformResult:
 
     def rh_array(self, levels: tuple[int, ...] = _RH_LEVELS) -> np.ndarray:
         """RH values as a 1-D array for the given levels."""
-        return np.array([self.rh.get(l, np.nan) for l in levels])
+        return np.array([self.rh.get(lv, np.nan) for lv in levels])
 
     def to_dict(self) -> dict:
         """Flat dict of scalar metrics (no arrays) — useful for DataFrame rows."""
@@ -155,7 +155,7 @@ class WaveformResult:
             "cover": self.cover,
             "n_points": self.n_points,
         }
-        d.update({f"rh{l}": v for l, v in sorted(self.rh.items())})
+        d.update({f"rh{lv}": v for lv, v in sorted(self.rh.items())})
         return d
 
 
@@ -280,7 +280,7 @@ def _rh_metrics(
     above = waveform[ground_idx:]
 
     if above.sum() == 0:
-        return {l: np.nan for l in levels}
+        return {lv: np.nan for lv in levels}
 
     cumulative = np.cumsum(above) / above.sum()
     z_above = z_bins[ground_idx:] - z_ground  # heights above ground
@@ -565,7 +565,7 @@ def simulate_batch(
         "home": np.nan,
         "cover": np.nan,
         "n_points": 0,
-        **{f"rh{l}": np.nan for l in _RH_LEVELS},
+        **{f"rh{lv}": np.nan for lv in _RH_LEVELS},
     }
 
     records = []

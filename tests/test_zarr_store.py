@@ -205,7 +205,7 @@ def test_to_dataset_returns_xarray_dataset(initialised_store):
 
 
 def test_to_dataset_has_correct_coords(initialised_store):
-    xr = pytest.importorskip("xarray")
+    pytest.importorskip("xarray")
     initialised_store.write_tile("chm", RES, YEAR, _tile(), BBOX)
     ds = initialised_store.to_dataset(RES)
     assert "x" in ds.coords
@@ -214,7 +214,7 @@ def test_to_dataset_has_correct_coords(initialised_store):
 
 
 def test_to_dataset_coord_lengths(initialised_store):
-    xr = pytest.importorskip("xarray")
+    pytest.importorskip("xarray")
     initialised_store.write_tile("chm", RES, YEAR, _tile(), BBOX)
     ds = initialised_store.to_dataset(RES)
     # BBOX = (0,0,1000,1000) at 10m → 100 cells each axis

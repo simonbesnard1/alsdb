@@ -152,7 +152,7 @@ def plot_trees(
         ax.add_collection(col)
 
     # Centroids
-    sc = ax.scatter(
+    ax.scatter(
         trees["centroid_x"],
         trees["centroid_y"],
         c=heights,
