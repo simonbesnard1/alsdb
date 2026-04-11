@@ -48,31 +48,39 @@ LAS_ATTRIBUTES: dict[str, type] = {
 # between adjacent sorted coordinate values before ZSTD entropy coding.
 # (DoubleDeltaFilter only accepts integer types in TileDB, so it cannot be used
 # on float64 dimensions.)
-_FILTERS_COORD = tiledb.FilterList([
-    tiledb.ByteShuffleFilter(),
-    tiledb.ZstdFilter(level=9),
-])
+_FILTERS_COORD = tiledb.FilterList(
+    [
+        tiledb.ByteShuffleFilter(),
+        tiledb.ZstdFilter(level=9),
+    ]
+)
 
 # Integer coordinate (Year) — double-delta is ideal for a near-constant integer
 # dimension (differences between consecutive year values are tiny).
-_FILTERS_YEAR = tiledb.FilterList([
-    tiledb.DoubleDeltaFilter(),
-    tiledb.ZstdFilter(level=9),
-])
+_FILTERS_YEAR = tiledb.FilterList(
+    [
+        tiledb.DoubleDeltaFilter(),
+        tiledb.ZstdFilter(level=9),
+    ]
+)
 
 # Floating-point attributes (Z, GpsTime) — not sorted, so byte-shuffle
 # groups the mantissa/exponent bytes before ZSTD.
-_FILTERS_FLOAT = tiledb.FilterList([
-    tiledb.ByteShuffleFilter(),
-    tiledb.ZstdFilter(level=9),
-])
+_FILTERS_FLOAT = tiledb.FilterList(
+    [
+        tiledb.ByteShuffleFilter(),
+        tiledb.ZstdFilter(level=9),
+    ]
+)
 
 # Integer attributes with values that rarely use the full bit width
 # (Intensity uint16, PointSourceId uint16, ReturnNumber uint8, …).
-_FILTERS_INT = tiledb.FilterList([
-    tiledb.BitWidthReductionFilter(),
-    tiledb.ZstdFilter(level=9),
-])
+_FILTERS_INT = tiledb.FilterList(
+    [
+        tiledb.BitWidthReductionFilter(),
+        tiledb.ZstdFilter(level=9),
+    ]
+)
 
 # Fallback for any attribute type not covered above.
 _FILTERS_DEFAULT = tiledb.FilterList([tiledb.ZstdFilter(level=9)])
@@ -84,22 +92,42 @@ _FILTERS_DEFAULT = tiledb.FilterList([tiledb.ZstdFilter(level=9)])
 # ---------------------------------------------------------------------------
 _CRS_DOMAINS: dict[str, dict] = {
     # ETRS89 / UTM Zone 30N — Iberian Peninsula (PNOA)
-    "EPSG:25830": dict(domain_min_x=100_000, domain_max_x=900_000,
-                       domain_min_y=3_000_000, domain_max_y=9_999_900),
+    "EPSG:25830": dict(
+        domain_min_x=100_000,
+        domain_max_x=900_000,
+        domain_min_y=3_000_000,
+        domain_max_y=9_999_900,
+    ),
     # RD New — Netherlands (AHN)
-    "EPSG:28992": dict(domain_min_x=-7_000, domain_max_x=300_000,
-                       domain_min_y=289_000, domain_max_y=629_000),
+    "EPSG:28992": dict(
+        domain_min_x=-7_000,
+        domain_max_x=300_000,
+        domain_min_y=289_000,
+        domain_max_y=629_000,
+    ),
     # Lambert 93 — France (IGN)
-    "EPSG:2154":  dict(domain_min_x=99_000, domain_max_x=1_242_000,
-                       domain_min_y=6_049_000, domain_max_y=7_111_000),
+    "EPSG:2154": dict(
+        domain_min_x=99_000,
+        domain_max_x=1_242_000,
+        domain_min_y=6_049_000,
+        domain_max_y=7_111_000,
+    ),
     # British National Grid — UK (EA)
-    "EPSG:27700": dict(domain_min_x=-100_000, domain_max_x=700_000,
-                       domain_min_y=0, domain_max_y=1_300_000),
+    "EPSG:27700": dict(
+        domain_min_x=-100_000,
+        domain_max_x=700_000,
+        domain_min_y=0,
+        domain_max_y=1_300_000,
+    ),
     # Global fallback — covers any projected CRS in metres (UTM, Mercator,
     # national grids, etc.).  Values are set to ±20 000 km, which safely
     # includes the most extreme projected coordinates on Earth.
-    "_global":    dict(domain_min_x=-20_000_000, domain_max_x=20_000_000,
-                       domain_min_y=-20_000_000, domain_max_y=20_000_000),
+    "_global": dict(
+        domain_min_x=-20_000_000,
+        domain_max_x=20_000_000,
+        domain_min_y=-20_000_000,
+        domain_max_y=20_000_000,
+    ),
 }
 
 
@@ -192,13 +220,25 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
         returns at the same XY within a single survey.
     """
     # Float attributes that benefit from byte-shuffle before ZSTD.
-    _float_attrs  = {"Z", "GpsTime"}
+    _float_attrs = {"Z", "GpsTime"}
     # Integer attributes that rarely saturate their bit width.
-    _int_attrs    = {
-        "Intensity", "PointSourceId", "ReturnNumber", "NumberOfReturns",
-        "ScanDirectionFlag", "EdgeOfFlightLine", "Classification",
-        "ScanAngleRank", "UserData", "Red", "Green", "Blue",
-        "Synthetic", "KeyPoint", "Withheld", "Overlap",
+    _int_attrs = {
+        "Intensity",
+        "PointSourceId",
+        "ReturnNumber",
+        "NumberOfReturns",
+        "ScanDirectionFlag",
+        "EdgeOfFlightLine",
+        "Classification",
+        "ScanAngleRank",
+        "UserData",
+        "Red",
+        "Green",
+        "Blue",
+        "Synthetic",
+        "KeyPoint",
+        "Withheld",
+        "Overlap",
     }
 
     def _attr_filters(name: str) -> tiledb.FilterList:
@@ -214,21 +254,21 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
             domain=(cfg.domain_min_x, cfg.domain_max_x),
             tile=cfg.tile_extent_x,
             dtype=np.float64,
-            filters=_FILTERS_COORD,   # ByteShuffle → Zstd (float64 compatible)
+            filters=_FILTERS_COORD,  # ByteShuffle → Zstd (float64 compatible)
         ),
         tiledb.Dim(
             name="Y",
             domain=(cfg.domain_min_y, cfg.domain_max_y),
             tile=cfg.tile_extent_y,
             dtype=np.float64,
-            filters=_FILTERS_COORD,   # ByteShuffle → Zstd
+            filters=_FILTERS_COORD,  # ByteShuffle → Zstd
         ),
         tiledb.Dim(
             name="Year",
             domain=(cfg.year_min, cfg.year_max),
             tile=1,
             dtype=np.int16,
-            filters=_FILTERS_YEAR,    # DoubleDelta → Zstd (int16 compatible)
+            filters=_FILTERS_YEAR,  # DoubleDelta → Zstd (int16 compatible)
         ),
     )
     attrs = [

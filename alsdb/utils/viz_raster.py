@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _read_from_store(
     store: "ALSZarrStore",
     variable: str,
@@ -90,14 +91,14 @@ def _read_from_store(
 
     grid = da.values.astype(np.float32)  # (ny, nx)
 
-    x = ds.x.values          # ascending cell centres
-    y = ds.y.values           # descending cell centres (north-up)
+    x = ds.x.values  # ascending cell centres
+    y = ds.y.values  # descending cell centres (north-up)
     half = resolution / 2.0
     extent = [
-        float(x[0]  - half),   # x_min
-        float(x[-1] + half),   # x_max
-        float(y[-1] - half),   # y_min (southernmost edge)
-        float(y[0]  + half),   # y_max (northernmost edge)
+        float(x[0] - half),  # x_min
+        float(x[-1] + half),  # x_max
+        float(y[-1] - half),  # y_min (southernmost edge)
+        float(y[0] + half),  # y_max (northernmost edge)
     ]
     return grid, extent
 
@@ -111,8 +112,9 @@ def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
     filled = np.where(np.isnan(grid), np.nanmin(grid), grid)
     norm = plt.Normalize(vmin=np.nanmin(grid), vmax=np.nanmax(grid))
     cmap_obj = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
-    return ls.shade(filled, cmap=cmap_obj, norm=norm,
-                    vert_exag=vert_exag, blend_mode="soft")
+    return ls.shade(
+        filled, cmap=cmap_obj, norm=norm, vert_exag=vert_exag, blend_mode="soft"
+    )
 
 
 def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
@@ -123,6 +125,7 @@ def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
 # ---------------------------------------------------------------------------
 # Individual product plots
 # ---------------------------------------------------------------------------
+
 
 def plot_chm(
     store: "ALSZarrStore",
@@ -162,13 +165,25 @@ def plot_chm(
     valid = grid[~np.isnan(grid)]
     if vmax is None:
         veg = valid[valid > 0.5]
-        vmax = float(np.percentile(veg, 98)) if veg.size else float(np.nanmax(valid)) if valid.size else 30.0
+        vmax = (
+            float(np.percentile(veg, 98))
+            if veg.size
+            else float(np.nanmax(valid)) if valid.size else 30.0
+        )
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        grid,
+        extent=extent,
+        origin="upper",
+        aspect="equal",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
     plt.colorbar(im, ax=ax, label="Height above ground (m)", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
@@ -220,8 +235,14 @@ def plot_dtm(
         rgb = _hillshade_blend(grid, cmap, vert_exag=vert_exag)
         ax.imshow(rgb, extent=extent, origin="upper", aspect="equal")
     else:
-        im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                       cmap=cmap, interpolation="nearest")
+        im = ax.imshow(
+            grid,
+            extent=extent,
+            origin="upper",
+            aspect="equal",
+            cmap=cmap,
+            interpolation="nearest",
+        )
         plt.colorbar(im, ax=ax, label="Elevation (m)", shrink=0.7)
 
     ax.set_xlabel("Easting (m)")
@@ -274,8 +295,14 @@ def plot_dsm(
         rgb = _hillshade_blend(grid, cmap, vert_exag=vert_exag)
         ax.imshow(rgb, extent=extent, origin="upper", aspect="equal")
     else:
-        im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                       cmap=cmap, interpolation="nearest")
+        im = ax.imshow(
+            grid,
+            extent=extent,
+            origin="upper",
+            aspect="equal",
+            cmap=cmap,
+            interpolation="nearest",
+        )
         plt.colorbar(im, ax=ax, label="Elevation (m)", shrink=0.7)
 
     ax.set_xlabel("Easting (m)")
@@ -325,8 +352,16 @@ def plot_agb(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        grid,
+        extent=extent,
+        origin="upper",
+        aspect="equal",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
     plt.colorbar(im, ax=ax, label="AGB (Mg ha⁻¹)", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
@@ -372,8 +407,16 @@ def plot_gap(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        grid,
+        extent=extent,
+        origin="upper",
+        aspect="equal",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
     plt.colorbar(im, ax=ax, label="Gap fraction", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
@@ -422,8 +465,16 @@ def plot_lai(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                   cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        grid,
+        extent=extent,
+        origin="upper",
+        aspect="equal",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
     plt.colorbar(im, ax=ax, label="Effective LAI (m² m⁻²)", shrink=0.7)
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
@@ -468,12 +519,20 @@ def plot_metrics(
 
     _default_metrics = ["h50", "h75", "h95", "hmean", "cc", "density"]
     _cmaps = {
-        "h50": "viridis", "h75": "viridis", "h95": "viridis",
-        "hmean": "viridis", "cc": "YlGn", "density": "plasma",
+        "h50": "viridis",
+        "h75": "viridis",
+        "h95": "viridis",
+        "hmean": "viridis",
+        "cc": "YlGn",
+        "density": "plasma",
     }
     _labels = {
-        "h50": "h50 (m)", "h75": "h75 (m)", "h95": "h95 (m)",
-        "hmean": "Mean height (m)", "cc": "Canopy cover", "density": "Density (pts m⁻²)",
+        "h50": "h50 (m)",
+        "h75": "h75 (m)",
+        "h95": "h95 (m)",
+        "hmean": "Mean height (m)",
+        "cc": "Canopy cover",
+        "density": "Density (pts m⁻²)",
     }
 
     vars_to_plot = variables or _default_metrics
@@ -496,8 +555,16 @@ def plot_metrics(
         valid = grid[~np.isnan(grid)]
         vmax = float(np.percentile(valid, 98)) if valid.size else 1.0
         cmap = _cmaps.get(var, "viridis")
-        im = ax.imshow(grid, extent=extent, origin="upper", aspect="equal",
-                       cmap=cmap, vmin=0, vmax=vmax, interpolation="nearest")
+        im = ax.imshow(
+            grid,
+            extent=extent,
+            origin="upper",
+            aspect="equal",
+            cmap=cmap,
+            vmin=0,
+            vmax=vmax,
+            interpolation="nearest",
+        )
         plt.colorbar(im, ax=ax, label=_labels.get(var, var), shrink=0.7)
         ax.set_xlabel("Easting (m)")
         ax.set_ylabel("Northing (m)")
@@ -516,6 +583,7 @@ def plot_metrics(
 # ---------------------------------------------------------------------------
 # Multi-panel overviews
 # ---------------------------------------------------------------------------
+
 
 def plot_products(
     store: "ALSZarrStore",
@@ -608,6 +676,8 @@ def plot_products_agb(
     plot_agb(store, resolution=resolution, year=year, ax=axes[3])
 
     year_str = f" ({year})" if year is not None else ""
-    fig.suptitle(title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13)
+    fig.suptitle(
+        title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13
+    )
     fig.tight_layout()
     return fig

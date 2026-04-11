@@ -50,8 +50,14 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from alsdb.processing._tiling import (
-    array_crs, array_data_bbox, attach_hag, check_bbox_overlap,
-    check_year_exists, query_to_array, run_tiled, tile_bboxes,
+    array_crs,
+    array_data_bbox,
+    attach_hag,
+    check_bbox_overlap,
+    check_year_exists,
+    query_to_array,
+    run_tiled,
+    tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -60,15 +66,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_GROUND_CLASS  = 2
-_VEG_CLASSES   = (3, 4, 5)
+_GROUND_CLASS = 2
+_VEG_CLASSES = (3, 4, 5)
 _LAI_K_DEFAULT = 0.5
-_LAI_MAX       = 10.0   # physical ceiling — avoids ln(0) → -inf artefacts
+_LAI_MAX = 10.0  # physical ceiling — avoids ln(0) → -inf artefacts
 
 
 # ---------------------------------------------------------------------------
 # Core metric computation
 # ---------------------------------------------------------------------------
+
 
 def _compute_gap_grid(
     points: np.ndarray,
@@ -90,18 +97,20 @@ def _compute_gap_grid(
     y_edges = np.linspace(min_y, max_y, ny + 1)
     bins = [x_edges, y_edges]
 
-    fr    = points["ReturnNumber"] == 1
-    x_fr  = points["X"][fr]
-    y_fr  = points["Y"][fr]
+    fr = points["ReturnNumber"] == 1
+    x_fr = points["X"][fr]
+    y_fr = points["Y"][fr]
     cls_fr = points["Classification"][fr]
 
-    gnd  = (cls_fr == _GROUND_CLASS).astype(np.float32)
-    veg  = np.isin(cls_fr, _VEG_CLASSES).astype(np.float32)
+    gnd = (cls_fr == _GROUND_CLASS).astype(np.float32)
+    veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float32)
     ones = np.ones(fr.sum(), dtype=np.float32)
 
-    n_gnd = binned_statistic_2d(x_fr, y_fr, gnd,  statistic="sum",   bins=bins).statistic
-    n_veg = binned_statistic_2d(x_fr, y_fr, veg,  statistic="sum",   bins=bins).statistic
-    n_tot = binned_statistic_2d(x_fr, y_fr, ones, statistic="count", bins=bins).statistic
+    n_gnd = binned_statistic_2d(x_fr, y_fr, gnd, statistic="sum", bins=bins).statistic
+    n_veg = binned_statistic_2d(x_fr, y_fr, veg, statistic="sum", bins=bins).statistic
+    n_tot = binned_statistic_2d(
+        x_fr, y_fr, ones, statistic="count", bins=bins
+    ).statistic
 
     with np.errstate(invalid="ignore", divide="ignore"):
         gap = np.where(n_tot > 0, n_gnd / (n_gnd + n_veg), np.nan)
@@ -120,10 +129,11 @@ def _gap_to_lai(gap: np.ndarray, k: float) -> np.ndarray:
 # Per-tile worker
 # ---------------------------------------------------------------------------
 
+
 def _process_tile(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -156,6 +166,7 @@ def _process_tile(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def compute_gap_fraction(
     provider: "TileDBProvider",
@@ -217,8 +228,11 @@ def compute_gap_fraction(
         gap_done = store.has_data("gap", resolution, year)
         lai_done = (not lai) or store.has_data("lai", resolution, year)
         if gap_done and lai_done:
-            logger.info("Gap fraction already present for year %d at %.0f m — skipping",
-                        year, resolution)
+            logger.info(
+                "Gap fraction already present for year %d at %.0f m — skipping",
+                year,
+                resolution,
+            )
             return
     crs = array_crs(provider)
     store.ensure_group("gap", resolution, effective_bbox, crs, tile_size)
@@ -227,9 +241,21 @@ def compute_gap_fraction(
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
         "Computing gap fraction  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
-        resolution, len(tiles), n_workers, year,
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
         ", LAI" if lai else "",
     )
 
-    run_tiled(_process_tile, provider, tiles, store, n_workers,
-              resolution=resolution, year=year, lai=lai, k=k)
+    run_tiled(
+        _process_tile,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+        lai=lai,
+        k=k,
+    )

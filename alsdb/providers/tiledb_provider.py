@@ -60,9 +60,13 @@ class TileDBProvider:
             if not uri:
                 raise ValueError("'uri' must be provided when storage_type='s3'.")
             if not url:
-                raise ValueError("'url' (S3 endpoint) must be provided when storage_type='s3'.")
+                raise ValueError(
+                    "'url' (S3 endpoint) must be provided when storage_type='s3'."
+                )
             self.array_uri = uri
-            self._raw_cfg, self.ctx = self._initialize_s3_context(credentials, url, region)
+            self._raw_cfg, self.ctx = self._initialize_s3_context(
+                credentials, url, region
+            )
 
         elif self.storage_type == "local":
             if not uri:
@@ -102,7 +106,7 @@ class TileDBProvider:
             "vfs.s3.use_virtual_addressing": "false",
             # Multipart upload — required for large LAZ files
             "vfs.s3.use_multipart_upload": "true",
-            "vfs.s3.multipart_part_size": "52428800",   # 50 MB
+            "vfs.s3.multipart_part_size": "52428800",  # 50 MB
             "vfs.s3.multipart_threshold": "52428800",
             "vfs.s3.max_parallel_ops": "8",
             # Timeouts and retries
@@ -127,8 +131,8 @@ class TileDBProvider:
 
     def _initialize_local_context(self) -> tuple[Dict[str, str], tiledb.Ctx]:
         cfg = {
-            "py.init_buffer_bytes": str(4 * 1024**3),   # 4 GiB
-            "sm.tile_cache_size": str(4 * 1024**3),     # 4 GiB
+            "py.init_buffer_bytes": str(4 * 1024**3),  # 4 GiB
+            "sm.tile_cache_size": str(4 * 1024**3),  # 4 GiB
             "sm.num_reader_threads": "32",
             "sm.num_tiledb_threads": "32",
             "sm.compute_concurrency_level": "32",

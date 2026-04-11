@@ -164,7 +164,9 @@ def check_year_exists(year: int, provider) -> bool:
         logger.warning(
             "Requested year %d is outside the stored year range [%d, %d] "
             "— nothing will be computed.",
-            year, y_min, y_max,
+            year,
+            y_min,
+            y_max,
         )
         return False
     return True
@@ -202,8 +204,14 @@ def check_bbox_overlap(
             "Requested bbox (%.0f, %.0f, %.0f, %.0f) does not overlap "
             "the stored data extent (%.0f, %.0f, %.0f, %.0f) — "
             "nothing will be computed.",
-            rx0, ry0, rx1, ry1,
-            dx0, dy0, dx1, dy1,
+            rx0,
+            ry0,
+            rx1,
+            ry1,
+            dx0,
+            dy0,
+            dx1,
+            dy1,
         )
         return False
 
@@ -223,8 +231,10 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     """
     stages = [
         {"type": "filters.hag_delaunay"},
-        {"type": "filters.assign",
-         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+        {
+            "type": "filters.assign",
+            "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
+        },
     ]
     p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
     p.execute()
@@ -233,8 +243,9 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     return result
 
 
-def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int,
-              **kwargs) -> None:
+def run_tiled(
+    worker_fn: Callable, provider, tiles, store, n_workers: int, **kwargs
+) -> None:
     """
     Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
 
@@ -252,23 +263,24 @@ def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int,
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = {
                 executor.submit(
-                    worker_fn, provider, query_bbox, crop_bbox, store, idx,
-                    **kwargs
+                    worker_fn, provider, query_bbox, crop_bbox, store, idx, **kwargs
                 ): idx
                 for idx, (query_bbox, crop_bbox) in enumerate(tiles)
             }
             for future in as_completed(futures):
-                future.result()   # re-raise worker exceptions
+                future.result()  # re-raise worker exceptions
 
 
 def tile_bboxes(
     bbox: tuple[float, float, float, float],
     tile_size: float,
     buffer: float,
-) -> list[tuple[
-    tuple[float, float, float, float],
-    tuple[float, float, float, float],
-]]:
+) -> list[
+    tuple[
+        tuple[float, float, float, float],
+        tuple[float, float, float, float],
+    ]
+]:
     """
     Partition *bbox* into a grid of sub-tiles.
 
@@ -302,10 +314,8 @@ def tile_bboxes(
             cx1 = min_x + (col + 1) * tile_size if col < cols - 1 else max_x
             cy1 = min_y + (row + 1) * tile_size if row < rows - 1 else max_y
 
-            crop_bbox  = (cx0, cy0, cx1, cy1)
+            crop_bbox = (cx0, cy0, cx1, cy1)
             query_bbox = (cx0 - buffer, cy0 - buffer, cx1 + buffer, cy1 + buffer)
             tiles.append((query_bbox, crop_bbox))
 
     return tiles
-
-

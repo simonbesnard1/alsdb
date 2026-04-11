@@ -46,10 +46,12 @@ class Tile:
         """Lazily load and cache full PDAL pipeline metadata (runs ``filters.stats``)."""
         if self._metadata is None:
             pipeline = pdal.Pipeline(
-                json.dumps([
-                    {"type": "readers.las", "filename": str(self._path)},
-                    {"type": "filters.stats"},
-                ])
+                json.dumps(
+                    [
+                        {"type": "readers.las", "filename": str(self._path)},
+                        {"type": "filters.stats"},
+                    ]
+                )
             )
             pipeline.execute()
             meta = pipeline.metadata

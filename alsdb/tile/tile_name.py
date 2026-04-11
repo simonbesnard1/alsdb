@@ -9,10 +9,10 @@ from typing import Optional, Protocol, runtime_checkable
 
 from alsdb.utils.constants import PNOA_TILE_SIZE_M
 
-
 # ---------------------------------------------------------------------------
 # Protocol — the interface every tile-name implementation must satisfy
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class TileNameBase(Protocol):
@@ -96,9 +96,7 @@ def parse_tile_filename(filename: str | Path) -> PNOATileName:
     stem = Path(filename).name
     match = PNOA_FILENAME_PATTERN.match(stem)
     if match is None:
-        raise ValueError(
-            f"Filename {stem!r} does not match the expected PNOA pattern."
-        )
+        raise ValueError(f"Filename {stem!r} does not match the expected PNOA pattern.")
     return PNOATileName(
         year=int(match.group("year")),
         region=match.group("region"),
@@ -233,6 +231,7 @@ def _parse_crs(srs: dict) -> str:
 
     try:
         from pyproj import CRS as ProjCRS
+
         crs_obj = ProjCRS.from_wkt(wkt)
         epsg = crs_obj.to_epsg()
         if epsg:

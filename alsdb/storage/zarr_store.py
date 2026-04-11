@@ -103,7 +103,7 @@ class ALSZarrStore:
 
         self.path = Path(path)
         self._root = zarr.open_group(str(path), mode=mode)
-        self._lock = threading.Lock()   # protects time-axis resize + group init
+        self._lock = threading.Lock()  # protects time-axis resize + group init
 
     # ------------------------------------------------------------------
     # Factory
@@ -142,8 +142,9 @@ class ALSZarrStore:
         store._root.attrs.update({"bbox": list(bbox), "crs_wkt": crs_wkt})
 
         for res_key, var_names in variables.items():
-            store._init_group(res_key, bbox, crs_wkt, var_names, tile_size,
-                              root=store._root)
+            store._init_group(
+                res_key, bbox, crs_wkt, var_names, tile_size, root=store._root
+            )
 
         return cls(path, mode="a")
 
@@ -172,25 +173,25 @@ class ALSZarrStore:
         chunk_nx = min(nx, max(1, int(tile_size / res)))
 
         grp = root.require_group(res_key)
-        grp.attrs.update({
-            "resolution": res,
-            "x_origin":   min_x,
-            "y_origin":   max_y,    # top-left corner, north-up
-            "nx":         nx,
-            "ny":         ny,
-            "crs_wkt":    crs_wkt,
-        })
+        grp.attrs.update(
+            {
+                "resolution": res,
+                "x_origin": min_x,
+                "y_origin": max_y,  # top-left corner, north-up
+                "nx": nx,
+                "ny": ny,
+                "crs_wkt": crs_wkt,
+            }
+        )
 
         # Coordinate arrays (cell centres, written once)
         if "x" not in grp:
             x_coords = min_x + (np.arange(nx, dtype=np.float64) + 0.5) * res
-            x_arr = grp.create_array("x", shape=(nx,), dtype=np.float64,
-                                     chunks=(nx,))
+            x_arr = grp.create_array("x", shape=(nx,), dtype=np.float64, chunks=(nx,))
             x_arr[:] = x_coords
         if "y" not in grp:
             y_coords = max_y - (np.arange(ny, dtype=np.float64) + 0.5) * res
-            y_arr = grp.create_array("y", shape=(ny,), dtype=np.float64,
-                                     chunks=(ny,))
+            y_arr = grp.create_array("y", shape=(ny,), dtype=np.float64, chunks=(ny,))
             y_arr[:] = y_coords
         if "time" not in grp:
             grp.create_array("time", shape=(0,), chunks=(1,), dtype=np.int32)
@@ -210,7 +211,12 @@ class ALSZarrStore:
         logger.info(
             "ALSZarrStore: initialised group '%s'  (%d×%d px, "
             "chunk %d×%d, vars: %s)",
-            res_key, ny, nx, chunk_ny, chunk_nx, ", ".join(var_names),
+            res_key,
+            ny,
+            nx,
+            chunk_ny,
+            chunk_nx,
+            ", ".join(var_names),
         )
 
     def ensure_group(
@@ -261,8 +267,9 @@ class ALSZarrStore:
                     fill_value=np.nan,
                 )
                 arr.attrs["_FillValue"] = "NaN"
-                logger.info("ALSZarrStore: added variable '%s' to group '%s'",
-                            variable, res_key)
+                logger.info(
+                    "ALSZarrStore: added variable '%s' to group '%s'", variable, res_key
+                )
 
     # ------------------------------------------------------------------
     # Writing
@@ -297,11 +304,11 @@ class ALSZarrStore:
         """
         res_key = _res_str(resolution)
         grp = self._root[res_key]
-        attrs     = dict(grp.attrs)
-        x_origin  = float(attrs["x_origin"])
-        y_origin  = float(attrs["y_origin"])
-        ny_store  = int(attrs["ny"])
-        nx_store  = int(attrs["nx"])
+        attrs = dict(grp.attrs)
+        x_origin = float(attrs["x_origin"])
+        y_origin = float(attrs["y_origin"])
+        ny_store = int(attrs["ny"])
+        nx_store = int(attrs["nx"])
 
         cx0, cy0, cx1, cy1 = crop_bbox
 
@@ -323,8 +330,8 @@ class ALSZarrStore:
 
         tile_ny = row1 - row0
         tile_nx = col1 - col0
-        grp[variable][t_idx, row0:row1, col0:col1] = (
-            data[:tile_ny, :tile_nx].astype(np.float32)
+        grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(
+            np.float32
         )
 
     def _upsert_year(self, grp, year: int) -> int:
@@ -335,7 +342,9 @@ class ALSZarrStore:
         """
         with self._lock:
             time_arr = grp["time"]
-            existing = time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
+            existing = (
+                time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
+            )
             match = np.where(existing == year)[0]
 
             if len(match):
@@ -376,18 +385,18 @@ class ALSZarrStore:
         import xarray as xr
 
         res_key = _res_str(resolution)
-        grp     = self._root[res_key]
-        attrs   = dict(grp.attrs)
+        grp = self._root[res_key]
+        attrs = dict(grp.attrs)
 
         time_vals = grp["time"][:]
-        x_vals    = grp["x"][:]
-        y_vals    = grp["y"][:]
-        crs_wkt   = attrs.get("crs_wkt", "")
+        x_vals = grp["x"][:]
+        y_vals = grp["y"][:]
+        crs_wkt = attrs.get("crs_wkt", "")
 
         coords = {
             "time": ("time", time_vals),
-            "y":    ("y",    y_vals),
-            "x":    ("x",    x_vals),
+            "y": ("y", y_vals),
+            "x": ("x", x_vals),
         }
 
         data_vars: dict = {}
@@ -407,6 +416,7 @@ class ALSZarrStore:
         if crs_wkt:
             try:
                 import rioxarray  # noqa: F401
+
                 ds = ds.rio.write_crs(crs_wkt)
             except ImportError:
                 pass

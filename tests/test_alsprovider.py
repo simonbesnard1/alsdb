@@ -64,7 +64,10 @@ def test_query_tile_matches_bbox(array_uri):
 def test_query_attribute_subset(array_uri):
     provider = ALSProvider(storage_type="local", uri=array_uri)
     df = provider.query_bbox(
-        308_000.0, 4_688_000.0, 310_000.0, 4_690_000.0,
+        308_000.0,
+        4_688_000.0,
+        310_000.0,
+        4_690_000.0,
         attributes=["Z", "Classification"],
     )
     assert "Z" in df.columns

@@ -11,8 +11,7 @@ from alsdb.utils.viz import plot_pointcloud_3d
 from alsdb.utils.viz import plot_overview, plot_dsm, plot_rgb
 
 # # Query
-provider = ALSProvider(storage_type="local", 
-                       uri="array_")
+provider = ALSProvider(storage_type="local", uri="array_")
 df = provider.query_tile(308, 4690)
 df = provider.query_bbox(
     min_x=308_000,

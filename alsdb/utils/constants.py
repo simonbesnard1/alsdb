@@ -26,5 +26,5 @@ class ALSProduct(Enum):
 PNOA_TILE_SIZE_M: float = 2000.0
 
 # Coordinate reference systems
-UTM30N = "EPSG:25830"   # ETRS89 / UTM Zone 30N — native CRS of the PNOA data
+UTM30N = "EPSG:25830"  # ETRS89 / UTM Zone 30N — native CRS of the PNOA data
 WGS84 = "EPSG:4326"

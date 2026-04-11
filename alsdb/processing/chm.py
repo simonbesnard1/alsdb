@@ -47,8 +47,13 @@ import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
-    array_crs, array_data_bbox, check_bbox_overlap, check_year_exists,
-    query_to_array, run_tiled, tile_bboxes,
+    array_crs,
+    array_data_bbox,
+    check_bbox_overlap,
+    check_year_exists,
+    query_to_array,
+    run_tiled,
+    tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -58,12 +63,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
-_VEG_CLASSES  = (3, 4, 5)
+_VEG_CLASSES = (3, 4, 5)
 
 
 # ---------------------------------------------------------------------------
 # Numpy rasteriser
 # ---------------------------------------------------------------------------
+
 
 def _rasterise(
     x: np.ndarray,
@@ -88,15 +94,20 @@ def _rasterise(
     y_edges = np.linspace(cy0, cy1, ny + 1)
 
     grid = binned_statistic_2d(
-        x, y, values, statistic=statistic, bins=[x_edges, y_edges],
-    ).statistic                              # shape (nx, ny)
+        x,
+        y,
+        values,
+        statistic=statistic,
+        bins=[x_edges, y_edges],
+    ).statistic  # shape (nx, ny)
 
-    return np.flipud(grid.T).astype(np.float32)   # → (ny, nx) north-up
+    return np.flipud(grid.T).astype(np.float32)  # → (ny, nx) north-up
 
 
 # ---------------------------------------------------------------------------
 # PDAL helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(stages: list, arr: np.ndarray) -> np.ndarray:
     """Execute a PDAL pipeline and return the output point array."""
@@ -109,10 +120,11 @@ def _run(stages: list, arr: np.ndarray) -> np.ndarray:
 # Per-tile workers
 # ---------------------------------------------------------------------------
 
+
 def _process_tile_chm(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -133,10 +145,11 @@ def _process_tile_chm(
     stages = [
         {"type": "filters.hag_delaunay"},
         {"type": "filters.range", "limits": veg_limits},
-        {"type": "filters.assign",
-         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
-        {"type": "filters.crop",
-         "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        {
+            "type": "filters.assign",
+            "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
+        },
+        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
     ]
     try:
         points = _run(stages, arr)
@@ -150,8 +163,12 @@ def _process_tile_chm(
         return
 
     grid = _rasterise(
-        points["X"], points["Y"], points["HeightAboveGround"],
-        crop_bbox, resolution, statistic="max",
+        points["X"],
+        points["Y"],
+        points["HeightAboveGround"],
+        crop_bbox,
+        resolution,
+        statistic="max",
     )
     store.write_tile("chm", resolution, year, grid, crop_bbox)
     logger.debug("CHM tile %d written", tile_index)
@@ -160,7 +177,7 @@ def _process_tile_chm(
 def _process_tile_dtm(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -173,10 +190,11 @@ def _process_tile_dtm(
 
     cx0, cy0, cx1, cy1 = crop_bbox
     stages = [
-        {"type": "filters.range",
-         "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
-        {"type": "filters.crop",
-         "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        {
+            "type": "filters.range",
+            "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
+        },
+        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
     ]
     try:
         points = _run(stages, arr)
@@ -190,8 +208,12 @@ def _process_tile_dtm(
         return
 
     grid = _rasterise(
-        points["X"], points["Y"], points["Z"],
-        crop_bbox, resolution, statistic="max",
+        points["X"],
+        points["Y"],
+        points["Z"],
+        crop_bbox,
+        resolution,
+        statistic="max",
     )
     store.write_tile("dtm", resolution, year, grid, crop_bbox)
     logger.debug("DTM tile %d written", tile_index)
@@ -200,7 +222,7 @@ def _process_tile_dtm(
 def _process_tile_dsm(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -216,8 +238,7 @@ def _process_tile_dsm(
     stages: list = []
     if first_returns_only:
         stages.append({"type": "filters.range", "limits": "ReturnNumber[1:1]"})
-    stages.append({"type": "filters.crop",
-                   "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
+    stages.append({"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
     try:
         points = _run(stages, arr)
     except RuntimeError as exc:
@@ -230,8 +251,12 @@ def _process_tile_dsm(
         return
 
     grid = _rasterise(
-        points["X"], points["Y"], points["Z"],
-        crop_bbox, resolution, statistic="max",
+        points["X"],
+        points["Y"],
+        points["Z"],
+        crop_bbox,
+        resolution,
+        statistic="max",
     )
     store.write_tile("dsm", resolution, year, grid, crop_bbox)
     logger.debug("DSM tile %d written", tile_index)
@@ -241,10 +266,11 @@ def _process_tile_dsm(
 # Combined tile worker (used by compute_all)
 # ---------------------------------------------------------------------------
 
+
 def _process_tile_all(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -275,18 +301,24 @@ def _process_tile_all(
     # --- DTM (ground points, max Z) —— no HAG needed --------------------
     if need_dtm:
         stages = [
-            {"type": "filters.range",
-             "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"},
-            {"type": "filters.crop",
-             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+            {
+                "type": "filters.range",
+                "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
+            },
+            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
         ]
         try:
             pts = _run(stages, arr)
             if len(pts):
-                store.write_tile("dtm", resolution, year,
-                                 _rasterise(pts["X"], pts["Y"], pts["Z"],
-                                            crop_bbox, resolution, "max"),
-                                 crop_bbox)
+                store.write_tile(
+                    "dtm",
+                    resolution,
+                    year,
+                    _rasterise(
+                        pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"
+                    ),
+                    crop_bbox,
+                )
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():
                 raise
@@ -295,16 +327,20 @@ def _process_tile_all(
     if need_dsm:
         stages = [
             {"type": "filters.range", "limits": "ReturnNumber[1:1]"},
-            {"type": "filters.crop",
-             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
         ]
         try:
             pts = _run(stages, arr)
             if len(pts):
-                store.write_tile("dsm", resolution, year,
-                                 _rasterise(pts["X"], pts["Y"], pts["Z"],
-                                            crop_bbox, resolution, "max"),
-                                 crop_bbox)
+                store.write_tile(
+                    "dsm",
+                    resolution,
+                    year,
+                    _rasterise(
+                        pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"
+                    ),
+                    crop_bbox,
+                )
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():
                 raise
@@ -317,30 +353,46 @@ def _process_tile_all(
         stages = [
             {"type": "filters.hag_delaunay"},
             {"type": "filters.range", "limits": veg_limits},
-            {"type": "filters.assign",
-             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
-            {"type": "filters.crop",
-             "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+            {
+                "type": "filters.assign",
+                "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
+            },
+            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
         ]
         try:
             pts = _run(stages, arr)
             if len(pts):
-                store.write_tile("chm", resolution, year,
-                                 _rasterise(pts["X"], pts["Y"],
-                                            pts["HeightAboveGround"],
-                                            crop_bbox, resolution, "max"),
-                                 crop_bbox)
+                store.write_tile(
+                    "chm",
+                    resolution,
+                    year,
+                    _rasterise(
+                        pts["X"],
+                        pts["Y"],
+                        pts["HeightAboveGround"],
+                        crop_bbox,
+                        resolution,
+                        "max",
+                    ),
+                    crop_bbox,
+                )
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():
                 raise
 
-    logger.debug("All tile %d written (dtm=%s dsm=%s chm=%s)",
-                 tile_index, need_dtm, need_dsm, need_chm)
+    logger.debug(
+        "All tile %d written (dtm=%s dsm=%s chm=%s)",
+        tile_index,
+        need_dtm,
+        need_dsm,
+        need_chm,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def compute_chm(
     provider: "TileDBProvider",
@@ -393,19 +445,35 @@ def compute_chm(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None and store.has_data("chm", resolution, year):
-        logger.info("CHM already present for year %d at %.1f m — skipping "
-                    "(pass overwrite=True to recompute)", year, resolution)
+        logger.info(
+            "CHM already present for year %d at %.1f m — skipping "
+            "(pass overwrite=True to recompute)",
+            year,
+            resolution,
+        )
         return
-    store.ensure_group("chm", resolution, effective_bbox,
-                       array_crs(provider), tile_size)
+    store.ensure_group(
+        "chm", resolution, effective_bbox, array_crs(provider), tile_size
+    )
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
         "Computing CHM  (%.1f m, %d tile(s), %d worker(s), year=%s, first_returns=%s)",
-        resolution, len(tiles), n_workers, year, first_returns_only,
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+        first_returns_only,
     )
-    run_tiled(_process_tile_chm, provider, tiles, store, n_workers,
-               resolution=resolution, year=year,
-               first_returns_only=first_returns_only)
+    run_tiled(
+        _process_tile_chm,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+        first_returns_only=first_returns_only,
+    )
 
 
 def compute_dtm(
@@ -448,15 +516,30 @@ def compute_dtm(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None and store.has_data("dtm", resolution, year):
-        logger.info("DTM already present for year %d at %.1f m — skipping", year, resolution)
+        logger.info(
+            "DTM already present for year %d at %.1f m — skipping", year, resolution
+        )
         return
-    store.ensure_group("dtm", resolution, effective_bbox,
-                       array_crs(provider), tile_size)
+    store.ensure_group(
+        "dtm", resolution, effective_bbox, array_crs(provider), tile_size
+    )
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
-    logger.info("Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
-                resolution, len(tiles), n_workers, year)
-    run_tiled(_process_tile_dtm, provider, tiles, store, n_workers,
-               resolution=resolution, year=year)
+    logger.info(
+        "Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+    )
+    run_tiled(
+        _process_tile_dtm,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+    )
 
 
 def compute_dsm(
@@ -502,16 +585,31 @@ def compute_dsm(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None and store.has_data("dsm", resolution, year):
-        logger.info("DSM already present for year %d at %.1f m — skipping", year, resolution)
+        logger.info(
+            "DSM already present for year %d at %.1f m — skipping", year, resolution
+        )
         return
-    store.ensure_group("dsm", resolution, effective_bbox,
-                       array_crs(provider), tile_size)
+    store.ensure_group(
+        "dsm", resolution, effective_bbox, array_crs(provider), tile_size
+    )
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
-    logger.info("Computing DSM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
-                resolution, len(tiles), n_workers, year)
-    run_tiled(_process_tile_dsm, provider, tiles, store, n_workers,
-               resolution=resolution, year=year,
-               first_returns_only=first_returns_only)
+    logger.info(
+        "Computing DSM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+    )
+    run_tiled(
+        _process_tile_dsm,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+        first_returns_only=first_returns_only,
+    )
 
 
 def compute_all(
@@ -570,7 +668,9 @@ def compute_all(
     if not (need_dtm or need_dsm or need_chm):
         logger.info(
             "compute_all: DTM, DSM and CHM already present for year %d at %.1f m "
-            "— nothing to do (pass overwrite=True to recompute)", year, resolution,
+            "— nothing to do (pass overwrite=True to recompute)",
+            year,
+            resolution,
         )
         return
 
@@ -589,12 +689,24 @@ def compute_all(
     logger.info(
         "compute_all  (%.1f m, %d tile(s), %d worker(s), year=%s, "
         "dtm=%s dsm=%s chm=%s)",
-        resolution, len(tiles), n_workers, year,
-        need_dtm, need_dsm, need_chm,
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+        need_dtm,
+        need_dsm,
+        need_chm,
     )
     run_tiled(
-        _process_tile_all, provider, tiles, store, n_workers,
-        resolution=resolution, year=year,
+        _process_tile_all,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
         first_returns_only=first_returns_only,
-        need_dtm=need_dtm, need_dsm=need_dsm, need_chm=need_chm,
+        need_dtm=need_dtm,
+        need_dsm=need_dsm,
+        need_chm=need_chm,
     )

@@ -29,23 +29,24 @@ import pandas as pd
 
 # LAS classification code → (label, hex colour)
 _LAS_CLASSES: dict[int, tuple[str, str]] = {
-    0:  ("Never classified", "#aaaaaa"),
-    1:  ("Unclassified",      "#cccccc"),
-    2:  ("Ground",            "#8b5e3c"),
-    3:  ("Low vegetation",    "#a8d08d"),
-    4:  ("Medium vegetation", "#538135"),
-    5:  ("High vegetation",   "#1f5c00"),
-    6:  ("Building",          "#c00000"),
-    7:  ("Low noise",         "#ff66cc"),
-    9:  ("Water",             "#4472c4"),
-    11: ("Road surface",      "#f4b942"),
-    17: ("Bridge deck",       "#e06c00"),
+    0: ("Never classified", "#aaaaaa"),
+    1: ("Unclassified", "#cccccc"),
+    2: ("Ground", "#8b5e3c"),
+    3: ("Low vegetation", "#a8d08d"),
+    4: ("Medium vegetation", "#538135"),
+    5: ("High vegetation", "#1f5c00"),
+    6: ("Building", "#c00000"),
+    7: ("Low noise", "#ff66cc"),
+    9: ("Water", "#4472c4"),
+    11: ("Road surface", "#f4b942"),
+    17: ("Bridge deck", "#e06c00"),
 }
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _extent(df: pd.DataFrame) -> tuple[float, float, float, float]:
     return float(df.X.min()), float(df.X.max()), float(df.Y.min()), float(df.Y.max())
@@ -56,7 +57,6 @@ def _bin_counts(
     resolution: float,
 ) -> tuple[int, int, np.ndarray, np.ndarray]:
     """Return (nx, ny, x_edges, y_edges) for a given resolution."""
-
 
     x_min, x_max, y_min, y_max = _extent(df)
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
@@ -100,7 +100,9 @@ def rasterize(
     nx, ny, x_edges, y_edges = _bin_counts(df, resolution)
 
     result, _, _, _ = binned_statistic_2d(
-        df.X.to_numpy(), df.Y.to_numpy(), df[field].to_numpy(),
+        df.X.to_numpy(),
+        df.Y.to_numpy(),
+        df[field].to_numpy(),
         statistic=statistic,
         bins=[x_edges, y_edges],
     )
@@ -113,6 +115,7 @@ def rasterize(
 # ---------------------------------------------------------------------------
 # Individual plot functions
 # ---------------------------------------------------------------------------
+
 
 def plot_dsm(
     df: pd.DataFrame,
@@ -154,19 +157,29 @@ def plot_dsm(
 
     if hillshade:
         ls = LightSource(azdeg=315, altdeg=45)
-        hs = ls.hillshade(np.where(np.isnan(dsm), np.nanmin(dsm), dsm),
-                          vert_exag=vert_exag)
+        hs = ls.hillshade(
+            np.where(np.isnan(dsm), np.nanmin(dsm), dsm), vert_exag=vert_exag
+        )
         # Blend elevation colour with hillshade
         cmap_obj = plt.get_cmap(cmap)
         norm = plt.Normalize(vmin=np.nanmin(dsm), vmax=np.nanmax(dsm))
         rgb = ls.shade(
             np.where(np.isnan(dsm), np.nanmin(dsm), dsm),
-            cmap=cmap_obj, norm=norm, vert_exag=vert_exag, blend_mode="soft",
+            cmap=cmap_obj,
+            norm=norm,
+            vert_exag=vert_exag,
+            blend_mode="soft",
         )
         ax.imshow(rgb, extent=extent, aspect="equal", origin="upper")
     else:
-        im = ax.imshow(dsm, extent=extent, aspect="equal", origin="upper",
-                       cmap=cmap, interpolation="nearest")
+        im = ax.imshow(
+            dsm,
+            extent=extent,
+            aspect="equal",
+            origin="upper",
+            cmap=cmap,
+            interpolation="nearest",
+        )
         plt.colorbar(im, ax=ax, label="Elevation (m)", shrink=0.7)
 
     ax.set_xlabel("Easting (m)")
@@ -211,17 +224,18 @@ def plot_rgb(
         stretched[np.isnan(arr)] = 0.0
         return stretched
 
-    r, extent = rasterize(df, "Red",   resolution=resolution, statistic="mean")
-    g, _      = rasterize(df, "Green", resolution=resolution, statistic="mean")
-    b, _      = rasterize(df, "Blue",  resolution=resolution, statistic="mean")
+    r, extent = rasterize(df, "Red", resolution=resolution, statistic="mean")
+    g, _ = rasterize(df, "Green", resolution=resolution, statistic="mean")
+    b, _ = rasterize(df, "Blue", resolution=resolution, statistic="mean")
 
     rgb = np.dstack([_stretch(r), _stretch(g), _stretch(b)])
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    ax.imshow(rgb, extent=extent, aspect="equal", origin="upper",
-              interpolation="nearest")
+    ax.imshow(
+        rgb, extent=extent, aspect="equal", origin="upper", interpolation="nearest"
+    )
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
     ax.set_title(f"RGB orthoimage  —  {resolution} m resolution")
@@ -262,8 +276,16 @@ def plot_intensity(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    ax.imshow(grid, extent=extent, aspect="equal", origin="upper",
-              cmap="gray", vmin=lo, vmax=hi, interpolation="nearest")
+    ax.imshow(
+        grid,
+        extent=extent,
+        aspect="equal",
+        origin="upper",
+        cmap="gray",
+        vmin=lo,
+        vmax=hi,
+        interpolation="nearest",
+    )
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
     ax.set_title(f"Intensity  —  {resolution} m resolution")
@@ -295,13 +317,13 @@ def plot_classification(
     import matplotlib.patches as mpatches
     from matplotlib.colors import ListedColormap
 
-    grid, extent = rasterize(df, "Classification", resolution=resolution,
-                             statistic="mean")
+    grid, extent = rasterize(
+        df, "Classification", resolution=resolution, statistic="mean"
+    )
     grid_int = np.round(grid).astype("float")
     grid_int[np.isnan(grid)] = np.nan
 
-    classes = sorted({int(c) for c in df.Classification.unique()
-                      if not np.isnan(c)})
+    classes = sorted({int(c) for c in df.Classification.unique() if not np.isnan(c)})
 
     colours = [_LAS_CLASSES.get(c, (str(c), "#999999"))[1] for c in classes]
     cmap = ListedColormap(colours)
@@ -315,9 +337,16 @@ def plot_classification(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    ax.imshow(mapped, extent=extent, aspect="equal", origin="upper",
-              cmap=cmap, vmin=0, vmax=len(classes) - 1,
-              interpolation="nearest")
+    ax.imshow(
+        mapped,
+        extent=extent,
+        aspect="equal",
+        origin="upper",
+        cmap=cmap,
+        vmin=0,
+        vmax=len(classes) - 1,
+        interpolation="nearest",
+    )
 
     patches = [
         mpatches.Patch(
@@ -326,8 +355,13 @@ def plot_classification(
         )
         for c in classes
     ]
-    ax.legend(handles=patches, loc="lower right", fontsize=8,
-              framealpha=0.8, title="Classification")
+    ax.legend(
+        handles=patches,
+        loc="lower right",
+        fontsize=8,
+        framealpha=0.8,
+        title="Classification",
+    )
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
     ax.set_title(f"Classification  —  {resolution} m resolution")
@@ -337,6 +371,7 @@ def plot_classification(
 # ---------------------------------------------------------------------------
 # GEDI waveform
 # ---------------------------------------------------------------------------
+
 
 def plot_waveform(
     result,
@@ -381,26 +416,28 @@ def plot_waveform(
 
     if ax_wave is None or ax_rh is None:
         fig, (ax_wave, ax_rh) = plt.subplots(
-            1, 2, figsize=figsize,
+            1,
+            2,
+            figsize=figsize,
             gridspec_kw={"width_ratios": [2, 1]},
         )
     else:
         fig = ax_wave.get_figure()
 
-    z      = result.z_bins
-    wave   = result.waveform
-    z_gnd  = result.z_ground
-    rh     = result.rh
+    z = result.z_bins
+    wave = result.waveform
+    z_gnd = result.z_ground
+    rh = result.rh
 
     # Height above ground for canopy top (RH100)
-    z_top  = z_gnd + rh.get(100, float(z.max() - z_gnd))
+    z_top = z_gnd + rh.get(100, float(z.max() - z_gnd))
 
     # Colour palette for RH levels
     _rh_colours = {
-        25:  "#2196F3",
-        50:  "#4CAF50",
-        75:  "#FF9800",
-        95:  "#F44336",
+        25: "#2196F3",
+        50: "#4CAF50",
+        75: "#FF9800",
+        95: "#F44336",
         100: "#9C27B0",
     }
 
@@ -414,22 +451,40 @@ def plot_waveform(
     # Ground layer shading
     ground_mask = z <= z_gnd
     ax_wave.fill_betweenx(
-        z[ground_mask], 0, wave[ground_mask],
-        alpha=0.55, color="#8D6E63", label="Ground return",
+        z[ground_mask],
+        0,
+        wave[ground_mask],
+        alpha=0.55,
+        color="#8D6E63",
+        label="Ground return",
     )
 
     # Canopy layer shading
     canopy_mask = z >= z_gnd
     ax_wave.fill_betweenx(
-        z[canopy_mask], 0, wave[canopy_mask],
-        alpha=0.20, color="#66BB6A", label="Canopy return",
+        z[canopy_mask],
+        0,
+        wave[canopy_mask],
+        alpha=0.20,
+        color="#66BB6A",
+        label="Canopy return",
     )
 
     # Ground and canopy top lines
-    ax_wave.axhline(z_gnd, color="#6D4C41", linewidth=1.2,
-                    linestyle="--", label=f"Ground  {z_gnd:.1f} m")
-    ax_wave.axhline(z_top, color="#7B1FA2", linewidth=1.0,
-                    linestyle=":", label=f"Canopy top  {z_top:.1f} m")
+    ax_wave.axhline(
+        z_gnd,
+        color="#6D4C41",
+        linewidth=1.2,
+        linestyle="--",
+        label=f"Ground  {z_gnd:.1f} m",
+    )
+    ax_wave.axhline(
+        z_top,
+        color="#7B1FA2",
+        linewidth=1.0,
+        linestyle=":",
+        label=f"Canopy top  {z_top:.1f} m",
+    )
 
     # RH level lines
     for lvl in rh_levels:
@@ -437,9 +492,14 @@ def plot_waveform(
         if not np.isfinite(z_rh):
             continue
         colour = _rh_colours.get(lvl, "#555555")
-        ax_wave.axhline(z_rh, color=colour, linewidth=1.0,
-                        linestyle="-.", alpha=0.85,
-                        label=f"RH{lvl:d}  {rh[lvl]:.1f} m")
+        ax_wave.axhline(
+            z_rh,
+            color=colour,
+            linewidth=1.0,
+            linestyle="-.",
+            alpha=0.85,
+            label=f"RH{lvl:d}  {rh[lvl]:.1f} m",
+        )
 
     ax_wave.set_xlabel("Normalised energy", fontsize=10)
     ax_wave.set_ylabel("Elevation (m)", fontsize=10)
@@ -454,8 +514,12 @@ def plot_waveform(
         f"N pts: {result.n_points:,}"
     )
     ax_wave.text(
-        0.03, 0.04, info, transform=ax_wave.transAxes,
-        fontsize=8, va="bottom",
+        0.03,
+        0.04,
+        info,
+        transform=ax_wave.transAxes,
+        fontsize=8,
+        va="bottom",
         bbox=dict(boxstyle="round,pad=0.4", fc="white", alpha=0.8),
     )
 
@@ -463,8 +527,8 @@ def plot_waveform(
     # Right panel — RH bar chart
     # ------------------------------------------------------------------
     levels_present = [lvl for lvl in rh_levels if lvl in rh and np.isfinite(rh[lvl])]
-    values  = [rh[lvl] for lvl in levels_present]
-    labels  = [f"RH{lvl}" for lvl in levels_present]
+    values = [rh[lvl] for lvl in levels_present]
+    labels = [f"RH{lvl}" for lvl in levels_present]
     colours = [_rh_colours.get(lvl, "#555555") for lvl in levels_present]
 
     bars = ax_rh.barh(labels, values, color=colours, alpha=0.85, edgecolor="white")
@@ -490,6 +554,7 @@ def plot_waveform(
 # ---------------------------------------------------------------------------
 # RH profile + waveform (GEDI L2A style)
 # ---------------------------------------------------------------------------
+
 
 def plot_rh_profile(
     result,
@@ -547,25 +612,25 @@ def plot_rh_profile(
     # RH profile: p (0–100) → height above ground
     # ------------------------------------------------------------------
     levels = sorted(result.rh.keys())
-    p_arr  = np.array(levels, dtype=float)
-    h_arr  = np.array([result.rh[l] for l in levels])
+    p_arr = np.array(levels, dtype=float)
+    h_arr = np.array([result.rh[l] for l in levels])
 
-    valid  = np.isfinite(h_arr) & (h_arr >= 0)
+    valid = np.isfinite(h_arr) & (h_arr >= 0)
     p_arr, h_arr = p_arr[valid], h_arr[valid]
-    h_mono = np.maximum.accumulate(h_arr)   # enforce monotonicity
+    h_mono = np.maximum.accumulate(h_arr)  # enforce monotonicity
 
     hmin = float(h_mono.min())
     hmax = float(h_mono.max())
-    hpad = max(0.5, (hmax - hmin) * 0.1)   # at least 0.5 m padding for readability
+    hpad = max(0.5, (hmax - hmin) * 0.1)  # at least 0.5 m padding for readability
 
     # ------------------------------------------------------------------
     # Waveform: W(h) above ground — result.waveform IS dE/dh already
     # ------------------------------------------------------------------
     h_bins = result.z_bins - result.z_ground
-    above  = h_bins >= 0
-    h_w    = h_bins[above]
-    W_raw  = result.waveform[above]
-    Wn     = W_raw / (np.max(np.abs(W_raw)) + 1e-12)
+    above = h_bins >= 0
+    h_w = h_bins[above]
+    W_raw = result.waveform[above]
+    Wn = W_raw / (np.max(np.abs(W_raw)) + 1e-12)
 
     # Savitzky-Golay: window must be odd and < len(Wn)
     n = len(Wn)
@@ -573,27 +638,32 @@ def plot_rh_profile(
         win = savgol_window
     else:
         win = max(7, (n // 40) * 2 + 1)
-    win = min(win, n if n % 2 == 1 else n - 1)   # must be odd and <= n
+    win = min(win, n if n % 2 == 1 else n - 1)  # must be odd and <= n
     win = win if win % 2 == 1 else win - 1
-    Wn_s = savgol_filter(Wn, window_length=win, polyorder=min(3, win - 1)) if n >= win else Wn.copy()
+    Wn_s = (
+        savgol_filter(Wn, window_length=win, polyorder=min(3, win - 1))
+        if n >= win
+        else Wn.copy()
+    )
 
-    peaks,   _ = find_peaks( Wn_s, prominence=peak_prominence)
+    peaks, _ = find_peaks(Wn_s, prominence=peak_prominence)
     valleys, _ = find_peaks(-Wn_s, prominence=peak_prominence / 2)
 
     if len(peaks) >= 2:
-        p_sorted  = peaks[np.argsort(h_w[peaks])]
-        low_peak  = p_sorted[0]
+        p_sorted = peaks[np.argsort(h_w[peaks])]
+        low_peak = p_sorted[0]
         high_peak = p_sorted[-1]
     elif len(peaks) == 1:
         low_peak = high_peak = peaks[0]
     else:
-        low_peak  = int(np.argmin(np.abs(h_w - np.percentile(h_w, 10))))
+        low_peak = int(np.argmin(np.abs(h_w - np.percentile(h_w, 10))))
         high_peak = int(np.argmin(np.abs(h_w - np.percentile(h_w, 75))))
 
-    mid_h   = 0.5 * (h_w[low_peak] + h_w[high_peak])
+    mid_h = 0.5 * (h_w[low_peak] + h_w[high_peak])
     h_split = (
         h_w[valleys[np.argmin(np.abs(h_w[valleys] - mid_h))]]
-        if len(valleys) > 0 else mid_h
+        if len(valleys) > 0
+        else mid_h
     )
     U_strength = float(np.interp(h_split, h_mono, p_arr / 100.0))
 
@@ -601,8 +671,8 @@ def plot_rh_profile(
     # Panel (a) — RH curve
     # ------------------------------------------------------------------
     ax_rh.plot(p_arr, h_mono, lw=1.6, color="#37474F")
-    ax_rh.axhspan(hmin,    h_split, alpha=0.20, color="#1b9e77", label="Understorey")
-    ax_rh.axhspan(h_split, hmax,    alpha=0.20, color="#d95f02", label="Overstorey")
+    ax_rh.axhspan(hmin, h_split, alpha=0.20, color="#1b9e77", label="Understorey")
+    ax_rh.axhspan(h_split, hmax, alpha=0.20, color="#d95f02", label="Overstorey")
     ax_rh.set_xlim(0, 100)
     ax_rh.set_ylim(hmin - hpad, hmax + hpad)
     ax_rh.set_xlabel("Percent energy returned [%]")
@@ -610,21 +680,30 @@ def plot_rh_profile(
     ax_rh.set_title(r"Relative height: $h = \mathrm{RH}(p)$", fontsize=12)
     ax_rh.spines["top"].set_visible(False)
     ax_rh.spines["right"].set_visible(False)
-    ax_rh.text(0.02, 0.98, "(a)", transform=ax_rh.transAxes,
-               fontsize=16, fontweight="bold", va="top")
+    ax_rh.text(
+        0.02,
+        0.98,
+        "(a)",
+        transform=ax_rh.transAxes,
+        fontsize=16,
+        fontweight="bold",
+        va="top",
+    )
     ax_rh.legend(frameon=True, fontsize=10, loc="lower right")
 
     # ------------------------------------------------------------------
     # Panel (b) — Waveform W(h)
     # ------------------------------------------------------------------
     ax_wave.plot(Wn, h_w, lw=1.4, color="#37474F", label=r"$W(h)=dE/dh$")
-    ax_wave.set_xlim(-0.05, 1.35)           # fixed x range — annotations stay inside
+    ax_wave.set_xlim(-0.05, 1.35)  # fixed x range — annotations stay inside
     ax_wave.set_ylim(hmin - hpad, hmax + hpad)
 
-    single_layer = (low_peak == high_peak)
+    single_layer = low_peak == high_peak
     if not single_layer:
-        ax_wave.scatter(Wn_s[low_peak],  h_w[low_peak],  s=50, zorder=3, color="#1b9e77")
-        ax_wave.scatter(Wn_s[high_peak], h_w[high_peak], s=50, zorder=3, color="#d95f02")
+        ax_wave.scatter(Wn_s[low_peak], h_w[low_peak], s=50, zorder=3, color="#1b9e77")
+        ax_wave.scatter(
+            Wn_s[high_peak], h_w[high_peak], s=50, zorder=3, color="#d95f02"
+        )
 
     ax_wave.axhline(h_split, ls="--", lw=1.0, alpha=0.7, label="Layer boundary")
     ax_wave.set_xlabel("Waveform intensity (normalized)")
@@ -632,46 +711,66 @@ def plot_rh_profile(
     ax_wave.set_title(r"$W(h)=\frac{dE}{dh}$", fontsize=12)
     ax_wave.spines["top"].set_visible(False)
     ax_wave.spines["right"].set_visible(False)
-    ax_wave.text(0.02, 0.98, "(b)", transform=ax_wave.transAxes,
-                 fontsize=16, fontweight="bold", va="top")
+    ax_wave.text(
+        0.02,
+        0.98,
+        "(b)",
+        transform=ax_wave.transAxes,
+        fontsize=16,
+        fontweight="bold",
+        va="top",
+    )
 
     if not single_layer:
         # Use axes-fraction x so text never extends beyond the fixed xlim
         ax_wave.annotate(
             "Understorey",
             xy=(Wn_s[low_peak], h_w[low_peak]),
-            xytext=(1.05, (h_w[low_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad))),
-            textcoords=("axes fraction" if False else "data",
-                        "axes fraction"),
+            xytext=(
+                1.05,
+                (h_w[low_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad)),
+            ),
+            textcoords=("axes fraction" if False else "data", "axes fraction"),
             xycoords="data",
-            arrowprops=dict(arrowstyle="->", lw=0.8), fontsize=10,
+            arrowprops=dict(arrowstyle="->", lw=0.8),
+            fontsize=10,
             annotation_clip=False,
         )
         ax_wave.annotate(
             "Overstorey",
             xy=(Wn_s[high_peak], h_w[high_peak]),
-            xytext=(1.05, (h_w[high_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad))),
-            textcoords=("axes fraction" if False else "data",
-                        "axes fraction"),
+            xytext=(
+                1.05,
+                (h_w[high_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad)),
+            ),
+            textcoords=("axes fraction" if False else "data", "axes fraction"),
             xycoords="data",
-            arrowprops=dict(arrowstyle="->", lw=0.8), fontsize=10,
+            arrowprops=dict(arrowstyle="->", lw=0.8),
+            fontsize=10,
             annotation_clip=False,
         )
         # Δh bracket between the two peaks — placed at x=1.25 (within xlim)
         xb = 1.20
         ax_wave.annotate(
-            "", xy=(xb, h_w[high_peak]), xytext=(xb, h_w[low_peak]),
+            "",
+            xy=(xb, h_w[high_peak]),
+            xytext=(xb, h_w[low_peak]),
             arrowprops=dict(arrowstyle="<->", lw=1.0),
         )
         ax_wave.text(
-            xb + 0.04, 0.5 * (h_w[high_peak] + h_w[low_peak]),
-            r"$\Delta h$", va="center", fontsize=11,
+            xb + 0.04,
+            0.5 * (h_w[high_peak] + h_w[low_peak]),
+            r"$\Delta h$",
+            va="center",
+            fontsize=11,
         )
 
     ax_wave.text(
-        0.05, 0.12,
+        0.05,
+        0.12,
         rf"$E(h_{{\mathrm{{split}}}}) = {U_strength:.2f}$",
-        transform=ax_wave.transAxes, fontsize=11,
+        transform=ax_wave.transAxes,
+        fontsize=11,
         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="0.7"),
     )
     ax_wave.legend(frameon=False, fontsize=10, loc="upper right")
@@ -690,6 +789,7 @@ def plot_rh_profile(
 # ---------------------------------------------------------------------------
 # 3-D point cloud
 # ---------------------------------------------------------------------------
+
 
 def plot_pointcloud_3d(
     df: pd.DataFrame,
@@ -759,20 +859,24 @@ def plot_pointcloud_3d(
         return np.clip((values - lo) / (hi - lo + 1e-9), 0, 1)
 
     if color_by == "RGB":
+
         def _ch(col):
             v = df[col].to_numpy().astype(np.float32)
             valid = v[np.isfinite(v)]
             lo, hi = np.percentile(valid, percentile_clip)
             return np.clip((v - lo) / (hi - lo + 1e-9), 0, 1)
+
         colours_rgb = np.stack([_ch("Red"), _ch("Green"), _ch("Blue")], axis=1)
         colours_scalar = None
     elif color_by == "Classification":
         codes = df["Classification"].to_numpy(dtype=int)
         hex_colours = [_LAS_CLASSES.get(int(c), (None, "#999999"))[1] for c in codes]
-        colours_rgb = np.array([
-            [int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255]
-            for h in hex_colours
-        ])
+        colours_rgb = np.array(
+            [
+                [int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255]
+                for h in hex_colours
+            ]
+        )
         colours_scalar = None
     else:
         field = "Intensity" if color_by == "Intensity" else "Z"
@@ -791,19 +895,25 @@ def plot_pointcloud_3d(
             marker = dict(size=point_size, color=colour_arg, opacity=0.8)
         else:
             import matplotlib.pyplot as plt
+
             cmap_obj = plt.get_cmap(cmap)
             rgba = cmap_obj(colours_scalar)
             colour_arg = [
-                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
-                for r, g, b, _ in rgba
+                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})" for r, g, b, _ in rgba
             ]
             marker = dict(size=point_size, color=colour_arg, opacity=0.8)
 
-        fig = go.Figure(data=[go.Scatter3d(
-            x=x, y=y, z=z,
-            mode="markers",
-            marker=marker,
-        )])
+        fig = go.Figure(
+            data=[
+                go.Scatter3d(
+                    x=x,
+                    y=y,
+                    z=z,
+                    mode="markers",
+                    marker=marker,
+                )
+            ]
+        )
         fig.update_layout(
             scene=dict(
                 xaxis_title="Easting (m)",
@@ -824,15 +934,33 @@ def plot_pointcloud_3d(
     ax = fig.add_subplot(111, projection="3d")
 
     if colours_rgb is not None:
-        ax.scatter(x, y, z, c=colours_rgb, s=point_size, linewidths=0,
-                   depthshade=True, rasterized=True)
+        ax.scatter(
+            x,
+            y,
+            z,
+            c=colours_rgb,
+            s=point_size,
+            linewidths=0,
+            depthshade=True,
+            rasterized=True,
+        )
     else:
         import matplotlib.cm as cm
-        cmap_obj = cm.get_cmap(cmap)
-        ax.scatter(x, y, z, c=colours_scalar, cmap=cmap_obj,
-                   s=point_size, linewidths=0, depthshade=True, rasterized=True)
 
-    ax.ticklabel_format(useOffset=False)   # show full UTM coords, not offset notation
+        cmap_obj = cm.get_cmap(cmap)
+        ax.scatter(
+            x,
+            y,
+            z,
+            c=colours_scalar,
+            cmap=cmap_obj,
+            s=point_size,
+            linewidths=0,
+            depthshade=True,
+            rasterized=True,
+        )
+
+    ax.ticklabel_format(useOffset=False)  # show full UTM coords, not offset notation
     ax.set_xlabel("Easting (m)", labelpad=8)
     ax.set_ylabel("Northing (m)", labelpad=8)
     ax.set_zlabel("Elevation (m)", labelpad=8)
@@ -845,6 +973,7 @@ def plot_pointcloud_3d(
 # ---------------------------------------------------------------------------
 # 3-D waveform waterfall
 # ---------------------------------------------------------------------------
+
 
 def plot_waveforms_3d(
     results: pd.DataFrame,
@@ -927,15 +1056,17 @@ def plot_waveforms_3d(
             hex_col = "#{:02x}{:02x}{:02x}".format(
                 int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
             )
-            fig.add_trace(go.Scatter3d(
-                x=[row["center_x"]] * 101,
-                y=percentiles,
-                z=heights,
-                mode="lines",
-                line=dict(color=hex_col, width=line_width * 2),
-                showlegend=False,
-                opacity=alpha,
-            ))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[row["center_x"]] * 101,
+                    y=percentiles,
+                    z=heights,
+                    mode="lines",
+                    line=dict(color=hex_col, width=line_width * 2),
+                    showlegend=False,
+                    opacity=alpha,
+                )
+            )
         fig.update_layout(
             scene=dict(
                 xaxis_title="Easting (m)",
@@ -980,6 +1111,7 @@ def plot_waveforms_3d(
 # ---------------------------------------------------------------------------
 # Overview figure (all four panels)
 # ---------------------------------------------------------------------------
+
 
 def plot_overview(
     df: pd.DataFrame,

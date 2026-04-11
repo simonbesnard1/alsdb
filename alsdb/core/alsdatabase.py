@@ -109,7 +109,9 @@ class ALSDatabase(TileDBProvider):
         """
         if self.array_exists():
             if not overwrite:
-                logger.debug("Array already exists at %s — skipping creation.", self.array_uri)
+                logger.debug(
+                    "Array already exists at %s — skipping creation.", self.array_uri
+                )
                 return
             logger.info("Removing existing array at %s", self.array_uri)
             tiledb.remove(self.array_uri, ctx=self.ctx)
@@ -192,21 +194,25 @@ class ALSDatabase(TileDBProvider):
             Size ratio window for fragment eligibility (0.0 = merge all,
             1.0 = only merge identically-sized fragments).
         """
-        cfg = tiledb.Config({
-            "sm.consolidation.mode":            "fragments",
-            "sm.consolidation.buffer_size":     str(fragment_size),
-            "sm.consolidation.total_buffer_size": str(memory_budget),
-            "sm.consolidation.step_min_frags":  "2",
-            "sm.consolidation.step_max_frags":  "200",
-            "sm.consolidation.step_size_ratio": str(step_size_ratio),
-            "sm.consolidation.amplification":   "1.0",
-        })
+        cfg = tiledb.Config(
+            {
+                "sm.consolidation.mode": "fragments",
+                "sm.consolidation.buffer_size": str(fragment_size),
+                "sm.consolidation.total_buffer_size": str(memory_budget),
+                "sm.consolidation.step_min_frags": "2",
+                "sm.consolidation.step_max_frags": "200",
+                "sm.consolidation.step_size_ratio": str(step_size_ratio),
+                "sm.consolidation.amplification": "1.0",
+            }
+        )
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
         n_frags = len(tiledb.array_fragments(self.array_uri).uri)
         logger.info(
             "Consolidating %d fragments (fragment_size=%.0f MB, "
             "memory_budget=%.0f MB)…",
-            n_frags, fragment_size / 1e6, memory_budget / 1e6,
+            n_frags,
+            fragment_size / 1e6,
+            memory_budget / 1e6,
         )
         tiledb.consolidate(self.array_uri, config=cfg, ctx=self.ctx)
         tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
@@ -293,12 +299,21 @@ class ALSDatabase(TileDBProvider):
             total += len(x)
             logger.debug(
                 "Ingested %d points from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                len(x), filename, year, crs, self.array_uri, total,
+                len(x),
+                filename,
+                year,
+                crs,
+                self.array_uri,
+                total,
             )
 
         logger.info(
             "Done: %d points from %s (year=%d, crs=%s) → %s",
-            total, filename, year, crs, self.array_uri,
+            total,
+            filename,
+            year,
+            crs,
+            self.array_uri,
         )
         entry = {
             "year": year,
@@ -346,11 +361,16 @@ class ALSDatabase(TileDBProvider):
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
-        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
+        chunk_size = chunk_size or (
+            self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000
+        )
 
         manifest = self.load_manifest()
         if not overwrite and manifest.get(filename, {}).get("status") == "ok":
-            logger.info("Already ingested %s — skipping (pass overwrite=True to force)", filename)
+            logger.info(
+                "Already ingested %s — skipping (pass overwrite=True to force)",
+                filename,
+            )
             return 0
 
         # Read tile metadata once up front so the CRS is available before the
@@ -365,7 +385,9 @@ class ALSDatabase(TileDBProvider):
         stored = self.stored_crs()
 
         try:
-            total, entry = self._ingest_tile(laz_path, chunk_size, classification_filter, stored, _tile=tile)
+            total, entry = self._ingest_tile(
+                laz_path, chunk_size, classification_filter, stored, _tile=tile
+            )
             manifest[filename] = entry
         except Exception as exc:
             manifest[filename] = {
@@ -421,7 +443,9 @@ class ALSDatabase(TileDBProvider):
             ``{filename: n_points_written}`` for every path in *laz_paths*.
             Skipped files have value 0.
         """
-        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
+        chunk_size = chunk_size or (
+            self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000
+        )
         laz_paths = [Path(p) for p in laz_paths]
 
         # Pre-load manifest; filter already-ingested files unless overwrite
@@ -451,7 +475,9 @@ class ALSDatabase(TileDBProvider):
         newly_written = 0
 
         def _worker(path: Path) -> Tuple[str, int, dict]:
-            total, entry = self._ingest_tile(path, chunk_size, classification_filter, stored)
+            total, entry = self._ingest_tile(
+                path, chunk_size, classification_filter, stored
+            )
             return path.name, total, entry
 
         # Process in batches so consolidation only runs after all workers in a

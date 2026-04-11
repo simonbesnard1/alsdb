@@ -70,6 +70,7 @@ _TREE_ID_STRIDE = 100_000
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _pdal_stages(
     min_height: float,
     min_points: int,
@@ -79,21 +80,24 @@ def _pdal_stages(
     """Build the PDAL filter stage list shared by all code paths."""
     stages: list[dict] = [
         {"type": "filters.hag_delaunay"},
-        {"type": "filters.assign",
-         "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0"},
+        {
+            "type": "filters.assign",
+            "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
+        },
         # Drop ground / low points before the graph build — single biggest
         # speedup for filters.litree on dense ALS data.
-        {"type": "filters.range",
-         "limits": f"HeightAboveGround[{min_height / 2}:]"},
+        {"type": "filters.range", "limits": f"HeightAboveGround[{min_height / 2}:]"},
     ]
     if voxel_size is not None:
         stages.append({"type": "filters.sample", "radius": voxel_size})
-    stages.append({
-        "type": "filters.litree",
-        "min_points": min_points,
-        "min_height": min_height,
-        "radius": radius,
-    })
+    stages.append(
+        {
+            "type": "filters.litree",
+            "min_points": min_points,
+            "min_height": min_height,
+            "radius": radius,
+        }
+    )
     return stages
 
 
@@ -106,30 +110,32 @@ def _tree_metrics(points: np.ndarray) -> list[dict]:
     records = []
     for tid in tree_ids:
         mask = points["TreeID"] == tid
-        pts  = points[mask]
-        x    = pts["X"].astype(np.float64)
-        y    = pts["Y"].astype(np.float64)
-        hag  = pts["HeightAboveGround"].astype(np.float64)
+        pts = points[mask]
+        x = pts["X"].astype(np.float64)
+        y = pts["Y"].astype(np.float64)
+        hag = pts["HeightAboveGround"].astype(np.float64)
 
         crown_area = crown_radius = np.nan
         if len(pts) >= _MIN_HULL_POINTS:
             try:
                 hull = ConvexHull(np.column_stack([x, y]))
-                crown_area   = float(hull.volume)
+                crown_area = float(hull.volume)
                 crown_radius = float(np.sqrt(crown_area / np.pi))
             except Exception:
                 pass
 
-        records.append({
-            "tree_id":      int(tid),
-            "centroid_x":   float(x.mean()),
-            "centroid_y":   float(y.mean()),
-            "height":       float(hag.max()),
-            "base_height":  float(hag.min()),
-            "crown_area":   crown_area,
-            "crown_radius": crown_radius,
-            "n_points":     int(mask.sum()),
-        })
+        records.append(
+            {
+                "tree_id": int(tid),
+                "centroid_x": float(x.mean()),
+                "centroid_y": float(y.mean()),
+                "height": float(hag.max()),
+                "base_height": float(hag.min()),
+                "crown_area": crown_area,
+                "crown_radius": crown_radius,
+                "n_points": int(mask.sum()),
+            }
+        )
     return records
 
 
@@ -169,8 +175,10 @@ def _process_tile(
     # Crop to non-buffered extent
     cx0, cy0, cx1, cy1 = crop_bbox
     in_crop = (
-        (points["X"] >= cx0) & (points["X"] <= cx1) &
-        (points["Y"] >= cy0) & (points["Y"] <= cy1)
+        (points["X"] >= cx0)
+        & (points["X"] <= cx1)
+        & (points["Y"] >= cy0)
+        & (points["Y"] <= cy1)
     )
     points = points[in_crop].copy()
 
@@ -199,6 +207,7 @@ def _process_tile(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def segment_trees(
     provider: TileDBProvider,
@@ -263,7 +272,10 @@ def segment_trees(
         logger.info(
             "Segmenting trees  bbox=%s  year=%s  "
             "min_height=%.1f m  radius=%.1f m  voxel_size=%s",
-            effective_bbox, year, min_height, radius,
+            effective_bbox,
+            year,
+            min_height,
+            radius,
             f"{voxel_size} m" if voxel_size else "none",
         )
         arr = query_to_array(provider, effective_bbox, year=year)
@@ -300,12 +312,17 @@ def segment_trees(
     # ------------------------------------------------------------------ #
     # Tiled path                                                           #
     # ------------------------------------------------------------------ #
-    tiles   = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     n_tiles = len(tiles)
     logger.info(
         "Segmenting trees  bbox=%s  year=%s  "
         "%d tile(s)  %.0f m tiles / %.0f m buffer  %d worker(s)  voxel_size=%s",
-        effective_bbox, year, n_tiles, tile_size, tile_buffer, n_workers,
+        effective_bbox,
+        year,
+        n_tiles,
+        tile_size,
+        tile_buffer,
+        n_workers,
         f"{voxel_size} m" if voxel_size else "none",
     )
 
@@ -339,7 +356,7 @@ def segment_trees(
         return np.array([]), pd.DataFrame()
 
     all_points = np.concatenate([r[0] for r in valid])
-    all_trees  = pd.concat([r[1] for r in valid], ignore_index=True)
+    all_trees = pd.concat([r[1] for r in valid], ignore_index=True)
 
     # Re-number TreeIDs 1…N globally (tile offsets served their purpose)
     id_map = {old: new for new, old in enumerate(all_trees["tree_id"].values, start=1)}
@@ -350,7 +367,9 @@ def segment_trees(
     all_trees = all_trees.sort_values("height", ascending=False).reset_index(drop=True)
     logger.info(
         "  Done: %d trees from %d/%d tiles  |  tallest %.1f m  |  mean crown %.0f m²",
-        len(all_trees), len(valid), n_tiles,
+        len(all_trees),
+        len(valid),
+        n_tiles,
         all_trees["height"].max(),
         all_trees["crown_area"].mean(),
     )

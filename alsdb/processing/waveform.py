@@ -55,21 +55,29 @@ from alsdb.providers.tiledb_provider import TileDBProvider
 logger = logging.getLogger(__name__)
 
 # GEDI instrument constants
-_FOOTPRINT_RADIUS: float = 12.5     # m  (25 m diameter)
-_Z_STEP: float = 0.15               # m  native vertical resolution
-_SIGMA_FULL: float = 0.64           # m  full-power beam pulse σ
-_SIGMA_COV: float = 0.93            # m  coverage beam pulse σ
+_FOOTPRINT_RADIUS: float = 12.5  # m  (25 m diameter)
+_Z_STEP: float = 0.15  # m  native vertical resolution
+_SIGMA_FULL: float = 0.64  # m  full-power beam pulse σ
+_SIGMA_COV: float = 0.93  # m  coverage beam pulse σ
 _MIN_POINTS: int = 25
-_RH_LEVELS: tuple[int, ...] = tuple(range(101))   # RH0–RH100, matches GEDI L2A
-_COVER_THRESHOLD: float = 2.0       # m  above ground
+_RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
+_COVER_THRESHOLD: float = 2.0  # m  above ground
 
 # Mean TX pulse shapes derived from real GEDI L1B data (Hancock et al. gediSimulator).
 # Full-power beams: 0000, 0001, 0010, 0011, 1000, 1011
 # Coverage beams:  0101, 0110
-_BEAM_IDS: frozenset[str] = frozenset({
-    "BEAM0000", "BEAM0001", "BEAM0010", "BEAM0011",
-    "BEAM0101", "BEAM0110", "BEAM1000", "BEAM1011",
-})
+_BEAM_IDS: frozenset[str] = frozenset(
+    {
+        "BEAM0000",
+        "BEAM0001",
+        "BEAM0010",
+        "BEAM0011",
+        "BEAM0101",
+        "BEAM0110",
+        "BEAM1000",
+        "BEAM1011",
+    }
+)
 
 
 @functools.lru_cache(maxsize=8)
@@ -84,7 +92,7 @@ def _load_pulse(beam_id: str) -> np.ndarray:
     Returns a 1-D float64 array ready for ``np.convolve(..., mode="same")``.
     """
     path = files("alsdb") / "data" / "pulse_shapes" / f"meanPulse.{beam_id}.txt"
-    data = np.loadtxt(str(path))           # (N, 2): col0 = position (m), col1 = amplitude
+    data = np.loadtxt(str(path))  # (N, 2): col0 = position (m), col1 = amplitude
     amp = data[:, 1].astype(np.float64)
     amp /= amp.sum()
     return amp
@@ -93,6 +101,7 @@ def _load_pulse(beam_id: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Result container
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class WaveformResult:
@@ -154,6 +163,7 @@ class WaveformResult:
 # Step 1 — footprint query
 # ---------------------------------------------------------------------------
 
+
 def _query_footprint(
     provider: TileDBProvider,
     center_x: float,
@@ -175,15 +185,15 @@ def _query_footprint(
     attrs = ["Z", "Intensity", "ReturnNumber", "Classification"]
     with provider.open("r") as arr:
         data = arr.query(attrs=attrs)[
-            center_x - radius: center_x + radius,
-            center_y - radius: center_y + radius,
-            y0: y1,
+            center_x - radius : center_x + radius,
+            center_y - radius : center_y + radius,
+            y0:y1,
         ]
 
     if len(data["X"]) == 0:
         return None
 
-    mask = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2 <= radius ** 2
+    mask = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2 <= radius**2
     if not mask.any():
         return None
 
@@ -193,6 +203,7 @@ def _query_footprint(
 # ---------------------------------------------------------------------------
 # Step 2 — vertical histogram
 # ---------------------------------------------------------------------------
+
 
 def _build_histogram(
     z: np.ndarray,
@@ -222,6 +233,7 @@ def _build_histogram(
 # Step 4 — ground detection
 # ---------------------------------------------------------------------------
 
+
 def _detect_ground(
     waveform: np.ndarray,
     z_bins: np.ndarray,
@@ -250,6 +262,7 @@ def _detect_ground(
 # ---------------------------------------------------------------------------
 # Step 5 — metric extraction
 # ---------------------------------------------------------------------------
+
 
 def _rh_metrics(
     waveform: np.ndarray,
@@ -295,6 +308,7 @@ def _canopy_cover(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def simulate_waveform(
     provider: TileDBProvider,
@@ -379,7 +393,11 @@ def simulate_waveform(
         logger.debug(
             "simulate_waveform: footprint at (%.0f, %.0f) year=%s has only %d points "
             "(min_points=%d) — skipped.",
-            center_x, center_y, year, n_pts, min_points,
+            center_x,
+            center_y,
+            year,
+            n_pts,
+            min_points,
         )
         return None
 
@@ -396,7 +414,9 @@ def simulate_waveform(
             coeffs, _, _, _ = np.linalg.lstsq(A, z_gnd, rcond=None)
             a, b, c = coeffs
             slope_deg = float(np.degrees(np.arctan(np.sqrt(a**2 + b**2))))
-            plane_z = a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
+            plane_z = (
+                a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
+            )
             z = z - plane_z + float(z_gnd.mean())
             logger.debug("Slope correction applied: θ=%.1f°", slope_deg)
         else:
@@ -408,7 +428,7 @@ def simulate_waveform(
     if gaussian_beam_weighting:
         sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
         r2 = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2
-        beam_w = np.exp(-r2 / (2.0 * sb ** 2))
+        beam_w = np.exp(-r2 / (2.0 * sb**2))
     else:
         beam_w = np.ones(len(z))
 
@@ -429,13 +449,15 @@ def simulate_waveform(
         # histogram length so z_bins and waveform always align.
         conv = np.convolve(hist, kernel, mode="full")
         pad = (len(kernel) - 1) // 2
-        waveform = conv[pad: pad + len(hist)]
+        waveform = conv[pad : pad + len(hist)]
     else:
         waveform = gaussian_filter1d(hist, sigma=sigma / z_step)
 
     # 3. Add noise
     if noise_std > 0.0:
-        waveform = np.maximum(0.0, waveform + np.random.normal(0.0, noise_std, len(waveform)))
+        waveform = np.maximum(
+            0.0, waveform + np.random.normal(0.0, noise_std, len(waveform))
+        )
 
     # 4. Normalise to unit energy
     total = waveform.sum()
@@ -534,11 +556,15 @@ def simulate_batch(
         logger.warning(
             "simulate_batch: %d/%d footprints skipped (insufficient points). "
             "Run with logging.DEBUG for per-footprint details.",
-            n_skipped, n_total,
+            n_skipped,
+            n_total,
         )
 
     _nan_metrics = {
-        "z_ground": np.nan, "home": np.nan, "cover": np.nan, "n_points": 0,
+        "z_ground": np.nan,
+        "home": np.nan,
+        "cover": np.nan,
+        "n_points": 0,
         **{f"rh{l}": np.nan for l in _RH_LEVELS},
     }
 

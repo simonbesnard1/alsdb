@@ -64,8 +64,14 @@ from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 
 from alsdb.processing._tiling import (
-    array_crs, array_data_bbox, attach_hag, check_bbox_overlap,
-    check_year_exists, query_to_array, run_tiled, tile_bboxes,
+    array_crs,
+    array_data_bbox,
+    attach_hag,
+    check_bbox_overlap,
+    check_year_exists,
+    query_to_array,
+    run_tiled,
+    tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -74,8 +80,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_VEG_CLASSES          = (3, 4, 5)
-_DEFAULT_CC_THRESHOLD = 2.0   # m — first returns above this count as "canopy"
+_VEG_CLASSES = (3, 4, 5)
+_DEFAULT_CC_THRESHOLD = 2.0  # m — first returns above this count as "canopy"
 
 _METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density"]
 
@@ -83,6 +89,7 @@ _METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density"]
 # ---------------------------------------------------------------------------
 # Per-cell metric extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_metrics(
     points: np.ndarray,
@@ -105,8 +112,8 @@ def _extract_metrics(
     y_edges = np.linspace(y_min, y_max, ny + 1)
     bins = [x_edges, y_edges]
 
-    x   = points["X"]
-    y   = points["Y"]
+    x = points["X"]
+    y = points["Y"]
     hag = points["HeightAboveGround"]
 
     veg = np.isin(points["Classification"], _VEG_CLASSES) & (hag > 0)
@@ -115,31 +122,48 @@ def _extract_metrics(
     def _pct(p):
         def stat(v):
             return float(np.percentile(v, p)) if len(v) else np.nan
+
         return stat
 
     def _flip(g):
         return np.flipud(np.where(np.isnan(g), np.nan, g).T).astype(np.float32)
 
-    cell_area = resolution ** 2
+    cell_area = resolution**2
     n_all = binned_statistic_2d(x, y, hag, statistic="count", bins=bins).statistic
 
     fr = points["ReturnNumber"] == 1
     x_fr, y_fr, hag_fr = x[fr], y[fr], hag[fr]
-    above  = (hag_fr > cc_threshold).astype(np.float32)
-    n_fr   = binned_statistic_2d(x_fr, y_fr, np.ones(fr.sum()),
-                                  statistic="count", bins=bins).statistic
-    n_above = binned_statistic_2d(x_fr, y_fr, above,
-                                   statistic="sum", bins=bins).statistic
+    above = (hag_fr > cc_threshold).astype(np.float32)
+    n_fr = binned_statistic_2d(
+        x_fr, y_fr, np.ones(fr.sum()), statistic="count", bins=bins
+    ).statistic
+    n_above = binned_statistic_2d(
+        x_fr, y_fr, above, statistic="sum", bins=bins
+    ).statistic
 
     with np.errstate(invalid="ignore", divide="ignore"):
         cc = _flip(np.where(n_fr > 0, n_above / n_fr, np.nan))
 
     metrics: dict[str, np.ndarray] = {
-        "h50":     _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(50), bins=bins).statistic),
-        "h75":     _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(75), bins=bins).statistic),
-        "h95":     _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(95), bins=bins).statistic),
-        "hmean":   _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic="mean",   bins=bins).statistic),
-        "cc":      cc,
+        "h50": _flip(
+            binned_statistic_2d(
+                x_v, y_v, hag_v, statistic=_pct(50), bins=bins
+            ).statistic
+        ),
+        "h75": _flip(
+            binned_statistic_2d(
+                x_v, y_v, hag_v, statistic=_pct(75), bins=bins
+            ).statistic
+        ),
+        "h95": _flip(
+            binned_statistic_2d(
+                x_v, y_v, hag_v, statistic=_pct(95), bins=bins
+            ).statistic
+        ),
+        "hmean": _flip(
+            binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic
+        ),
+        "cc": cc,
         "density": _flip(n_all / cell_area),
     }
     return metrics
@@ -148,6 +172,7 @@ def _extract_metrics(
 # ---------------------------------------------------------------------------
 # Allometric model
 # ---------------------------------------------------------------------------
+
 
 def naesset_model(
     metrics: dict[str, np.ndarray],
@@ -169,7 +194,7 @@ def naesset_model(
         **calibrate against field plots** before production use.
     """
     h95 = metrics["h95"]
-    cc  = metrics["cc"]
+    cc = metrics["cc"]
     with np.errstate(invalid="ignore"):
         agb = np.where(
             np.isnan(h95) | np.isnan(cc) | (cc == 0),
@@ -182,6 +207,7 @@ def naesset_model(
 # ---------------------------------------------------------------------------
 # Model helpers
 # ---------------------------------------------------------------------------
+
 
 def wrap_sklearn_model(
     estimator,
@@ -246,10 +272,11 @@ def wrap_sklearn_model(
 # Per-tile workers
 # ---------------------------------------------------------------------------
 
+
 def _process_tile_metrics(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -262,8 +289,9 @@ def _process_tile_metrics(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(points, resolution, bbox=crop_bbox,
-                               cc_threshold=cc_threshold)
+    metrics = _extract_metrics(
+        points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold
+    )
 
     for name, grid in metrics.items():
         if not np.all(np.isnan(grid)):
@@ -275,7 +303,7 @@ def _process_tile_metrics(
 def _process_tile_biomass(
     provider: "TileDBProvider",
     query_bbox: tuple[float, float, float, float],
-    crop_bbox:  tuple[float, float, float, float],
+    crop_bbox: tuple[float, float, float, float],
     store: "ALSZarrStore",
     tile_index: int,
     resolution: float,
@@ -289,8 +317,9 @@ def _process_tile_biomass(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(points, resolution, bbox=crop_bbox,
-                               cc_threshold=cc_threshold)
+    metrics = _extract_metrics(
+        points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold
+    )
     agb = model_fn(metrics)
 
     if np.all(np.isnan(agb)):
@@ -304,6 +333,7 @@ def _process_tile_biomass(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def compute_metrics(
     provider: "TileDBProvider",
@@ -352,17 +382,33 @@ def compute_metrics(
         return
     if not overwrite and year is not None:
         if all(store.has_data(v, resolution, year) for v in _METRIC_NAMES):
-            logger.info("LiDAR metrics already present for year %d at %.0f m — skipping",
-                        year, resolution)
+            logger.info(
+                "LiDAR metrics already present for year %d at %.0f m — skipping",
+                year,
+                resolution,
+            )
             return
     crs = array_crs(provider)
     for var in _METRIC_NAMES:
         store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
-    logger.info("Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s)",
-                resolution, len(tiles), n_workers, year)
-    run_tiled(_process_tile_metrics, provider, tiles, store, n_workers,
-              resolution=resolution, year=year, cc_threshold=cc_threshold)
+    logger.info(
+        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s)",
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+    )
+    run_tiled(
+        _process_tile_metrics,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+        cc_threshold=cc_threshold,
+    )
 
 
 def compute_biomass(
@@ -415,15 +461,34 @@ def compute_biomass(
         return
     if year is not None and not check_year_exists(year, provider):
         return
-    if not overwrite and year is not None and store.has_data("biomass", resolution, year):
-        logger.info("Biomass already present for year %d at %.0f m — skipping",
-                    year, resolution)
+    if (
+        not overwrite
+        and year is not None
+        and store.has_data("biomass", resolution, year)
+    ):
+        logger.info(
+            "Biomass already present for year %d at %.0f m — skipping", year, resolution
+        )
         return
-    store.ensure_group("biomass", resolution, effective_bbox,
-                       array_crs(provider), tile_size)
+    store.ensure_group(
+        "biomass", resolution, effective_bbox, array_crs(provider), tile_size
+    )
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
-    logger.info("Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s)",
-                resolution, len(tiles), n_workers, year)
-    run_tiled(_process_tile_biomass, provider, tiles, store, n_workers,
-              resolution=resolution, year=year,
-              cc_threshold=cc_threshold, model_fn=model_fn)
+    logger.info(
+        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s)",
+        resolution,
+        len(tiles),
+        n_workers,
+        year,
+    )
+    run_tiled(
+        _process_tile_biomass,
+        provider,
+        tiles,
+        store,
+        n_workers,
+        resolution=resolution,
+        year=year,
+        cc_threshold=cc_threshold,
+        model_fn=model_fn,
+    )

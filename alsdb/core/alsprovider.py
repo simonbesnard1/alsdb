@@ -99,7 +99,12 @@ class ALSProvider(TileDBProvider):
         df = pd.DataFrame(data)
         logger.debug(
             "query_bbox [%.0f–%.0f, %.0f–%.0f, year=%s]: %d points",
-            min_x, max_x, min_y, max_y, year or "all", len(df),
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            year or "all",
+            len(df),
         )
         return df
 
@@ -132,9 +137,19 @@ class ALSProvider(TileDBProvider):
         max_x = min_x + PNOA_TILE_SIZE_M
         max_y = float(tile_y_km * 1000)
         min_y = max_y - PNOA_TILE_SIZE_M
-        logger.debug("query_tile (%d, %d, year=%s) → bbox %.0f–%.0f / %.0f–%.0f",
-                     tile_x_km, tile_y_km, year or "all", min_x, max_x, min_y, max_y)
-        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
+        logger.debug(
+            "query_tile (%d, %d, year=%s) → bbox %.0f–%.0f / %.0f–%.0f",
+            tile_x_km,
+            tile_y_km,
+            year or "all",
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        )
+        return self.query_bbox(
+            min_x, min_y, max_x, max_y, attributes=attributes, year=year
+        )
 
     def available_years(self) -> List[int]:
         """
@@ -160,8 +175,9 @@ class ALSProvider(TileDBProvider):
         year: Optional[int] = None,
     ) -> pd.DataFrame:
         """Alias for :meth:`query_bbox` — returns a :class:`pandas.DataFrame`."""
-        return self.query_bbox(min_x, min_y, max_x, max_y,
-                               attributes=attributes, year=year)
+        return self.query_bbox(
+            min_x, min_y, max_x, max_y, attributes=attributes, year=year
+        )
 
     def to_xarray(
         self,
@@ -190,14 +206,17 @@ class ALSProvider(TileDBProvider):
         """
         import xarray as xr
 
-        df = self.query_bbox(min_x, min_y, max_x, max_y,
-                             attributes=attributes, year=year)
+        df = self.query_bbox(
+            min_x, min_y, max_x, max_y, attributes=attributes, year=year
+        )
         ds = xr.Dataset.from_dataframe(df)
-        ds.attrs.update({
-            "crs": "EPSG:25830",
-            "bbox": [min_x, min_y, max_x, max_y],
-            "year": year,
-        })
+        ds.attrs.update(
+            {
+                "crs": "EPSG:25830",
+                "bbox": [min_x, min_y, max_x, max_y],
+                "year": year,
+            }
+        )
         return ds
 
     def get_available_attributes(self) -> List[str]:

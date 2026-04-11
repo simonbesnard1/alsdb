@@ -6,7 +6,6 @@ import pytest
 
 from alsdb.tile.tile_name import PNOATileName, parse_tile_filename
 
-
 EXAMPLE = "PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz"
 
 

@@ -37,10 +37,10 @@ from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from scipy.spatial import ConvexHull
 
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _hull_patch(x: np.ndarray, y: np.ndarray, **kwargs) -> mpatches.Polygon:
     """Return a matplotlib Polygon patch for the convex hull of (x, y)."""
@@ -58,6 +58,7 @@ def _discrete_colors(n: int, cmap: str = "tab20") -> np.ndarray:
 # ---------------------------------------------------------------------------
 # 2-D crown map
 # ---------------------------------------------------------------------------
+
 
 def plot_trees(
     trees: pd.DataFrame,
@@ -109,13 +110,13 @@ def plot_trees(
     heights = trees["height"].values
     _vmin = vmin if vmin is not None else float(np.nanmin(heights))
     _vmax = vmax if vmax is not None else float(np.nanmax(heights))
-    norm  = Normalize(vmin=_vmin, vmax=_vmax)
-    sm    = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    cm    = plt.get_cmap(cmap)
+    norm = Normalize(vmin=_vmin, vmax=_vmax)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    cm = plt.get_cmap(cmap)
 
     if show_crowns:
         patches = []
-        colors  = []
+        colors = []
 
         for _, row in trees.iterrows():
             color = cm(norm(row["height"]))
@@ -125,8 +126,8 @@ def plot_trees(
                 and not np.isnan(row.get("crown_area", np.nan))
             ):
                 mask = points["TreeID"] == row["tree_id"]
-                x_t  = points["X"][mask].astype(float)
-                y_t  = points["Y"][mask].astype(float)
+                x_t = points["X"][mask].astype(float)
+                y_t = points["Y"][mask].astype(float)
                 if len(x_t) >= 3:
                     try:
                         patches.append(_hull_patch(x_t, y_t))
@@ -140,15 +141,26 @@ def plot_trees(
             patches.append(mpatches.Circle((row["centroid_x"], row["centroid_y"]), r))
             colors.append(color)
 
-        col = PatchCollection(patches, facecolors=colors, edgecolors="white",
-                              linewidths=0.4, alpha=0.75, zorder=2)
+        col = PatchCollection(
+            patches,
+            facecolors=colors,
+            edgecolors="white",
+            linewidths=0.4,
+            alpha=0.75,
+            zorder=2,
+        )
         ax.add_collection(col)
 
     # Centroids
     sc = ax.scatter(
-        trees["centroid_x"], trees["centroid_y"],
-        c=heights, cmap=cmap, norm=norm,
-        s=15, zorder=3, linewidths=0,
+        trees["centroid_x"],
+        trees["centroid_y"],
+        c=heights,
+        cmap=cmap,
+        norm=norm,
+        s=15,
+        zorder=3,
+        linewidths=0,
     )
 
     cbar = fig.colorbar(sm, ax=ax, pad=0.02, shrink=0.85)
@@ -170,6 +182,7 @@ def plot_trees(
 # ---------------------------------------------------------------------------
 # 3-D coloured point cloud
 # ---------------------------------------------------------------------------
+
 
 def plot_trees_3d(
     points: np.ndarray,
@@ -209,7 +222,9 @@ def plot_trees_3d(
     matplotlib.figure.Figure
     """
     if "TreeID" not in points.dtype.names:
-        raise ValueError("points array must have a 'TreeID' field — run segment_trees first.")
+        raise ValueError(
+            "points array must have a 'TreeID' field — run segment_trees first."
+        )
     if "HeightAboveGround" not in points.dtype.names:
         raise ValueError("points array must have a 'HeightAboveGround' field.")
 
@@ -217,16 +232,23 @@ def plot_trees_3d(
     if ax is None:
         ax = fig.add_subplot(111, projection="3d")
 
-    x   = points["X"].astype(float)
-    y   = points["Y"].astype(float)
+    x = points["X"].astype(float)
+    y = points["Y"].astype(float)
     hag = points["HeightAboveGround"].astype(float)
     tid = points["TreeID"].astype(int)
 
     # Ground / unassigned in grey
     gnd = tid == 0
-    ax.scatter(x[gnd], y[gnd], hag[gnd],
-               c="lightgrey", s=point_size * 0.5, alpha=alpha * 0.5,
-               linewidths=0, zorder=1)
+    ax.scatter(
+        x[gnd],
+        y[gnd],
+        hag[gnd],
+        c="lightgrey",
+        s=point_size * 0.5,
+        alpha=alpha * 0.5,
+        linewidths=0,
+        zorder=1,
+    )
 
     # Tree points
     unique_ids = np.unique(tid[~gnd])
@@ -236,18 +258,30 @@ def plot_trees_3d(
     colors = _discrete_colors(len(unique_ids))
     for i, t in enumerate(unique_ids):
         mask = tid == t
-        ax.scatter(x[mask], y[mask], hag[mask],
-                   c=[colors[i]], s=point_size, alpha=alpha,
-                   linewidths=0, zorder=2)
+        ax.scatter(
+            x[mask],
+            y[mask],
+            hag[mask],
+            c=[colors[i]],
+            s=point_size,
+            alpha=alpha,
+            linewidths=0,
+            zorder=2,
+        )
 
     # Label tallest trees
     if trees is not None and not trees.empty:
         for _, row in trees.head(min(10, len(trees))).iterrows():
             if int(row["tree_id"]) in unique_ids:
                 ax.text(
-                    row["centroid_x"], row["centroid_y"], row["height"] + 0.5,
+                    row["centroid_x"],
+                    row["centroid_y"],
+                    row["height"] + 0.5,
                     f"{row['height']:.1f} m",
-                    fontsize=6, ha="center", color="black", zorder=5,
+                    fontsize=6,
+                    ha="center",
+                    color="black",
+                    zorder=5,
                 )
 
     ax.set_xlabel("Easting (m)", labelpad=8)

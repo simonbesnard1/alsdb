@@ -9,7 +9,6 @@ import tiledb
 from alsdb.core.alsdatabase import ALSDatabase
 from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -46,6 +45,7 @@ def db(tmp_path) -> ALSDatabase:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_array_does_not_exist_initially(db):
     assert not db.array_exists()
