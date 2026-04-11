@@ -288,9 +288,7 @@ def linkcode_resolve(domain, info):
 
     fn = os.path.relpath(fn, start=os.path.dirname(alsdb.__file__))
 
-    if "+" in alsdb.__version__:
+    if "+" in version:
         return f"https://github.com/simonbesnard1/alsdb/blob/main/alsdb/{fn}{linespec}"
     else:
-        return (
-            f"https://github.com/simonbesnard1/alsdb/blob/v{alsdb.__version__}/alsdb/{fn}{linespec}"
-        )
+        return f"https://github.com/simonbesnard1/alsdb/blob/v{version}/alsdb/{fn}{linespec}"
