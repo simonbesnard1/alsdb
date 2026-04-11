@@ -51,9 +51,6 @@ jobs:
           pixi-version: latest
           cache: true
 
-      - name: Install alsdb (editable)
-        run: pixi run python -m pip install --no-deps -e .
-
       - name: Verify alsdb import
         run: pixi run python -c "import alsdb; print('alsdb imported successfully')"
 

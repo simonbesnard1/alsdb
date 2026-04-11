@@ -79,6 +79,9 @@ rioxarray = ">=0.15"
 pytest = ">=8.0"
 pytest-cov = ">=5.0"
 
+[tool.pixi.pypi-dependencies]
+alsdb = { path = ".", editable = true }
+
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
 ingest = "alsdb ingest"
