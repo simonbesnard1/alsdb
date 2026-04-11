@@ -25,6 +25,7 @@ YEAR = 2021
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_hag_points(n_gnd=50, n_veg=100, bbox=(0.0, 0.0, 100.0, 100.0), seed=0):
     """
     Structured array with X, Y, HeightAboveGround, Classification, ReturnNumber.
@@ -55,11 +56,11 @@ def _make_hag_points(n_gnd=50, n_veg=100, bbox=(0.0, 0.0, 100.0, 100.0), seed=0)
 
 def _flat_metrics(ny=10, nx=10, h95_val=15.0, cc_val=0.7):
     return {
-        "h50":     np.full((ny, nx), 10.0, dtype=np.float32),
-        "h75":     np.full((ny, nx), 12.0, dtype=np.float32),
-        "h95":     np.full((ny, nx), h95_val, dtype=np.float32),
-        "hmean":   np.full((ny, nx), 11.0, dtype=np.float32),
-        "cc":      np.full((ny, nx), cc_val, dtype=np.float32),
+        "h50": np.full((ny, nx), 10.0, dtype=np.float32),
+        "h75": np.full((ny, nx), 12.0, dtype=np.float32),
+        "h95": np.full((ny, nx), h95_val, dtype=np.float32),
+        "hmean": np.full((ny, nx), 11.0, dtype=np.float32),
+        "cc": np.full((ny, nx), cc_val, dtype=np.float32),
         "density": np.full((ny, nx), 5.0, dtype=np.float32),
     }
 
@@ -67,6 +68,7 @@ def _flat_metrics(ny=10, nx=10, h95_val=15.0, cc_val=0.7):
 # ---------------------------------------------------------------------------
 # naesset_model — unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_naesset_model_output_shape():
     m = _flat_metrics()
@@ -83,10 +85,10 @@ def test_naesset_model_dtype_float32():
 def test_naesset_model_known_value():
     """AGB = a * h95^b * cc^c.  With defaults a=0.8, b=1.8, c=0.5."""
     h95, cc = 10.0, 0.64
-    expected = 0.8 * (h95 ** 1.8) * (cc ** 0.5)
+    expected = 0.8 * (h95**1.8) * (cc**0.5)
     m = {
         "h95": np.array([[h95]], dtype=np.float32),
-        "cc":  np.array([[cc]],  dtype=np.float32),
+        "cc": np.array([[cc]], dtype=np.float32),
     }
     agb = naesset_model(m)
     assert float(agb[0, 0]) == pytest.approx(expected, rel=1e-4)
@@ -116,8 +118,10 @@ def test_naesset_model_positive_for_valid_inputs():
 # wrap_sklearn_model — unit tests (no sklearn import required)
 # ---------------------------------------------------------------------------
 
+
 class _MockEstimator:
     """Minimal sklearn-compatible estimator (just returns sum of features)."""
+
     def predict(self, X):
         return X.sum(axis=1).astype(np.float32)
 
@@ -168,6 +172,7 @@ def test_wrap_sklearn_model_all_nan_returns_all_nan():
 # ---------------------------------------------------------------------------
 # _extract_metrics — unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_extract_metrics_returns_all_names():
     pts = _make_hag_points(bbox=(0.0, 0.0, 100.0, 100.0))
@@ -221,6 +226,7 @@ def test_extract_metrics_density_non_negative():
 # Integration — requires real TileDB + PDAL (uses session provider)
 # ---------------------------------------------------------------------------
 
+
 def test_compute_metrics_writes_all_variables(provider, store):
     compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     for var in ["h50", "h75", "h95", "hmean", "cc", "density"]:
@@ -236,22 +242,27 @@ def test_compute_biomass_custom_model(provider, store):
     def simple_model(metrics):
         return np.where(np.isnan(metrics["h95"]), np.nan, metrics["h95"] * 2.0)
 
-    compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR,
-                    model_fn=simple_model)
+    compute_biomass(
+        provider, store, resolution=RES, bbox=BBOX, year=YEAR, model_fn=simple_model
+    )
     assert store.has_data("biomass", RES, YEAR)
 
 
 def test_compute_metrics_overwrite_false_skips(provider, store):
     compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["h95"][0] = 999.0
-    compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False)
+    compute_metrics(
+        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
+    )
     assert float(store._root["10m"]["h95"][0, 0, 0]) == pytest.approx(999.0)
 
 
 def test_compute_biomass_overwrite_false_skips(provider, store):
     compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["biomass"][0] = 999.0
-    compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False)
+    compute_biomass(
+        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
+    )
     assert float(store._root["10m"]["biomass"][0, 0, 0]) == pytest.approx(999.0)
 
 

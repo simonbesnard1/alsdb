@@ -7,7 +7,13 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.chm import _rasterise, compute_all, compute_chm, compute_dsm, compute_dtm
+from alsdb.processing.chm import (
+    _rasterise,
+    compute_all,
+    compute_chm,
+    compute_dsm,
+    compute_dtm,
+)
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
 RES = 10.0
@@ -17,6 +23,7 @@ YEAR = 2021
 # ---------------------------------------------------------------------------
 # _rasterise — pure numpy, no PDAL
 # ---------------------------------------------------------------------------
+
 
 def _scatter(n=200, seed=0):
     rng = np.random.default_rng(seed)
@@ -41,8 +48,11 @@ def test_rasterise_dtype_is_float32():
 def test_rasterise_empty_bins_are_nan():
     # Single point at (5, 5); all other cells should be NaN
     grid = _rasterise(
-        np.array([5.0]), np.array([5.0]), np.array([7.0]),
-        (0.0, 0.0, 100.0, 100.0), resolution=10.0,
+        np.array([5.0]),
+        np.array([5.0]),
+        np.array([7.0]),
+        (0.0, 0.0, 100.0, 100.0),
+        resolution=10.0,
     )
     assert np.isnan(grid).sum() == grid.size - 1
     assert float(grid[~np.isnan(grid)][0]) == pytest.approx(7.0)
@@ -53,7 +63,9 @@ def test_rasterise_max_statistic():
     x = np.array([5.0, 5.0])
     y = np.array([5.0, 5.0])
     v = np.array([3.0, 9.0])
-    grid = _rasterise(x, y, v, (0.0, 0.0, 100.0, 100.0), resolution=10.0, statistic="max")
+    grid = _rasterise(
+        x, y, v, (0.0, 0.0, 100.0, 100.0), resolution=10.0, statistic="max"
+    )
     assert float(grid[~np.isnan(grid)][0]) == pytest.approx(9.0)
 
 
@@ -71,6 +83,7 @@ def test_rasterise_north_up_orientation():
 # ---------------------------------------------------------------------------
 # Integration — requires real TileDB + PDAL (uses session provider)
 # ---------------------------------------------------------------------------
+
 
 def test_compute_dtm_writes_data(provider, store):
     store.ensure_group("dtm", RES, BBOX, "EPSG:25830")

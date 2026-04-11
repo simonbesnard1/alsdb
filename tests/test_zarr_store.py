@@ -11,7 +11,7 @@ from alsdb.storage.zarr_store import ALSZarrStore
 
 # Small bbox for fast grid arithmetic
 BBOX = (0.0, 0.0, 1000.0, 1000.0)
-RES = 10.0          # → 100 × 100 grid
+RES = 10.0  # → 100 × 100 grid
 YEAR = 2021
 CRS = "EPSG:25830"
 
@@ -30,6 +30,7 @@ def initialised_store(store):
 # ---------------------------------------------------------------------------
 # ensure_group
 # ---------------------------------------------------------------------------
+
 
 def test_ensure_group_creates_resolution_group(store):
     store.ensure_group("chm", RES, BBOX, CRS)
@@ -70,6 +71,7 @@ def test_ensure_group_fractional_resolution(store):
 # has_data
 # ---------------------------------------------------------------------------
 
+
 def test_has_data_false_before_write(initialised_store):
     assert not initialised_store.has_data("chm", RES, YEAR)
 
@@ -85,6 +87,7 @@ def test_has_data_false_missing_resolution(store):
 # ---------------------------------------------------------------------------
 # write_tile
 # ---------------------------------------------------------------------------
+
 
 def _tile(ny=100, nx=100, fill=5.0):
     return np.full((ny, nx), fill, dtype=np.float32)
@@ -135,7 +138,7 @@ def test_write_tile_overwrite_year(initialised_store):
 
 def test_write_tile_empty_slice_is_skipped(initialised_store):
     """write_tile with row0 >= row1 must not raise."""
-    bad_bbox = (0.0, 0.0, 0.0, 0.0)   # zero-area tile
+    bad_bbox = (0.0, 0.0, 0.0, 0.0)  # zero-area tile
     initialised_store.write_tile("chm", RES, YEAR, np.zeros((1, 1)), bad_bbox)
     # No data written; has_data should still be False
     assert not initialised_store.has_data("chm", RES, YEAR)
@@ -144,6 +147,7 @@ def test_write_tile_empty_slice_is_skipped(initialised_store):
 # ---------------------------------------------------------------------------
 # resolutions and variables
 # ---------------------------------------------------------------------------
+
 
 def test_resolutions_empty(store):
     assert store.resolutions == []
@@ -171,6 +175,7 @@ def test_variables_returns_data_vars_only(store):
 # create factory
 # ---------------------------------------------------------------------------
 
+
 def test_create_factory(tmp_path):
     path = tmp_path / "created.zarr"
     s = ALSZarrStore.create(
@@ -189,6 +194,7 @@ def test_create_factory(tmp_path):
 # ---------------------------------------------------------------------------
 # to_dataset
 # ---------------------------------------------------------------------------
+
 
 def test_to_dataset_returns_xarray_dataset(initialised_store):
     xr = pytest.importorskip("xarray")
@@ -219,6 +225,7 @@ def test_to_dataset_coord_lengths(initialised_store):
 # ---------------------------------------------------------------------------
 # repr
 # ---------------------------------------------------------------------------
+
 
 def test_repr_contains_path(store):
     store.ensure_group("chm", RES, BBOX, CRS)

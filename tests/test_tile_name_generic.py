@@ -8,10 +8,10 @@ import pytest
 
 from alsdb.tile.tile_name import GenericTileName, _parse_crs, parse_tile_filename
 
-
 # ---------------------------------------------------------------------------
 # _parse_crs
 # ---------------------------------------------------------------------------
+
 
 def test_parse_crs_empty_dict_returns_epsg0():
     assert _parse_crs({}) == "EPSG:0"
@@ -25,6 +25,7 @@ def test_parse_crs_wkt_returned_when_no_pyproj(monkeypatch):
     # If pyproj is absent the function should fall back to the WKT prefix
     import sys
     import builtins
+
     real_import = builtins.__import__
 
     def patched_import(name, *args, **kwargs):
@@ -41,10 +42,13 @@ def test_parse_crs_wkt_returned_when_no_pyproj(monkeypatch):
 # GenericTileName.from_pdal_metadata
 # ---------------------------------------------------------------------------
 
+
 def _make_metadata(
     creation_year=0,
-    minx=308_000.0, miny=4_688_000.0,
-    maxx=310_000.0, maxy=4_690_000.0,
+    minx=308_000.0,
+    miny=4_688_000.0,
+    maxx=310_000.0,
+    maxy=4_690_000.0,
     wkt="",
 ):
     """Minimal PDAL metadata dict mimicking the structure PDAL produces."""
@@ -131,14 +135,17 @@ def test_from_pdal_metadata_empty_metadata():
 # PNOATileName — ensure protocol compliance (already tested in test_tile_name)
 # ---------------------------------------------------------------------------
 
+
 def test_pnoa_satisfies_tilebase_protocol():
     from alsdb.tile.tile_name import TileNameBase
+
     name = parse_tile_filename("PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz")
     assert isinstance(name, TileNameBase)
 
 
 def test_generic_satisfies_tilebase_protocol():
     from alsdb.tile.tile_name import TileNameBase
+
     meta = _make_metadata()
     tile = GenericTileName.from_pdal_metadata("tile_2022.laz", meta)
     assert isinstance(tile, TileNameBase)

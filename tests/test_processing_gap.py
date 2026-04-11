@@ -19,6 +19,7 @@ _LAI_K = 0.5
 # Helpers — build minimal structured arrays for gap / LAI functions
 # ---------------------------------------------------------------------------
 
+
 def _make_points(n_gnd, n_veg, bbox, seed=0):
     """
     Structured array with fields expected by _compute_gap_grid.
@@ -36,14 +37,15 @@ def _make_points(n_gnd, n_veg, bbox, seed=0):
     arr["X"] = rng.uniform(min_x, max_x, n)
     arr["Y"] = rng.uniform(min_y, max_y, n)
     arr["ReturnNumber"][:] = 1
-    arr["Classification"][:n_gnd] = 2   # ground
-    arr["Classification"][n_gnd:] = 3   # vegetation
+    arr["Classification"][:n_gnd] = 2  # ground
+    arr["Classification"][n_gnd:] = 3  # vegetation
     return arr
 
 
 # ---------------------------------------------------------------------------
 # _compute_gap_grid — unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_compute_gap_grid_output_shape():
     pts = _make_points(50, 50, (0.0, 0.0, 100.0, 100.0))
@@ -85,8 +87,12 @@ def test_compute_gap_grid_mixed_values_between_zero_and_one():
 
 def test_compute_gap_grid_empty_cells_are_nan():
     """A single point; all other cells must be NaN."""
-    dtype = [("X", np.float64), ("Y", np.float64),
-             ("ReturnNumber", np.uint8), ("Classification", np.uint8)]
+    dtype = [
+        ("X", np.float64),
+        ("Y", np.float64),
+        ("ReturnNumber", np.uint8),
+        ("Classification", np.uint8),
+    ]
     pts = np.array([(5.0, 5.0, 1, 2)], dtype=dtype)
     grid = _compute_gap_grid(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
     assert np.isnan(grid).sum() == grid.size - 1
@@ -97,15 +103,19 @@ def test_compute_gap_grid_only_unclassified_first_returns_give_nan():
     First returns that are neither ground (2) nor vegetation (3–5) contribute
     to n_tot but not to n_gnd or n_veg, so n_gnd/(n_gnd+n_veg) = 0/0 → NaN.
     """
-    dtype = [("X", np.float64), ("Y", np.float64),
-             ("ReturnNumber", np.uint8), ("Classification", np.uint8)]
+    dtype = [
+        ("X", np.float64),
+        ("Y", np.float64),
+        ("ReturnNumber", np.uint8),
+        ("Classification", np.uint8),
+    ]
     n = 50
     pts = np.zeros(n, dtype=dtype)
     rng = np.random.default_rng(0)
     pts["X"] = rng.uniform(0, 100, n)
     pts["Y"] = rng.uniform(0, 100, n)
-    pts["ReturnNumber"] = 1           # first returns
-    pts["Classification"] = 1        # unclassified — neither ground nor veg
+    pts["ReturnNumber"] = 1  # first returns
+    pts["Classification"] = 1  # unclassified — neither ground nor veg
     grid = _compute_gap_grid(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
     valid = grid[~np.isnan(grid)]
     # Cells with unclassified first returns have 0/0 → NaN; those without are also NaN
@@ -116,12 +126,13 @@ def test_compute_gap_grid_only_unclassified_first_returns_give_nan():
 # _gap_to_lai — unit tests
 # ---------------------------------------------------------------------------
 
+
 def test_gap_to_lai_zero_gap_gives_max():
     """P_gap = 0 → LAI = _LAI_MAX (clamped)."""
     gap = np.zeros((3, 3), dtype=np.float32)
     lai = _gap_to_lai(gap, k=_LAI_K)
     # _LAI_MAX = 10.0
-    assert np.all(np.isnan(lai))   # 0 → nan before clamp
+    assert np.all(np.isnan(lai))  # 0 → nan before clamp
 
 
 def test_gap_to_lai_one_gap_gives_zero():
@@ -164,14 +175,16 @@ def test_gap_to_lai_dtype_float32():
 # Integration — requires real TileDB + PDAL (uses session provider)
 # ---------------------------------------------------------------------------
 
+
 def test_compute_gap_fraction_writes_gap(provider, store):
     compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     assert store.has_data("gap", RES, YEAR)
 
 
 def test_compute_gap_fraction_with_lai(provider, store):
-    compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR,
-                         lai=True, k=_LAI_K)
+    compute_gap_fraction(
+        provider, store, resolution=RES, bbox=BBOX, year=YEAR, lai=True, k=_LAI_K
+    )
     assert store.has_data("gap", RES, YEAR)
     assert store.has_data("lai", RES, YEAR)
 
@@ -188,8 +201,9 @@ def test_compute_gap_fraction_gap_values_in_range(provider, store):
 def test_compute_gap_fraction_overwrite_false_skips(provider, store):
     compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["gap"][0] = 999.0
-    compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR,
-                         overwrite=False)
+    compute_gap_fraction(
+        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
+    )
     assert float(store._root["10m"]["gap"][0, 0, 0]) == pytest.approx(999.0)
 
 

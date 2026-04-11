@@ -10,10 +10,10 @@ import tiledb
 
 from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig, create_schema
 
-
 # ---------------------------------------------------------------------------
 # TileDBSchemaConfig.for_crs
 # ---------------------------------------------------------------------------
+
 
 def test_for_crs_known_iberian_peninsula():
     cfg = TileDBSchemaConfig.for_crs("EPSG:25830")
@@ -44,6 +44,7 @@ def test_for_crs_kwargs_override_domain():
 # TileDBSchemaConfig.from_bbox
 # ---------------------------------------------------------------------------
 
+
 def test_from_bbox_adds_default_padding():
     bbox = (308_000.0, 4_688_000.0, 310_000.0, 4_690_000.0)
     cfg = TileDBSchemaConfig.from_bbox(bbox)
@@ -69,6 +70,7 @@ def test_from_bbox_kwargs_override():
 # ---------------------------------------------------------------------------
 # create_schema
 # ---------------------------------------------------------------------------
+
 
 def test_create_schema_is_sparse():
     cfg = TileDBSchemaConfig.for_crs("EPSG:25830")

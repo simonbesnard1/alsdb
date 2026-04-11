@@ -29,10 +29,11 @@ BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
 # tile_bboxes
 # ---------------------------------------------------------------------------
 
+
 def test_tile_bboxes_single_tile_no_buffer():
     tiles = tile_bboxes((0.0, 0.0, 500.0, 500.0), tile_size=500.0, buffer=0.0)
     assert len(tiles) == 1
-    (qb, cb) = tiles[0]
+    qb, cb = tiles[0]
     assert qb == cb == (0.0, 0.0, 500.0, 500.0)
 
 
@@ -52,10 +53,10 @@ def test_tile_bboxes_non_divisible_count():
 def test_tile_bboxes_buffer_inflates_query():
     tiles = tile_bboxes((0.0, 0.0, 500.0, 500.0), tile_size=500.0, buffer=50.0)
     qb, cb = tiles[0]
-    assert qb[0] == pytest.approx(-50.0)     # min_x inflated
-    assert qb[1] == pytest.approx(-50.0)     # min_y inflated
-    assert qb[2] == pytest.approx(550.0)     # max_x inflated
-    assert qb[3] == pytest.approx(550.0)     # max_y inflated
+    assert qb[0] == pytest.approx(-50.0)  # min_x inflated
+    assert qb[1] == pytest.approx(-50.0)  # min_y inflated
+    assert qb[2] == pytest.approx(550.0)  # max_x inflated
+    assert qb[3] == pytest.approx(550.0)  # max_y inflated
 
 
 def test_tile_bboxes_crop_bbox_is_not_inflated():
@@ -89,6 +90,7 @@ def test_tile_bboxes_contiguous_coverage():
 # run_tiled
 # ---------------------------------------------------------------------------
 
+
 class _DummyStore:
     pass
 
@@ -113,7 +115,9 @@ def test_run_tiled_sequential_calls_all_tiles():
 def test_run_tiled_sequential_passes_kwargs():
     tiles = tile_bboxes((0.0, 0.0, 500.0, 500.0), tile_size=500.0, buffer=0.0)
     worker, calls = _make_recorder()
-    run_tiled(worker, None, tiles, _DummyStore(), n_workers=1, resolution=1.0, year=2021)
+    run_tiled(
+        worker, None, tiles, _DummyStore(), n_workers=1, resolution=1.0, year=2021
+    )
     assert calls[0][2] == {"resolution": 1.0, "year": 2021}
 
 
@@ -137,6 +141,7 @@ def test_run_tiled_parallel_propagates_exception():
 # ---------------------------------------------------------------------------
 # array helpers — integration tests (use session provider from conftest)
 # ---------------------------------------------------------------------------
+
 
 def test_array_crs(provider):
     crs = array_crs(provider)
