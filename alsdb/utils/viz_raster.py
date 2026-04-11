@@ -69,24 +69,20 @@ def _read_from_store(
     if variable not in ds:
         available = list(ds.data_vars)
         raise KeyError(
-            f"Variable '{variable}' not found in store at {resolution} m. "
-            f"Available: {available}"
+            f"Variable '{variable}' not found in store at {resolution} m. Available: {available}"
         )
 
     da = ds[variable]
 
     if year is not None:
         if year not in da.time.values:
-            raise ValueError(
-                f"Year {year} not in store (available: {da.time.values.tolist()})"
-            )
+            raise ValueError(f"Year {year} not in store (available: {da.time.values.tolist()})")
         da = da.sel(time=year)
     elif da.sizes["time"] == 1:
         da = da.isel(time=0)
     else:
         raise ValueError(
-            f"Store has multiple years {da.time.values.tolist()} — "
-            "specify year= to select one."
+            f"Store has multiple years {da.time.values.tolist()} — specify year= to select one."
         )
 
     grid = da.values.astype(np.float32)  # (ny, nx)
@@ -112,9 +108,7 @@ def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
     filled = np.where(np.isnan(grid), np.nanmin(grid), grid)
     norm = plt.Normalize(vmin=np.nanmin(grid), vmax=np.nanmax(grid))
     cmap_obj = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
-    return ls.shade(
-        filled, cmap=cmap_obj, norm=norm, vert_exag=vert_exag, blend_mode="soft"
-    )
+    return ls.shade(filled, cmap=cmap_obj, norm=norm, vert_exag=vert_exag, blend_mode="soft")
 
 
 def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
@@ -168,7 +162,9 @@ def plot_chm(
         vmax = (
             float(np.percentile(veg, 98))
             if veg.size
-            else float(np.nanmax(valid)) if valid.size else 30.0
+            else float(np.nanmax(valid))
+            if valid.size
+            else 30.0
         )
 
     if ax is None:
@@ -676,8 +672,6 @@ def plot_products_agb(
     plot_agb(store, resolution=resolution, year=year, ax=axes[3])
 
     year_str = f" ({year})" if year is not None else ""
-    fig.suptitle(
-        title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13
-    )
+    fig.suptitle(title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig

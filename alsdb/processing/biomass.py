@@ -137,32 +137,16 @@ def _extract_metrics(
     n_fr = binned_statistic_2d(
         x_fr, y_fr, np.ones(fr.sum()), statistic="count", bins=bins
     ).statistic
-    n_above = binned_statistic_2d(
-        x_fr, y_fr, above, statistic="sum", bins=bins
-    ).statistic
+    n_above = binned_statistic_2d(x_fr, y_fr, above, statistic="sum", bins=bins).statistic
 
     with np.errstate(invalid="ignore", divide="ignore"):
         cc = _flip(np.where(n_fr > 0, n_above / n_fr, np.nan))
 
     metrics: dict[str, np.ndarray] = {
-        "h50": _flip(
-            binned_statistic_2d(
-                x_v, y_v, hag_v, statistic=_pct(50), bins=bins
-            ).statistic
-        ),
-        "h75": _flip(
-            binned_statistic_2d(
-                x_v, y_v, hag_v, statistic=_pct(75), bins=bins
-            ).statistic
-        ),
-        "h95": _flip(
-            binned_statistic_2d(
-                x_v, y_v, hag_v, statistic=_pct(95), bins=bins
-            ).statistic
-        ),
-        "hmean": _flip(
-            binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic
-        ),
+        "h50": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(50), bins=bins).statistic),
+        "h75": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(75), bins=bins).statistic),
+        "h95": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(95), bins=bins).statistic),
+        "hmean": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic),
         "cc": cc,
         "density": _flip(n_all / cell_area),
     }
@@ -289,9 +273,7 @@ def _process_tile_metrics(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(
-        points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold
-    )
+    metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
 
     for name, grid in metrics.items():
         if not np.all(np.isnan(grid)):
@@ -317,9 +299,7 @@ def _process_tile_biomass(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(
-        points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold
-    )
+    metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
     agb = model_fn(metrics)
 
     if np.all(np.isnan(agb)):
@@ -461,18 +441,10 @@ def compute_biomass(
         return
     if year is not None and not check_year_exists(year, provider):
         return
-    if (
-        not overwrite
-        and year is not None
-        and store.has_data("biomass", resolution, year)
-    ):
-        logger.info(
-            "Biomass already present for year %d at %.0f m — skipping", year, resolution
-        )
+    if not overwrite and year is not None and store.has_data("biomass", resolution, year):
+        logger.info("Biomass already present for year %d at %.0f m — skipping", year, resolution)
         return
-    store.ensure_group(
-        "biomass", resolution, effective_bbox, array_crs(provider), tile_size
-    )
+    store.ensure_group("biomass", resolution, effective_bbox, array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
         "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s)",

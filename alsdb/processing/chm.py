@@ -314,9 +314,7 @@ def _process_tile_all(
                     "dtm",
                     resolution,
                     year,
-                    _rasterise(
-                        pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"
-                    ),
+                    _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"),
                     crop_bbox,
                 )
         except RuntimeError as exc:
@@ -336,9 +334,7 @@ def _process_tile_all(
                     "dsm",
                     resolution,
                     year,
-                    _rasterise(
-                        pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"
-                    ),
+                    _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"),
                     crop_bbox,
                 )
         except RuntimeError as exc:
@@ -452,9 +448,7 @@ def compute_chm(
             resolution,
         )
         return
-    store.ensure_group(
-        "chm", resolution, effective_bbox, array_crs(provider), tile_size
-    )
+    store.ensure_group("chm", resolution, effective_bbox, array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
         "Computing CHM  (%.1f m, %d tile(s), %d worker(s), year=%s, first_returns=%s)",
@@ -516,13 +510,9 @@ def compute_dtm(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None and store.has_data("dtm", resolution, year):
-        logger.info(
-            "DTM already present for year %d at %.1f m — skipping", year, resolution
-        )
+        logger.info("DTM already present for year %d at %.1f m — skipping", year, resolution)
         return
-    store.ensure_group(
-        "dtm", resolution, effective_bbox, array_crs(provider), tile_size
-    )
+    store.ensure_group("dtm", resolution, effective_bbox, array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
     logger.info(
         "Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
@@ -585,13 +575,9 @@ def compute_dsm(
     if year is not None and not check_year_exists(year, provider):
         return
     if not overwrite and year is not None and store.has_data("dsm", resolution, year):
-        logger.info(
-            "DSM already present for year %d at %.1f m — skipping", year, resolution
-        )
+        logger.info("DSM already present for year %d at %.1f m — skipping", year, resolution)
         return
-    store.ensure_group(
-        "dsm", resolution, effective_bbox, array_crs(provider), tile_size
-    )
+    store.ensure_group("dsm", resolution, effective_bbox, array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
     logger.info(
         "Computing DSM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
@@ -687,8 +673,7 @@ def compute_all(
     buffer = tile_buffer if need_chm else 0.0
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=buffer)
     logger.info(
-        "compute_all  (%.1f m, %d tile(s), %d worker(s), year=%s, "
-        "dtm=%s dsm=%s chm=%s)",
+        "compute_all  (%.1f m, %d tile(s), %d worker(s), year=%s, dtm=%s dsm=%s chm=%s)",
         resolution,
         len(tiles),
         n_workers,

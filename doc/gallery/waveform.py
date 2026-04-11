@@ -27,13 +27,13 @@ result = simulate_waveform(
     provider=reader,
     center_x=308_500.0,
     center_y=4_689_000.0,
-    footprint_radius=12.5,   # 25 m diameter, matching GEDI
+    footprint_radius=12.5,  # 25 m diameter, matching GEDI
     year=2021,
 )
 
-print(f"RH50  = {result.rh[50]:.2f} m")    # height of median energy
-print(f"RH98  = {result.rh[98]:.2f} m")    # equivalent to GEDI rh98
-print(f"Cover = {result.cover:.3f}")        # canopy cover fraction
+print(f"RH50  = {result.rh[50]:.2f} m")  # height of median energy
+print(f"RH98  = {result.rh[98]:.2f} m")  # equivalent to GEDI rh98
+print(f"Cover = {result.cover:.3f}")  # canopy cover fraction
 print(f"Ground elevation = {result.z_ground:.2f} m")
 
 # %%
@@ -76,7 +76,7 @@ results = simulate_batch(
     year=2021,
     n_workers=4,
     footprint_radius=12.5,
-    output_path="shots_2021.parquet",   # optional; omit for in-memory only
+    output_path="shots_2021.parquet",  # optional; omit for in-memory only
 )
 
 print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())

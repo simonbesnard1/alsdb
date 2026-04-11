@@ -222,9 +222,7 @@ def plot_trees_3d(
     matplotlib.figure.Figure
     """
     if "TreeID" not in points.dtype.names:
-        raise ValueError(
-            "points array must have a 'TreeID' field — run segment_trees first."
-        )
+        raise ValueError("points array must have a 'TreeID' field — run segment_trees first.")
     if "HeightAboveGround" not in points.dtype.names:
         raise ValueError("points array must have a 'HeightAboveGround' field.")
 

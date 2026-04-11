@@ -18,7 +18,7 @@ from alsdb import ALSProvider
 from alsdb.storage import ALSZarrStore
 
 reader = ALSProvider(storage_type="local", uri="/path/to/my_array")
-store  = ALSZarrStore("/path/to/forest.zarr")
+store = ALSZarrStore("/path/to/forest.zarr")
 
 BBOX = (308_000, 4_688_000, 310_000, 4_690_000)
 YEAR = 2021
@@ -39,8 +39,8 @@ compute_all(
     resolution=1.0,
     bbox=BBOX,
     year=YEAR,
-    tile_size=500.0,    # 500 m sub-tiles
-    tile_buffer=50.0,   # 50 m buffer for accurate HAG at tile edges
+    tile_size=500.0,  # 500 m sub-tiles
+    tile_buffer=50.0,  # 50 m buffer for accurate HAG at tile edges
     n_workers=4,
 )
 
@@ -60,7 +60,7 @@ compute_gap_fraction(
     bbox=BBOX,
     year=YEAR,
     lai=True,
-    k=0.5,   # extinction coefficient (spherical leaf angle distribution)
+    k=0.5,  # extinction coefficient (spherical leaf angle distribution)
 )
 
 # %%
@@ -119,14 +119,14 @@ compute_biomass(
 # ``to_dataset()`` opens a resolution group as a CRS-aware
 # :py:class:`xarray.Dataset`.
 
-ds1m  = store.to_dataset(resolution=1.0)
+ds1m = store.to_dataset(resolution=1.0)
 ds10m = store.to_dataset(resolution=10.0)
 
-chm    = ds1m["chm"].sel(time=YEAR)    # (ny, nx)
-dtm    = ds1m["dtm"].sel(time=YEAR)
-agb    = ds10m["biomass"].sel(time=YEAR)
-h95    = ds10m["h95"].sel(time=YEAR)
-gap    = ds10m["gap"].sel(time=YEAR)
+chm = ds1m["chm"].sel(time=YEAR)  # (ny, nx)
+dtm = ds1m["dtm"].sel(time=YEAR)
+agb = ds10m["biomass"].sel(time=YEAR)
+h95 = ds10m["h95"].sel(time=YEAR)
+gap = ds10m["gap"].sel(time=YEAR)
 
 print(ds1m)
 

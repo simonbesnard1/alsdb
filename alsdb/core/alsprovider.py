@@ -147,9 +147,7 @@ class ALSProvider(TileDBProvider):
             min_y,
             max_y,
         )
-        return self.query_bbox(
-            min_x, min_y, max_x, max_y, attributes=attributes, year=year
-        )
+        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
 
     def available_years(self) -> List[int]:
         """
@@ -175,9 +173,7 @@ class ALSProvider(TileDBProvider):
         year: Optional[int] = None,
     ) -> pd.DataFrame:
         """Alias for :meth:`query_bbox` — returns a :class:`pandas.DataFrame`."""
-        return self.query_bbox(
-            min_x, min_y, max_x, max_y, attributes=attributes, year=year
-        )
+        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
 
     def to_xarray(
         self,
@@ -206,9 +202,7 @@ class ALSProvider(TileDBProvider):
         """
         import xarray as xr
 
-        df = self.query_bbox(
-            min_x, min_y, max_x, max_y, attributes=attributes, year=year
-        )
+        df = self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
         ds = xr.Dataset.from_dataframe(df)
         ds.attrs.update(
             {

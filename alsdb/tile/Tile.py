@@ -83,9 +83,7 @@ class Tile:
     # Reading
     # ------------------------------------------------------------------
 
-    def read(
-        self, chunk_size: Optional[int] = None
-    ) -> Generator[np.ndarray, None, None]:
+    def read(self, chunk_size: Optional[int] = None) -> Generator[np.ndarray, None, None]:
         """
         Yield structured numpy arrays of LAS points read via PDAL.
 
@@ -95,9 +93,7 @@ class Tile:
             Maximum number of points per yielded array.
             If None, the entire file is returned as a single array.
         """
-        pipeline = pdal.Pipeline(
-            json.dumps([{"type": "readers.las", "filename": str(self._path)}])
-        )
+        pipeline = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(self._path)}]))
         pipeline.execute()
 
         arrays = pipeline.arrays

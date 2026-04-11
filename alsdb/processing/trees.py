@@ -175,10 +175,7 @@ def _process_tile(
     # Crop to non-buffered extent
     cx0, cy0, cx1, cy1 = crop_bbox
     in_crop = (
-        (points["X"] >= cx0)
-        & (points["X"] <= cx1)
-        & (points["Y"] >= cy0)
-        & (points["Y"] <= cy1)
+        (points["X"] >= cx0) & (points["X"] <= cx1) & (points["Y"] >= cy0) & (points["Y"] <= cy1)
     )
     points = points[in_crop].copy()
 
@@ -270,8 +267,7 @@ def segment_trees(
     # ------------------------------------------------------------------ #
     if tile_size is None:
         logger.info(
-            "Segmenting trees  bbox=%s  year=%s  "
-            "min_height=%.1f m  radius=%.1f m  voxel_size=%s",
+            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  radius=%.1f m  voxel_size=%s",
             effective_bbox,
             year,
             min_height,
@@ -291,16 +287,10 @@ def segment_trees(
 
         records = _tree_metrics(points)
         if not records:
-            logger.warning(
-                "segment_trees: no trees found (try lowering min_points or min_height)"
-            )
+            logger.warning("segment_trees: no trees found (try lowering min_points or min_height)")
             return points, pd.DataFrame()
 
-        trees = (
-            pd.DataFrame(records)
-            .sort_values("height", ascending=False)
-            .reset_index(drop=True)
-        )
+        trees = pd.DataFrame(records).sort_values("height", ascending=False).reset_index(drop=True)
         logger.info(
             "  Done: %d trees  |  tallest %.1f m  |  mean crown %.0f m²",
             len(trees),
@@ -342,10 +332,7 @@ def segment_trees(
             tile_results[i] = result
     else:
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(_worker, i, qb, cb): i
-                for i, (qb, cb) in enumerate(tiles)
-            }
+            futures = {executor.submit(_worker, i, qb, cb): i for i, (qb, cb) in enumerate(tiles)}
             for future in as_completed(futures):
                 idx, result = future.result()
                 tile_results[idx] = result

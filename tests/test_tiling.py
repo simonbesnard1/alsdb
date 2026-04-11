@@ -4,7 +4,6 @@
 
 """Tests for shared tiling utilities (_tiling.py)."""
 
-
 import pytest
 
 from alsdb.processing._tiling import (
@@ -113,9 +112,7 @@ def test_run_tiled_sequential_calls_all_tiles():
 def test_run_tiled_sequential_passes_kwargs():
     tiles = tile_bboxes((0.0, 0.0, 500.0, 500.0), tile_size=500.0, buffer=0.0)
     worker, calls = _make_recorder()
-    run_tiled(
-        worker, None, tiles, _DummyStore(), n_workers=1, resolution=1.0, year=2021
-    )
+    run_tiled(worker, None, tiles, _DummyStore(), n_workers=1, resolution=1.0, year=2021)
     assert calls[0][2] == {"resolution": 1.0, "year": 2021}
 
 

@@ -60,13 +60,9 @@ class TileDBProvider:
             if not uri:
                 raise ValueError("'uri' must be provided when storage_type='s3'.")
             if not url:
-                raise ValueError(
-                    "'url' (S3 endpoint) must be provided when storage_type='s3'."
-                )
+                raise ValueError("'url' (S3 endpoint) must be provided when storage_type='s3'.")
             self.array_uri = uri
-            self._raw_cfg, self.ctx = self._initialize_s3_context(
-                credentials, url, region
-            )
+            self._raw_cfg, self.ctx = self._initialize_s3_context(credentials, url, region)
 
         elif self.storage_type == "local":
             if not uri:
@@ -75,9 +71,7 @@ class TileDBProvider:
             self._raw_cfg, self.ctx = self._initialize_local_context()
 
         else:
-            raise ValueError(
-                f"Invalid storage_type {storage_type!r}. Must be 'local' or 's3'."
-            )
+            raise ValueError(f"Invalid storage_type {storage_type!r}. Must be 'local' or 's3'.")
 
         self._schema_cache: Optional[tiledb.ArraySchema] = None
 

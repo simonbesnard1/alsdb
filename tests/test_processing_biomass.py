@@ -242,27 +242,21 @@ def test_compute_biomass_custom_model(provider, store):
     def simple_model(metrics):
         return np.where(np.isnan(metrics["h95"]), np.nan, metrics["h95"] * 2.0)
 
-    compute_biomass(
-        provider, store, resolution=RES, bbox=BBOX, year=YEAR, model_fn=simple_model
-    )
+    compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR, model_fn=simple_model)
     assert store.has_data("biomass", RES, YEAR)
 
 
 def test_compute_metrics_overwrite_false_skips(provider, store):
     compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["h95"][0] = 999.0
-    compute_metrics(
-        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
-    )
+    compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False)
     assert float(store._root["10m"]["h95"][0, 0, 0]) == pytest.approx(999.0)
 
 
 def test_compute_biomass_overwrite_false_skips(provider, store):
     compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["biomass"][0] = 999.0
-    compute_biomass(
-        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
-    )
+    compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False)
     assert float(store._root["10m"]["biomass"][0, 0, 0]) == pytest.approx(999.0)
 
 

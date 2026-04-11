@@ -141,9 +141,7 @@ class ALSZarrStore:
         store._root.attrs.update({"bbox": list(bbox), "crs_wkt": crs_wkt})
 
         for res_key, var_names in variables.items():
-            store._init_group(
-                res_key, bbox, crs_wkt, var_names, tile_size, root=store._root
-            )
+            store._init_group(res_key, bbox, crs_wkt, var_names, tile_size, root=store._root)
 
         return cls(path, mode="a")
 
@@ -208,8 +206,7 @@ class ALSZarrStore:
                 arr.attrs["_FillValue"] = "NaN"
 
         logger.info(
-            "ALSZarrStore: initialised group '%s'  (%d×%d px, "
-            "chunk %d×%d, vars: %s)",
+            "ALSZarrStore: initialised group '%s'  (%d×%d px, chunk %d×%d, vars: %s)",
             res_key,
             ny,
             nx,
@@ -266,9 +263,7 @@ class ALSZarrStore:
                     fill_value=np.nan,
                 )
                 arr.attrs["_FillValue"] = "NaN"
-                logger.info(
-                    "ALSZarrStore: added variable '%s' to group '%s'", variable, res_key
-                )
+                logger.info("ALSZarrStore: added variable '%s' to group '%s'", variable, res_key)
 
     # ------------------------------------------------------------------
     # Writing
@@ -329,9 +324,7 @@ class ALSZarrStore:
 
         tile_ny = row1 - row0
         tile_nx = col1 - col0
-        grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(
-            np.float32
-        )
+        grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(np.float32)
 
     def _upsert_year(self, grp, year: int) -> int:
         """Return the time index for *year*, appending a new slice if needed.
@@ -341,9 +334,7 @@ class ALSZarrStore:
         """
         with self._lock:
             time_arr = grp["time"]
-            existing = (
-                time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
-            )
+            existing = time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
             match = np.where(existing == year)[0]
 
             if len(match):

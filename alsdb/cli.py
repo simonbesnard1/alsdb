@@ -47,9 +47,7 @@ def main(verbose: bool) -> None:
     default=None,
     help="S3 endpoint URL (required for s3 storage).",
 )
-@click.option(
-    "--s3-region", envvar="ALSDB_S3_REGION", default="eu-central-1", show_default=True
-)
+@click.option("--s3-region", envvar="ALSDB_S3_REGION", default="eu-central-1", show_default=True)
 @click.option("--s3-access-key", envvar="ALSDB_S3_ACCESS_KEY", default=None)
 @click.option("--s3-secret-key", envvar="ALSDB_S3_SECRET_KEY", default=None)
 @click.option(
@@ -58,9 +56,7 @@ def main(verbose: bool) -> None:
     show_default=True,
     help="Spatial tile size in CRS units (metres).",
 )
-@click.option(
-    "--chunk-size", default=1_000_000, show_default=True, help="Points per write batch."
-)
+@click.option("--chunk-size", default=1_000_000, show_default=True, help="Points per write batch.")
 @click.option("--domain-min-x", default=100_000.0, show_default=True)
 @click.option("--domain-max-x", default=900_000.0, show_default=True)
 @click.option("--domain-min-y", default=3_000_000.0, show_default=True)
@@ -150,7 +146,5 @@ def info_cmd(laz_path: Path) -> None:
         click.echo(f"Tile    : {name.tile_x_km} km E  /  {name.tile_y_km} km N")
     if hasattr(name, "product"):
         click.echo(f"Product : {name.product}")
-    click.echo(
-        f"BBox    : X [{bbox[0]:.0f} – {bbox[2]:.0f}]  Y [{bbox[1]:.0f} – {bbox[3]:.0f}]"
-    )
+    click.echo(f"BBox    : X [{bbox[0]:.0f} – {bbox[2]:.0f}]  Y [{bbox[1]:.0f} – {bbox[3]:.0f}]")
     click.echo(f"Points  : {tile.n_points:,}")

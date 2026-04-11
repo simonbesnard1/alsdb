@@ -108,9 +108,7 @@ def _compute_gap_grid(
 
     n_gnd = binned_statistic_2d(x_fr, y_fr, gnd, statistic="sum", bins=bins).statistic
     n_veg = binned_statistic_2d(x_fr, y_fr, veg, statistic="sum", bins=bins).statistic
-    n_tot = binned_statistic_2d(
-        x_fr, y_fr, ones, statistic="count", bins=bins
-    ).statistic
+    n_tot = binned_statistic_2d(x_fr, y_fr, ones, statistic="count", bins=bins).statistic
 
     with np.errstate(invalid="ignore", divide="ignore"):
         gap = np.where(n_tot > 0, n_gnd / (n_gnd + n_veg), np.nan)

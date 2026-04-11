@@ -27,7 +27,7 @@ db = ALSDatabase(storage_type="local", uri="/path/to/my_array")
 db.ingest("/path/to/tile.laz")
 
 # Already-ingested tiles are skipped automatically (manifest tracking)
-db.ingest("/path/to/tile.laz")   # no-op
+db.ingest("/path/to/tile.laz")  # no-op
 
 # %%
 # Inspect the manifest
@@ -37,8 +37,10 @@ db.ingest("/path/to/tile.laz")   # no-op
 # ingested file.
 
 for entry in db.list_ingested():
-    print(f"{entry['filename']:40s}  year={entry['year']}  "
-          f"n_points={entry['n_points']:>10,}  status={entry['status']}")
+    print(
+        f"{entry['filename']:40s}  year={entry['year']}  "
+        f"n_points={entry['n_points']:>10,}  status={entry['status']}"
+    )
 
 print("\nStored CRS:", db.stored_crs())
 
@@ -56,8 +58,8 @@ paths = sorted(Path("/path/to/als_tiles/").glob("*.laz"))
 
 db.ingest_many(
     paths,
-    max_workers=8,          # number of parallel LAZ readers / TileDB writers
-    consolidate_every=50,   # merge fragments every 50 tiles for better query performance
+    max_workers=8,  # number of parallel LAZ readers / TileDB writers
+    consolidate_every=50,  # merge fragments every 50 tiles for better query performance
 )
 
 # %%
@@ -69,7 +71,7 @@ db.ingest_many(
 
 db.ingest(
     "/path/to/tile.laz",
-    classes=[2, 3, 4, 5],   # ASPRS classification codes
+    classes=[2, 3, 4, 5],  # ASPRS classification codes
 )
 
 # %%
@@ -81,7 +83,7 @@ db.ingest(
 db_s3 = ALSDatabase(
     storage_type="s3",
     uri="s3://my-bucket/als_array",
-    url="https://s3.example.com",     # endpoint URL (omit for AWS)
+    url="https://s3.example.com",  # endpoint URL (omit for AWS)
     region="eu-central-1",
     credentials={
         "AccessKeyId": "ACCESS_KEY",

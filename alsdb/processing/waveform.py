@@ -414,15 +414,11 @@ def simulate_waveform(
             coeffs, _, _, _ = np.linalg.lstsq(A, z_gnd, rcond=None)
             a, b, c = coeffs
             slope_deg = float(np.degrees(np.arctan(np.sqrt(a**2 + b**2))))
-            plane_z = (
-                a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
-            )
+            plane_z = a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
             z = z - plane_z + float(z_gnd.mean())
             logger.debug("Slope correction applied: θ=%.1f°", slope_deg)
         else:
-            logger.debug(
-                "Slope correction skipped: only %d ground points (need ≥ 3)", gnd.sum()
-            )
+            logger.debug("Slope correction skipped: only %d ground points (need ≥ 3)", gnd.sum())
 
     # Build point weights: beam profile × optional intensity
     if gaussian_beam_weighting:
@@ -455,9 +451,7 @@ def simulate_waveform(
 
     # 3. Add noise
     if noise_std > 0.0:
-        waveform = np.maximum(
-            0.0, waveform + np.random.normal(0.0, noise_std, len(waveform))
-        )
+        waveform = np.maximum(0.0, waveform + np.random.normal(0.0, noise_std, len(waveform)))
 
     # 4. Normalise to unit energy
     total = waveform.sum()

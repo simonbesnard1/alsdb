@@ -286,6 +286,5 @@ def linkcode_resolve(domain, info):
         return f"https://github.com/simonbesnard1/alsdb/blob/main/alsdb/{fn}{linespec}"
     else:
         return (
-            f"https://github.com/simonbesnard1/alsdb/blob/"
-            f"v{alsdb.__version__}/alsdb/{fn}{linespec}"
+            f"https://github.com/simonbesnard1/alsdb/blob/v{alsdb.__version__}/alsdb/{fn}{linespec}"
         )

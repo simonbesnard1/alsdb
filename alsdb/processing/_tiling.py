@@ -243,9 +243,7 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     return result
 
 
-def run_tiled(
-    worker_fn: Callable, provider, tiles, store, n_workers: int, **kwargs
-) -> None:
+def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int, **kwargs) -> None:
     """
     Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
 

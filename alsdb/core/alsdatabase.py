@@ -109,9 +109,7 @@ class ALSDatabase(TileDBProvider):
         """
         if self.array_exists():
             if not overwrite:
-                logger.debug(
-                    "Array already exists at %s — skipping creation.", self.array_uri
-                )
+                logger.debug("Array already exists at %s — skipping creation.", self.array_uri)
                 return
             logger.info("Removing existing array at %s", self.array_uri)
             tiledb.remove(self.array_uri, ctx=self.ctx)
@@ -208,8 +206,7 @@ class ALSDatabase(TileDBProvider):
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
         n_frags = len(tiledb.array_fragments(self.array_uri).uri)
         logger.info(
-            "Consolidating %d fragments (fragment_size=%.0f MB, "
-            "memory_budget=%.0f MB)…",
+            "Consolidating %d fragments (fragment_size=%.0f MB, memory_budget=%.0f MB)…",
             n_frags,
             fragment_size / 1e6,
             memory_budget / 1e6,
@@ -361,9 +358,7 @@ class ALSDatabase(TileDBProvider):
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
-        chunk_size = chunk_size or (
-            self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000
-        )
+        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
 
         manifest = self.load_manifest()
         if not overwrite and manifest.get(filename, {}).get("status") == "ok":
@@ -443,9 +438,7 @@ class ALSDatabase(TileDBProvider):
             ``{filename: n_points_written}`` for every path in *laz_paths*.
             Skipped files have value 0.
         """
-        chunk_size = chunk_size or (
-            self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000
-        )
+        chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
         laz_paths = [Path(p) for p in laz_paths]
 
         # Pre-load manifest; filter already-ingested files unless overwrite
@@ -475,9 +468,7 @@ class ALSDatabase(TileDBProvider):
         newly_written = 0
 
         def _worker(path: Path) -> Tuple[str, int, dict]:
-            total, entry = self._ingest_tile(
-                path, chunk_size, classification_filter, stored
-            )
+            total, entry = self._ingest_tile(path, chunk_size, classification_filter, stored)
             return path.name, total, entry
 
         # Process in batches so consolidation only runs after all workers in a

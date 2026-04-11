@@ -182,9 +182,7 @@ def test_compute_gap_fraction_writes_gap(provider, store):
 
 
 def test_compute_gap_fraction_with_lai(provider, store):
-    compute_gap_fraction(
-        provider, store, resolution=RES, bbox=BBOX, year=YEAR, lai=True, k=_LAI_K
-    )
+    compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR, lai=True, k=_LAI_K)
     assert store.has_data("gap", RES, YEAR)
     assert store.has_data("lai", RES, YEAR)
 
@@ -201,9 +199,7 @@ def test_compute_gap_fraction_gap_values_in_range(provider, store):
 def test_compute_gap_fraction_overwrite_false_skips(provider, store):
     compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     store._root["10m"]["gap"][0] = 999.0
-    compute_gap_fraction(
-        provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False
-    )
+    compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR, overwrite=False)
     assert float(store._root["10m"]["gap"][0, 0, 0]) == pytest.approx(999.0)
 
 

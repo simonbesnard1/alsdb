@@ -63,9 +63,7 @@ def test_rasterise_max_statistic():
     x = np.array([5.0, 5.0])
     y = np.array([5.0, 5.0])
     v = np.array([3.0, 9.0])
-    grid = _rasterise(
-        x, y, v, (0.0, 0.0, 100.0, 100.0), resolution=10.0, statistic="max"
-    )
+    grid = _rasterise(x, y, v, (0.0, 0.0, 100.0, 100.0), resolution=10.0, statistic="max")
     assert float(grid[~np.isnan(grid)][0]) == pytest.approx(9.0)
 
 

@@ -157,9 +157,7 @@ def plot_dsm(
 
     if hillshade:
         ls = LightSource(azdeg=315, altdeg=45)
-        ls.hillshade(
-            np.where(np.isnan(dsm), np.nanmin(dsm), dsm), vert_exag=vert_exag
-        )
+        ls.hillshade(np.where(np.isnan(dsm), np.nanmin(dsm), dsm), vert_exag=vert_exag)
         # Blend elevation colour with hillshade
         cmap_obj = plt.get_cmap(cmap)
         norm = plt.Normalize(vmin=np.nanmin(dsm), vmax=np.nanmax(dsm))
@@ -233,9 +231,7 @@ def plot_rgb(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    ax.imshow(
-        rgb, extent=extent, aspect="equal", origin="upper", interpolation="nearest"
-    )
+    ax.imshow(rgb, extent=extent, aspect="equal", origin="upper", interpolation="nearest")
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
     ax.set_title(f"RGB orthoimage  —  {resolution} m resolution")
@@ -317,9 +313,7 @@ def plot_classification(
     import matplotlib.patches as mpatches
     from matplotlib.colors import ListedColormap
 
-    grid, extent = rasterize(
-        df, "Classification", resolution=resolution, statistic="mean"
-    )
+    grid, extent = rasterize(df, "Classification", resolution=resolution, statistic="mean")
     grid_int = np.round(grid).astype("float")
     grid_int[np.isnan(grid)] = np.nan
 
@@ -507,11 +501,7 @@ def plot_waveform(
     ax_wave.legend(loc="upper right", fontsize=7.5, framealpha=0.85)
 
     # Annotation box
-    info = (
-        f"Cover: {result.cover:.2f}\n"
-        f"HOME: {result.home:.1f} m\n"
-        f"N pts: {result.n_points:,}"
-    )
+    info = f"Cover: {result.cover:.2f}\nHOME: {result.home:.1f} m\nN pts: {result.n_points:,}"
     ax_wave.text(
         0.03,
         0.04,
@@ -541,10 +531,7 @@ def plot_waveform(
     # Shared title
     # ------------------------------------------------------------------
     if title is None:
-        title = (
-            f"Simulated GEDI waveform  |  "
-            f"({result.center_x:.0f}, {result.center_y:.0f}) UTM"
-        )
+        title = f"Simulated GEDI waveform  |  ({result.center_x:.0f}, {result.center_y:.0f}) UTM"
     fig.suptitle(title, fontsize=12, y=1.02)
     fig.tight_layout()
     return fig
@@ -640,9 +627,7 @@ def plot_rh_profile(
     win = min(win, n if n % 2 == 1 else n - 1)  # must be odd and <= n
     win = win if win % 2 == 1 else win - 1
     Wn_s = (
-        savgol_filter(Wn, window_length=win, polyorder=min(3, win - 1))
-        if n >= win
-        else Wn.copy()
+        savgol_filter(Wn, window_length=win, polyorder=min(3, win - 1)) if n >= win else Wn.copy()
     )
 
     peaks, _ = find_peaks(Wn_s, prominence=peak_prominence)
@@ -659,11 +644,7 @@ def plot_rh_profile(
         high_peak = int(np.argmin(np.abs(h_w - np.percentile(h_w, 75))))
 
     mid_h = 0.5 * (h_w[low_peak] + h_w[high_peak])
-    h_split = (
-        h_w[valleys[np.argmin(np.abs(h_w[valleys] - mid_h))]]
-        if len(valleys) > 0
-        else mid_h
-    )
+    h_split = h_w[valleys[np.argmin(np.abs(h_w[valleys] - mid_h))]] if len(valleys) > 0 else mid_h
     U_strength = float(np.interp(h_split, h_mono, p_arr / 100.0))
 
     # ------------------------------------------------------------------
@@ -700,9 +681,7 @@ def plot_rh_profile(
     single_layer = low_peak == high_peak
     if not single_layer:
         ax_wave.scatter(Wn_s[low_peak], h_w[low_peak], s=50, zorder=3, color="#1b9e77")
-        ax_wave.scatter(
-            Wn_s[high_peak], h_w[high_peak], s=50, zorder=3, color="#d95f02"
-        )
+        ax_wave.scatter(Wn_s[high_peak], h_w[high_peak], s=50, zorder=3, color="#d95f02")
 
     ax_wave.axhline(h_split, ls="--", lw=1.0, alpha=0.7, label="Layer boundary")
     ax_wave.set_xlabel("Waveform intensity (normalized)")
@@ -888,8 +867,7 @@ def plot_pointcloud_3d(
 
         if colours_rgb is not None:
             colour_arg = [
-                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
-                for r, g, b in colours_rgb
+                f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})" for r, g, b in colours_rgb
             ]
             marker = dict(size=point_size, color=colour_arg, opacity=0.8)
         else:
@@ -898,7 +876,7 @@ def plot_pointcloud_3d(
             cmap_obj = plt.get_cmap(cmap)
             rgba = cmap_obj(colours_scalar)
             colour_arg = [
-                f"rgb({int(r*255)},{int(g*255)},{int(b*255)})" for r, g, b, _ in rgba
+                f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})" for r, g, b, _ in rgba
             ]
             marker = dict(size=point_size, color=colour_arg, opacity=0.8)
 
