@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "alsdb"
+abstract: "Airborne Laser Scanning point clouds — from LAZ to TileDB, with gridded product and waveform simulation pipelines"
+version: 0.1.0
+license: EUPL-1.2
+authors:
+  - family-names: Besnard
+    given-names: Simon
+    email: simon.besnard@gfz.de
+repository-code: "https://github.com/simonbesnard1/alsdb"
+keywords:
+  - lidar
+  - als
+  - airborne laser scanning
+  - point cloud
+  - tiledb
+  - zarr
+  - canopy height
+  - biomass
+  - gedi
+  - remote sensing

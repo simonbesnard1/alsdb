@@ -8,6 +8,12 @@ import os
 import sys
 from datetime import datetime
 from importlib.metadata import version as version_
+from unittest.mock import MagicMock
+
+# Pre-mock heavy C-extension imports so conf.py can be loaded without the full
+# conda environment (e.g. on ReadTheDocs).  Must happen before `import alsdb`.
+for _mod in ["tiledb", "pdal"]:
+    sys.modules.setdefault(_mod, MagicMock())
 
 from docutils import nodes
 from docutils.parsers.rst import Directive
