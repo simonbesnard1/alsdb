@@ -1,8 +1,29 @@
 [project]
 name = "alsdb"
 version = "0.1.0"
-description = "ALS point cloud database — ingest PNOA LAZ tiles into TileDB on S3"
+description = "Airborne Laser Scanning point clouds — from LAZ to TileDB, with gridded product and waveform simulation pipelines"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "EUPL-1.2" }
+authors = [
+    { name = "Simon Besnard", email = "simon.besnard@gfz.de" },
+]
+keywords = [
+    "lidar", "als", "airborne laser scanning", "point cloud",
+    "tiledb", "zarr", "canopy height", "biomass", "gedi", "remote sensing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "tiledb>=0.28",
     "zarr>=3.0",
@@ -18,6 +39,11 @@ dependencies = [
 [project.optional-dependencies]
 crs = ["rioxarray>=0.15"]
 
+[project.urls]
+Homepage = "https://github.com/simonbesnard1/alsdb"
+Repository = "https://github.com/simonbesnard1/alsdb"
+"Bug Tracker" = "https://github.com/simonbesnard1/alsdb/issues"
+
 [project.scripts]
 alsdb = "alsdb.cli:main"
 
@@ -26,7 +52,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["alsdb/**"]
+packages = ["alsdb"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alsdb/data" = "alsdb/data"
 
 [tool.pixi.workspace]
 name = "alsdb"
