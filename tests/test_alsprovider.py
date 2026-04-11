@@ -31,7 +31,7 @@ def array_uri(tmp_path) -> str:
     attrs["Z"] = rng.uniform(800.0, 850.0, n).astype(np.float64)
     attrs["ReturnNumber"] = np.ones(n, dtype=np.uint8)
     attrs["NumberOfReturns"] = np.ones(n, dtype=np.uint8)
-    db.write(x, y, attrs)
+    db.write(x, y, 2021, attrs)
     return uri
 
 
@@ -89,3 +89,16 @@ def test_get_available_attributes(array_uri):
     assert "Z" in attrs
     assert "Classification" in attrs
     assert len(attrs) == len(LAS_ATTRIBUTES)
+
+
+def test_available_years(array_uri):
+    provider = ALSProvider(storage_type="local", uri=array_uri)
+    years = provider.available_years()
+    assert years == [2021]
+
+
+def test_query_bbox_year_filter(array_uri):
+    """Points written at year 2021 should not appear when querying year 2020."""
+    provider = ALSProvider(storage_type="local", uri=array_uri)
+    df = provider.query_bbox(308_000.0, 4_688_000.0, 310_000.0, 4_690_000.0, year=2020)
+    assert len(df) == 0

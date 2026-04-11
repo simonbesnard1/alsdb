@@ -1,0 +1,40 @@
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        flags:
+          - unittests
+        paths:
+          - "alsdb/"
+          - "!alsdb/utils/viz*.py"
+          - "!alsdb/cli.py"
+    patch:
+      default:
+        target: 60%
+        only_pulls: true
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: true
+
+flags:
+  unittests:
+    paths:
+      - "alsdb/"
+      - "!alsdb/utils/viz_raster.py"
+      - "!alsdb/utils/viz_trees.py"
+      - "!alsdb/utils/viz.py"
+      - "!alsdb/cli.py"
+    carryforward: false
+
+ignore:
+  - "alsdb/utils/viz_raster.py"
+  - "alsdb/utils/viz_trees.py"
+  - "alsdb/utils/viz.py"
+  - "alsdb/cli.py"
+  - "tests/"

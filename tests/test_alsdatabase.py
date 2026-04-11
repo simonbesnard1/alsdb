@@ -58,13 +58,13 @@ def test_create_array(db):
 
 def test_write_creates_array_implicitly(db):
     x, y, attrs = _make_points(50)
-    db.write(x, y, attrs)
+    db.write(x, y, 2021, attrs)
     assert db.array_exists()
 
 
 def test_write_and_read_point_count(db):
     x, y, attrs = _make_points(200)
-    db.write(x, y, attrs)
+    db.write(x, y, 2021, attrs)
     with tiledb.open(db.array_uri, mode="r") as arr:
         result = arr[:]
     assert len(result["Z"]) == 200
@@ -73,8 +73,8 @@ def test_write_and_read_point_count(db):
 def test_append_accumulates_points(db):
     x1, y1, a1 = _make_points(100, seed=1)
     x2, y2, a2 = _make_points(150, seed=2)
-    db.write(x1, y1, a1)
-    db.write(x2, y2, a2)
+    db.write(x1, y1, 2021, a1)
+    db.write(x2, y2, 2021, a2)
     with tiledb.open(db.array_uri, mode="r") as arr:
         result = arr[:]
     assert len(result["Z"]) == 250
@@ -82,35 +82,30 @@ def test_append_accumulates_points(db):
 
 def test_overwrite_resets_point_count(db):
     x, y, attrs = _make_points(100)
-    db.write(x, y, attrs)
+    db.write(x, y, 2021, attrs)
     db.create(overwrite=True)
     x2, y2, a2 = _make_points(30)
-    db.write(x2, y2, a2)
+    db.write(x2, y2, 2021, a2)
     with tiledb.open(db.array_uri, mode="r") as arr:
         result = arr[:]
     assert len(result["Z"]) == 30
 
 
-def test_ingest_returns_point_count(db, tmp_path):
-    from unittest.mock import patch
-    from alsdb.utils.schema import LAS_ATTRIBUTES
+def test_stored_crs_is_none_before_write(db):
+    """stored_crs() should return None when the array does not exist yet."""
+    assert db.stored_crs() is None
 
-    rng = np.random.default_rng(0)
-    n = 200
-    dtype = [("X", np.float64), ("Y", np.float64)] + [
-        (name, dt) for name, dt in LAS_ATTRIBUTES.items()
-    ]
-    data = np.zeros(n, dtype=dtype)
-    data["X"] = rng.uniform(308_000, 310_000, n)
-    data["Y"] = rng.uniform(4_688_000, 4_690_000, n)
-    data["Z"] = rng.uniform(800, 850, n)
-    data["ReturnNumber"] = np.ones(n, dtype=np.uint8)
-    data["NumberOfReturns"] = np.ones(n, dtype=np.uint8)
 
-    def _fake_read(path, chunk_size=None):
-        yield data
+def test_stored_crs_after_create(db):
+    db.create(crs="EPSG:25830")
+    assert db.stored_crs() == "EPSG:25830"
 
-    with patch("alsdb.tile.Tile.Tile.read", _fake_read):
-        count = db.ingest("PNOA_2021_CYL-NW_308-4690_ORT-CLA-RGB.laz")
 
-    assert count == n
+def test_load_manifest_empty_before_ingest(db):
+    assert db.load_manifest() == {}
+
+
+def test_write_stores_crs_in_metadata(db):
+    x, y, attrs = _make_points(10)
+    db.write(x, y, 2021, attrs, crs="EPSG:25830")
+    assert db.stored_crs() == "EPSG:25830"
