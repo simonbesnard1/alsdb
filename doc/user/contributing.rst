@@ -1,132 +1,139 @@
 .. _devindex:
 
-*************************
-Contributing to icesat2DB
-*************************
+***********************
+Contributing to alsdb
+***********************
 
 .. highlight:: shell
 
 Overview
 ========
 
-We welcome your skills and enthusiasm at the icesat2DB project!. There are numerous opportunities to
-contribute beyond just writing code.
-All contributions, including bug reports, bug fixes, documentation improvements, enhancement suggestions,
-and other ideas are welcome.
+We welcome your skills and enthusiasm for the alsdb project! There are many ways to contribute beyond writing code — bug reports, documentation improvements, usage examples, and feature suggestions are all valuable.
 
-This project is a community effort, and everyone is welcome to contribute. Everyone within the community
-is expected to abide by our `code of conduct <https://github.com/simonbesnard1/icesat2db/blob/main/CODE_OF_CONDUCT.md>`_.
-
-You can contribute in many ways:
+All contributions are expected to follow our `Code of Conduct <https://github.com/simonbesnard1/alsdb/blob/main/CODE_OF_CONDUCT.md>`_.
 
 Types of Contributions
-----------------------
+-----------------------
 
 Report Bugs
 ~~~~~~~~~~~
 
-Report bugs at https://github.com/simonbesnard1/icesat2db/issues.
+Report bugs at https://github.com/simonbesnard1/alsdb/issues.
 
-If you are reporting a bug, please include:
+Please include:
 
 * Your operating system name and version.
-* Any details about your local setup that might be helpful in troubleshooting.
-* Detailed steps to reproduce the bug.
+* The output of ``pixi run python -c "import alsdb; print(alsdb.__version__)"``
+* A minimal reproducible example (ideally with synthetic data, not real LAZ files).
+* The full traceback.
 
 Fix Bugs
 ~~~~~~~~
 
-Look through the GitHub issues for bugs. Anything tagged with "bug" and "help
-wanted" is open to whoever wants to implement it.
+Look through the GitHub issues for bugs tagged ``"bug"`` and ``"help wanted"``. These are open to anyone.
 
 Implement Features
 ~~~~~~~~~~~~~~~~~~
 
-Look through the GitHub issues for features. Anything tagged with "enhancement"
-and "help wanted" is open to whoever wants to implement it.
+Look for issues tagged ``"enhancement"`` and ``"help wanted"``. Before starting work on a large feature, open an issue first to discuss the design.
 
 Write Documentation
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
 
-icesat2DB could always use more documentation, whether as part of the
-official icesat2DB docs, in docstrings, or even on the web in blog posts,
-articles, and such.  If something in the docs doesn't make sense to you, 
-updating the relevant section after you figure it out is a great way to 
-ensure it will help the next person.
+alsdb documentation lives in ``doc/``. Improvements to explanations, additional usage examples, and fixes to typos are always welcome.
 
 Submit Feedback
 ~~~~~~~~~~~~~~~
 
-The best way to send feedback is to file an `issue <https://github.com/simonbesnard1/icesat2db/issues>`_.
+Use the `GitHub Discussions <https://github.com/simonbesnard1/alsdb/discussions>`_ board for questions, ideas, and general feedback.
 
-If you are proposing a feature:
+Development Setup
+-----------------
 
-* Explain in detail how it would work.
-* Keep the scope as narrow as possible, to make it easier to implement.
-* Remember that this is a volunteer-driven project, and that contributions
-  are welcome :)
+1. Fork the repository on GitHub.
 
-Commit Changes
---------------
+2. Clone your fork and install with pixi:
 
-How to
-~~~~~~
+   .. code-block:: bash
 
-1. Fork the `icesat2DB` repo on GitHub.
-2. Clone your fork locally::
+       git clone https://github.com/YOUR_USERNAME/alsdb.git
+       cd alsdb
+       pixi install
+       pixi shell
 
-    $ git clone git@github.com:simonbesnard1/icesat2db.git
+3. Create a feature branch:
 
-3. Install your local copy into a virtualenv. Assuming you have virtualenvwrapper installed, this is how you set up your fork for local development::
+   .. code-block:: bash
 
-    $ mkvirtualenv icesat2db
-    $ cd icesat2db/
-    $ python setup.py develop
+       git checkout -b feature/my-new-feature
 
-4. Create a branch for local development::
+4. Make your changes, add tests, and verify everything passes:
 
-    $ git checkout -b name-of-your-bugfix-or-feature
+   .. code-block:: bash
 
-   Now you can make your changes locally.
+       pixi run pytest tests/ -v --cov=alsdb
 
-5. When you're done making changes, check that your changes pass flake8 and the
-   tests, including testing other Python versions with tox::
+5. Check code style (Ruff):
 
-    $ make pytest
-    $ make lint
-    $ make urlcheck
-    $ tox
+   .. code-block:: bash
 
-   To get flake8 and tox, just pip install them into your virtualenv.
+       pixi run ruff check alsdb/
+       pixi run ruff format --check alsdb/
 
-6. Commit your changes and push your branch to GitHub::
+   To auto-format:
 
-    $ git add .
-    $ git commit -m "Your detailed description of your changes."
-    $ git push origin name-of-your-bugfix-or-feature
+   .. code-block:: bash
 
-7. Submit a pull request through the GitHub website.
+       pixi run ruff format alsdb/
 
-Sign your commits
-~~~~~~~~~~~~~~~~~
+6. Commit and push to your fork, then open a pull request.
 
-Please note that our license terms only allow signed commits.
-A guideline how to sign your work can be found here: https://git-scm.com/book/en/v2/Git-Tools-Signing-Your-Work
+Code Style
+----------
 
-If you are using the PyCharm IDE, the `Commit changes` dialog has an option called `Sign-off commit` to
-automatically sign your work.
+alsdb uses `Ruff <https://docs.astral.sh/ruff/>`_ for linting and formatting with a line length of 100 characters. All code must pass ``ruff check`` and ``ruff format --check`` before merging (enforced by CI).
 
+Tests
+-----
+
+Tests live in ``tests/``. The test suite uses `pytest <https://docs.pytest.org>`_ and requires a real TileDB array fixture built from synthetic LAZ-like data (see ``tests/conftest.py``).
+
+Run the full suite:
+
+.. code-block:: bash
+
+    pixi run pytest tests/ -v --cov=alsdb --cov-report=term-missing
+
+Run only unit tests (no TileDB/PDAL):
+
+.. code-block:: bash
+
+    pixi run pytest tests/ -k "not provider and not compute" -v
+
+Building the Documentation
+--------------------------
+
+.. code-block:: bash
+
+    cd doc
+    pixi run python -m sphinx -b html . _build/html
+    # Open _build/html/index.html in a browser
 
 Pull Request Guidelines
 -----------------------
 
-Before you submit a pull request, check that it meets these guidelines:
+Before submitting a pull request:
 
-1. The pull request should include tests.
-2. If the pull request adds functionality, the docs should be updated. Put
-   your new functionality into a function with a docstring, and add the
-   feature to the list in README.rst.
-3. The pull request should work for Python 3.10 and later. Check
-   https://github.com/simonbesnard1/icesat2db/pulls
-   and make sure that the tests pass for all supported Python versions.
+1. Add tests for any new functionality.
+2. Update docstrings (NumPy style) for any changed public functions.
+3. Ensure ``pixi run pytest tests/`` passes with no failures.
+4. Ensure ``ruff check alsdb/`` passes with no errors.
+5. Update ``doc/`` if your change affects user-visible behaviour.
 
+Pull requests are reviewed by Simon Besnard (``@simonbesnard1``). Response times are best-effort; please be patient.
+
+License
+-------
+
+By contributing to alsdb you agree that your contributions will be licensed under the `EUPL-1.2 <https://opensource.org/licenses/EUPL-1.2>`_ license.

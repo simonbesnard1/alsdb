@@ -4,63 +4,126 @@
 Frequently Asked Questions (FAQ)
 ################################
 
-How should I cite icesat2DB?
-----------------------------
+How should I cite alsdb?
+-------------------------
 
-Please use the following citation when referencing icesat2DB in your work:
+Please use the following citation when referencing alsdb in your work:
 
-Dombrowski, F., Besnard, S., Urbazaev, M., & Holcomb, A. icesat2DB [Computer software]. https://github.com/simonbesnard1/icesat2db
+  Besnard, S. alsdb [Computer software]. https://github.com/simonbesnard1/alsdb
 
-What are the main features of icesat2DB?
-----------------------------------------
-
-icesat2DB is a TileDB-based Python package designed to efficiently manage, query, and analyze large-scale ICESat-2 data. Its main features include:
-
-- **Efficient data storage**: Stores ICESat-2 data using TileDB arrays, enabling optimized access and scalability.
-- **Geospatial querying**: Provides spatially enabled querying for regions of interest with support for bounding boxes and polygons.
-- **Automated processing**: Facilitates loading, pre-filtering, and processing of ICESat-2 ATL08 data product.
-- **Parallelized operations**: Leverages parallel engines (e.g., Dask) for distributed data processing, enhancing performance on large datasets.
-- **Integration with Python libraries**: Outputs data in formats compatible with pandas, geopandas, and xarray for seamless analysis.
-
-How do I set up the database for ICESat-2?
+Why can't I install alsdb with pip alone?
 ------------------------------------------
 
-The TileDB database is set up automatically using the `icesat2DB` package. By default, it creates and manages the schema required for ICESat-2 data. If you prefer to use a pre-existing database, ensure that the structure aligns with the schema defined by `icesat2DB`.
+``pdal`` and ``python-pdal`` are only available through conda-forge and cannot be installed via pip. Use `pixi <https://pixi.sh>`_ which resolves both conda-forge and PyPI dependencies automatically:
 
-What data products does icesat2DB support?
-------------------------------------------
+.. code-block:: bash
 
-icesat2DB (currently) supports the following ICESat-2 data products:
+    git clone https://github.com/simonbesnard1/alsdb.git
+    cd alsdb && pixi install
 
-- **Level ATL08**
+See :ref:`installing` for full instructions.
 
-Can I use the ICESat-2 database on cloud-hosted databases?
-----------------------------------------------------------
+Why does ingestion say "already ingested, skipping"?
+------------------------------------------------------
 
-Yes, the ICESat-2 database can be deployed on cloud-hosted storage systems like AWS S3. Use TileDB’s integration with cloud platforms to store and access ICESat-2 data seamlessly. Refer to the cloud storage documentation in TileDB for setup instructions.
+The manifest records every file that has been successfully ingested. Re-running ``ingest()`` or ``ingest_many()`` on the same files is safe — they are skipped by default. To force re-ingestion, pass ``overwrite=True``:
 
-Can I add data to my ICESat-2 database?
----------------------------------------
+.. code-block:: python
 
-Yes, you can add data to an existing ICESat-2 database using `icesat2DB`. Simply configure the database with the appropriate schema and use the :py:class:`icesat2db.IceSat2Processor` class to process and ingest new data. Make sure to backup your database before making modifications.
+    db.ingest("tile.laz", overwrite=True)
+    db.ingest_many(paths, overwrite=True)
 
-How do I write ICESat-2 data into the database?
------------------------------------------------
+What datasets does alsdb support?
+-----------------------------------
 
-ICESat-2 data can be written to the database using the :py:class:`icesat2db.IceSat2Processor` class. Steps include:
+alsdb is dataset-agnostic. CRS, bounding box, and acquisition year are read from the LAZ/LAS header automatically via PDAL. Any dataset that follows the LAS specification works, including:
 
-1. Configure the `data_config.yml` file with paths to your ICESat-2 HDF5 files and database settings.
-2. Use the :py:class:`icesat2db.IceSat2Processor` to process and insert data into the TileDB database.
-3. Monitor logs for any errors or warnings during processing.
+- Spanish PNOA (Plan Nacional de Ortofotografía Aérea)
+- German ATKIS DGM
+- French RGE ALTI
+- UK Environment Agency National LiDAR Programme
+- US 3DEP (USGS 3D Elevation Program)
+- Any custom or research ALS campaign
 
-How do I contribute to icesat2DB development?
----------------------------------------------
+For PNOA tiles, the tile name parser (``PNOATileName``) extracts year, CRS, and bounding box from the filename as a fallback if the LAZ header is incomplete.
 
-We welcome contributions to icesat2DB! Here’s how you can help:
+What happens to cells with no data?
+-------------------------------------
 
-- **Report issues**: If you encounter bugs or have suggestions, report them on our GitHub issue tracker.
-- **Submit pull requests**: Contribute code for bug fixes, new features, or performance improvements.
-- **Improve documentation**: Help expand the documentation by providing additional examples or clarifications.
+Cells in the Zarr store that have no contributing points remain ``NaN``. This happens for:
 
-For detailed contribution guidelines, please check the :ref:`devindex`. Additionally, join discussions on our GitHub repository to engage with the development community.
+- Sub-tiles outside the flight swath.
+- Cells where all points were filtered out by the classification filter.
+- Cells in raster products where insufficient points exist to compute a statistic.
 
+``NaN`` cells are preserved faithfully through all processing steps and are visible in ``to_dataset()`` output.
+
+How do I process multiple survey years?
+-----------------------------------------
+
+Run the same processing function for each year. The ``overwrite=False`` default ensures existing years are never recomputed:
+
+.. code-block:: python
+
+    for year in [2017, 2021, 2023]:
+        compute_chm(provider=reader, store=store, resolution=1.0,
+                    year=year, tile_size=500.0, n_workers=4)
+
+Results are stored in the time axis of the Zarr arrays and can be accessed with ``.sel(time=year)``.
+
+My query returns empty results — what is wrong?
+-------------------------------------------------
+
+Check the following:
+
+1. **Year** — call ``reader.available_years()`` to confirm the year is stored.
+2. **Bounding box** — the coordinates must be in the same CRS as the array (typically UTM). Passing geographic coordinates (lon/lat) to a UTM array returns no data.
+3. **Fragment consolidation** — if you just ingested data, try ``db.consolidate()`` first.
+4. **Domain bounds** — data ingested outside the TileDB domain bounds is silently clipped. Check ``db.stored_crs()`` and verify the coordinates.
+
+Why is my CHM noisy at tile edges?
+------------------------------------
+
+This is a HAG artefact. The Delaunay TIN built from ground points becomes unreliable near tile edges where only one side of the boundary has data. Increase ``tile_buffer`` from 50 m to 100 m:
+
+.. code-block:: python
+
+    compute_chm(provider=reader, store=store, resolution=1.0,
+                year=2021, tile_size=500.0, tile_buffer=100.0)
+
+How do I use a scikit-learn biomass model?
+-------------------------------------------
+
+Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature order is ``["h50", "h75", "h95", "hmean", "cc", "density"]`` matching ``compute_metrics()``:
+
+.. code-block:: python
+
+    from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    model = GradientBoostingRegressor()
+    model.fit(X_train, y_agb)
+
+    compute_biomass(
+        provider=reader, store=store, resolution=10.0, year=2021,
+        model_fn=wrap_sklearn_model(model),
+    )
+
+Can I store the Zarr output on S3?
+------------------------------------
+
+Yes. Pass an ``s3://`` URI and ``storage_options`` with your credentials:
+
+.. code-block:: python
+
+    store = ALSZarrStore(
+        "s3://my-bucket/forest.zarr",
+        storage_options={"key": "...", "secret": "...", "endpoint_url": "..."},
+    )
+
+See :ref:`fundamentals-s3` for a complete S3 setup guide.
+
+How do I contribute to alsdb?
+-------------------------------
+
+Contributions are welcome! See :ref:`devindex` for guidelines on submitting bug reports, feature requests, and pull requests.

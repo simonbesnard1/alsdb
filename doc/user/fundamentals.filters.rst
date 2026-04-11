@@ -1,58 +1,139 @@
-
-.. for doctest:
-    >>> import icesat2db as isdb
-
 .. _fundamentals-filters:
 
-#################
-Quality Filtering
-#################
+####################################
+LAS Attributes and Classification
+####################################
 
-This guide details the default quality filtering applied to ICESat-2 ATL08 data in the icesat2DB package during data ingestion.
+This page describes the LAS attributes stored by alsdb and the classification scheme used throughout the processing pipeline.
 
-Overview
---------
+LAS point attributes
+--------------------
 
-In icesat2DB, we have implemented a **default quality filtering routine** based on community-recommended practices. These filters are automatically applied during data ingestion to each 100 m land segment, reducing the dataset size while preserving scientifically reliable observations. This streamlines your analysis pipeline, saving both time and computational resources.
-
-The filters rely on quality-related variables present in the raw ATL08 HDF5 files. While these variables are available in the raw data, they are **not pre-applied**, which can lead to the inclusion of low-quality segments if not filtered. icesat2DB automates this process, applying filters consistently across all six ICESat-2 beams to ensure high data integrity.
-
-ATL08 Default Quality Filters
------------------------------
-
-The filters are defined in the :py:class:`icesat2db.ATL08Beam` class and are applied as a logical AND across all conditions — a segment is retained only if it passes every filter. Segments that fail any condition are dropped entirely.
+alsdb stores the following standard LAS attributes for each ingested point. Which attributes are present depends on the source file — most national ALS campaigns include at least the first seven.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 70
+   :widths: 25 12 63
 
-   * - Variable
-     - Filter condition and rationale
-   * - ``h_te_uncertainty``
-     - Retained when value is below the HDF5 fill value (3.4028235×10³⁸) or above −999. Removes terrain height estimates flagged as invalid or missing.
-   * - ``h_te_best_fit``
-     - Retained when value is below the HDF5 fill value or above −999. Removes best-fit terrain elevation estimates flagged as invalid or missing.
-   * - ``h_te_median``
-     - Retained when value is below the HDF5 fill value or above −999. Removes median terrain height estimates flagged as invalid or missing.
-   * - ``h_canopy``
-     - Retained when value is below the HDF5 fill value (3.4028235×10³⁸). Removes canopy height estimates flagged as invalid.
-   * - ``h_canopy_uncertainty``
-     - Retained when value is below the HDF5 fill value. Removes segments where canopy height uncertainty is flagged as invalid.
-   * - ``urban_flag``
-     - Retained when ``urban_flag == 0`` (non-urban). Urban areas can introduce data artefacts due to complex surface returns and building interference.
-   * - ``segment_watermask``
-     - Retained when ``segment_watermask == 0`` (non-water). Water surfaces produce unreliable terrain and canopy retrievals.
+   * - Attribute
+     - Type
+     - Description
+   * - ``Z``
+     - float64
+     - Ellipsoidal height above WGS84 or national vertical datum (m)
+   * - ``Intensity``
+     - uint16
+     - Returned pulse intensity (instrument-dependent scale)
+   * - ``ReturnNumber``
+     - uint8
+     - Which return this point represents (1 = first return)
+   * - ``NumberOfReturns``
+     - uint8
+     - Total number of discrete returns for this pulse
+   * - ``ScanDirectionFlag``
+     - uint8
+     - 0 = negative scan direction, 1 = positive scan direction
+   * - ``EdgeOfFlightLine``
+     - uint8
+     - 1 if this point is at the edge of the flight line
+   * - ``Classification``
+     - uint8
+     - ASPRS LAS classification code (see table below)
+   * - ``ScanAngleRank``
+     - float32
+     - Scan angle in degrees relative to nadir (positive = right of flight)
+   * - ``UserData``
+     - uint8
+     - User-defined byte
+   * - ``PointSourceId``
+     - uint16
+     - Source file ID (useful for multi-file datasets)
+   * - ``R``, ``G``, ``B``
+     - uint16
+     - RGB colour (0–65535), if present in the source file
 
-Sub-segment Fill Handling
--------------------------
+ASPRS LAS classification codes
+-------------------------------
 
-For sub-segment (20 m resolution) fields, invalid values are replaced with ``NaN`` rather than dropping the entire 100 m parent segment. This preserves the parent segment while marking individual 20 m values that failed the validity check (fill value ≥ 3.4028235×10³⁸ or ≤ −999) as missing.
+The ``Classification`` attribute uses the ASPRS standard codes:
 
-The following fields are handled this way:
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-- ``h_te_best_fit_20m`` — best-fit terrain height at 20 m resolution
-- ``h_canopy_20m`` — canopy height at 20 m resolution
+   * - Code
+     - Meaning
+   * - 0
+     - Never classified
+   * - 1
+     - Unclassified
+   * - 2
+     - Ground
+   * - 3
+     - Low vegetation (height < 2 m)
+   * - 4
+     - Medium vegetation (2–5 m)
+   * - 5
+     - High vegetation (> 5 m)
+   * - 6
+     - Building
+   * - 7
+     - Low point (noise)
+   * - 8
+     - Model key-point
+   * - 9
+     - Water
+   * - 10
+     - Rail
+   * - 11
+     - Road surface
+   * - 12–14
+     - Reserved
+   * - 15–17
+     - Wire, transmission tower, connector wire
+   * - 18
+     - High noise
+   * - 19+
+     - Overlap / user-defined
+
+Filtering during ingestion
+--------------------------
+
+Pass a list of class codes to ``ingest()`` or ``ingest_many()`` to store only specific point classes:
+
+.. code-block:: python
+
+    # Store only ground (2) and vegetation (3, 4, 5)
+    db.ingest("tile.laz", classes=[2, 3, 4, 5])
+
+    # Store everything (default — no filter)
+    db.ingest("tile.laz")
+
+Reducing the stored classes saves array space and speeds up both ingestion and later queries. For most forest structure applications, classes 2–5 are sufficient.
+
+Role of classification in processing
+--------------------------------------
+
+The processing pipeline uses ``Classification`` and ``ReturnNumber`` directly:
+
+**HAG computation (all processing functions)**
+  ``filters.hag_delaunay`` uses ground points (``Classification == 2``) to build a Delaunay TIN, from which height-above-ground is interpolated for every other point.
+
+**Gap fraction** (``alsdb.processing.gap``)
+  The MacArthur–Wilson estimator uses first returns only (``ReturnNumber == 1``):
+
+  .. math::
+
+     P_\text{gap} = \frac{N_\text{ground, first}}{N_\text{ground, first} + N_\text{vegetation, first}}
+
+  where vegetation = ``Classification`` in {3, 4, 5}.
+
+**Structural metrics / biomass** (``alsdb.processing.biomass``)
+  Vegetation points (``Classification`` ≥ 3, or ``HeightAboveGround`` above the minimum threshold) are used for height percentiles (h50, h75, h95, hmean) and canopy cover.
+
+**CHM / DTM / DSM** (``alsdb.processing.chm``)
+  DTM rasterises ground points (``Classification == 2``) to the minimum ``Z`` per cell. DSM rasterises all first returns to the maximum ``Z``. CHM = DSM − DTM.
 
 .. note::
 
-   Additional quality filters (e.g. on ``night_flag``, ``layer_flag``, ``segment_landcover``, ``n_ca_photons``, ``n_te_photons``) can be applied at query time via the :py:class:`icesat2db.IceSat2Provider` interface without re-ingesting the data. See :ref:`fundamentals-provider` for details.
+   If a dataset uses non-standard class codes (e.g. some national campaigns use code 8 for ground), the HAG computation will be wrong. Verify the classification scheme of your input data and re-classify if necessary before ingestion.
