@@ -1,0 +1,40 @@
+.. _user:
+
+################
+alsdb User Guide
+################
+
+Welcome to the **alsdb User Guide**. This guide covers the complete workflow from LAZ ingestion through to gridded forest structure products.
+
+.. toctree::
+   :caption: Getting Started
+   :maxdepth: 1
+
+   why-alsdb
+   installing
+   quick-overview
+   api
+   faq
+
+.. toctree::
+   :caption: Fundamentals
+   :maxdepth: 1
+
+   fundamentals
+   tiledb_database
+
+.. toctree::
+   :caption: Advanced Usage
+   :maxdepth: 1
+
+   database
+   contributing
+
+.. toctree::
+   :caption: Community
+   :maxdepth: 1
+
+   GitHub discussions <https://github.com/simonbesnard1/alsdb/discussions>
+
+.. tip::
+   Check the :ref:`faq` section if you encounter any issues. For bugs and feature requests use the `GitHub issue tracker <https://github.com/simonbesnard1/alsdb/issues>`_.

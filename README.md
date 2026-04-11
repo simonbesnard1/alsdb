@@ -148,7 +148,56 @@ db = ALSDatabase(
 db.ingest("path/to/tile.laz")
 ```
 
-Credentials can also be supplied via environment variables (`ALSDB_S3_ACCESS_KEY`, `ALSDB_S3_SECRET_KEY`, `ALSDB_S3_URL`).
+---
+
+## Data model & concepts
+
+alsdb uses two complementary storage layers — one optimised for point-cloud queries, the other for gridded raster products.
+
+### Layer 1 — TileDB sparse array (point clouds)
+
+Each LAZ file becomes a set of points written into a single **TileDB sparse array** with three dimensions: `X` (float64), `Y` (float64), `Year` (int16). The `Year` dimension makes the array inherently multi-temporal: surveys from 2019, 2021, and 2023 coexist in the same array and can be queried independently or jointly.
+
+Why TileDB?
+
+- **Sparse by design** — point densities vary enormously across a survey; TileDB stores only populated cells.
+- **Fragment-based writes** — each ingested tile appends a new fragment; no locking, no global index rebuild. Fragments are consolidated in the background every `consolidate_every` tiles.
+- **S3-native** — the array URI can be `s3://bucket/array`; TileDB handles multipart I/O transparently.
+- **Queryable by bbox + year** — `ALSProvider.query_bbox()` translates a spatial envelope into a multi-range TileDB query; only the relevant fragments and tiles are read.
+
+### Layer 2 — Zarr v3 store (gridded products)
+
+All processing outputs (CHM, DTM, DSM, gap fraction, LAI, LiDAR metrics, biomass) are written to an **ALSZarrStore** — a Zarr v3 hierarchy on disk or S3. The store is resolution-grouped:
+
+```
+spain.zarr/
+├── 1m/
+│   ├── chm    (T, ny, nx)  float32
+│   ├── dtm    (T, ny, nx)  float32
+│   └── dsm    (T, ny, nx)  float32
+└── 10m/
+    ├── gap    (T, ny, nx)  float32
+    ├── lai    (T, ny, nx)  float32
+    ├── biomass (T, ny, nx) float32
+    ├── h50 … density       float32
+    └── …
+```
+
+Why Zarr instead of GeoTIFF?
+
+- **No mosaic step** — each tile writes directly to its spatial slice in the shared array; when all tiles are done the product is already complete.
+- **Parallel writes** — non-overlapping crop bboxes guarantee that no two workers write to the same chunk.
+- **Multi-resolution** — 1 m and 10 m products live in the same store; `to_dataset(resolution)` opens either as an xarray Dataset.
+- **Idempotent** — `has_data(variable, resolution, year)` checks whether data is already present; all compute functions skip tiles that are already written unless `overwrite=True`.
+
+### Tiling strategy
+
+For areas larger than a single LAZ tile, processing is split into **500 m sub-tiles** (configurable via `tile_size`). Each sub-tile has two bboxes:
+
+- **query_bbox** — inflated by `tile_buffer` (default 50 m) on every side. Used for the TileDB query and for HAG computation via `filters.hag_delaunay`. The larger neighbourhood ensures the Delaunay TIN does not degrade at tile edges.
+- **crop_bbox** — the original non-overlapping tile extent. Only pixels inside this bbox are written to the Zarr store. This prevents double-writing at tile boundaries.
+
+The 50 m buffer is important for CHM accuracy near tile edges where the ground TIN would otherwise be under-constrained.
 
 ---
 
