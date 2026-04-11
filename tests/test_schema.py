@@ -4,7 +4,6 @@
 
 """Tests for TileDBSchemaConfig and create_schema."""
 
-import numpy as np
 import pytest
 import tiledb
 

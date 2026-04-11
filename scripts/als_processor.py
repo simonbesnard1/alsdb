@@ -8,7 +8,6 @@ Created on Fri Mar 27 19:21:32 2026
 
 from alsdb import ALSDatabase
 import boto3
-from pathlib import Path
 import alsdb
 
 alsdb.setup_logging()  # INFO by default

@@ -23,7 +23,6 @@ def test_parse_crs_no_wkt_returns_epsg0():
 
 def test_parse_crs_wkt_returned_when_no_pyproj(monkeypatch):
     # If pyproj is absent the function should fall back to the WKT prefix
-    import sys
     import builtins
 
     real_import = builtins.__import__

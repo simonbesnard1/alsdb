@@ -5,7 +5,7 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from alsdb.utils.constants import PNOA_TILE_SIZE_M
 

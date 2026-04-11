@@ -136,7 +136,6 @@ class ALSZarrStore:
             Chunk size in CRS units.  Should match the ``tile_size`` used
             during processing so chunk boundaries align with tile boundaries.
         """
-        import zarr
 
         store = cls(path, mode="w")
         store._root.attrs.update({"bbox": list(bbox), "crs_wkt": crs_wkt})

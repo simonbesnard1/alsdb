@@ -411,7 +411,6 @@ def plot_waveform(
     matplotlib.figure.Figure
     """
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
     from matplotlib.ticker import MaxNLocator
 
     if ax_wave is None or ax_rh is None:

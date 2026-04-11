@@ -4,9 +4,7 @@
 
 """Tests for shared tiling utilities (_tiling.py)."""
 
-import math
 
-import numpy as np
 import pytest
 
 from alsdb.processing._tiling import (
