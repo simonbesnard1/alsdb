@@ -31,4 +31,3 @@ dependencies:
   - pip:
     - sphinx-autosummary-accessors
     - sphinx-remove-toctrees
-    - alsdb

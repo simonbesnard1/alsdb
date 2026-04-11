@@ -14,6 +14,8 @@
   <a href="https://opensource.org/licenses/EUPL-1.2"><img src="https://img.shields.io/badge/license-EUPL--1.2-blue.svg" alt="License"></a>
   <a href="https://github.com/simonbesnard1/alsdb/actions?query=workflow%3ACI"><img src="https://github.com/simonbesnard1/alsdb/actions/workflows/ci.yaml/badge.svg" alt="Pipelines"></a>
   <a href="https://codecov.io/gh/simonbesnard1/alsdb"><img src="https://codecov.io/gh/simonbesnard1/alsdb/branch/main/graph/badge.svg?flag=unittests" alt="Code coverage"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
+  <a href="https://alsdb.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/alsdb/badge/?version=latest" alt="Docs"></a>
 </p>
 
 ---
