@@ -22,15 +22,15 @@ forest tile from Brazil (2014 survey).  The notebook covers:
 from alsdb import ALSProvider
 from alsdb.storage import ALSZarrStore
 
-ARRAY_URI = "output/brazil_tiledb"          # ← your TileDB array
-ZARR_PATH  = "output/brazil.zarr"           # ← your Zarr store
-YEAR       = 2014
+ARRAY_URI = "output/brazil_tiledb"  # ← your TileDB array
+ZARR_PATH = "output/brazil.zarr"  # ← your Zarr store
+YEAR = 2014
 
 # Bounding box derived from the 1 m dataset (1 000 × 1 000 cells, 1 m each)
 BBOX = (656_000, 8_902_000, 657_000, 8_903_000)
 
 reader = ALSProvider(storage_type="local", uri=ARRAY_URI)
-store  = ALSZarrStore(ZARR_PATH)
+store = ALSZarrStore(ZARR_PATH)
 
 # %%
 # 1 · Compute 10 m biomass (if not already in the store)
@@ -62,12 +62,12 @@ compute_biomass(
 # 2 · Load all products as xarray Datasets
 # ----------------------------------------
 
-ds1m   = store.to_dataset(resolution=1.0)
-ds10m  = store.to_dataset(resolution=10.0)
+ds1m = store.to_dataset(resolution=1.0)
+ds10m = store.to_dataset(resolution=10.0)
 ds100m = store.to_dataset(resolution=100.0)
 
-chm   = ds1m["chm"].sel(time=YEAR)     # (1000, 1000)
-dtm   = ds1m["dtm"].sel(time=YEAR)
+chm = ds1m["chm"].sel(time=YEAR)  # (1000, 1000)
+dtm = ds1m["dtm"].sel(time=YEAR)
 agb10 = ds10m["biomass"].sel(time=YEAR)  # (100, 100)
 agb100 = ds100m["biomass"].sel(time=YEAR)  # (10, 10)
 
@@ -104,14 +104,14 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 # Single shot at scene centre
-cx = (BBOX[0] + BBOX[2]) / 2.0   # 656 500 m
-cy = (BBOX[1] + BBOX[3]) / 2.0   # 8 902 500 m
+cx = (BBOX[0] + BBOX[2]) / 2.0  # 656 500 m
+cy = (BBOX[1] + BBOX[3]) / 2.0  # 8 902 500 m
 
 result = simulate_waveform(
     provider=reader,
     center_x=cx,
     center_y=cy,
-    footprint_radius=12.5,   # 25 m diameter — matches GEDI
+    footprint_radius=12.5,  # 25 m diameter — matches GEDI
     year=YEAR,
 )
 
@@ -147,25 +147,26 @@ print(results_batch[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
 #   top row    — point cloud (classification) · CHM 1 m · DTM 1 m (hill-shaded)
 #   bottom row — AGB 10 m · AGB 100 m · simulated waveform
 
-import matplotlib.pyplot as plt                          # noqa: E402
-import matplotlib.gridspec as gridspec                   # noqa: E402
-from matplotlib.colors import LightSource                # noqa: E402
-from alsdb.utils.viz import plot_classification          # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.gridspec as gridspec  # noqa: E402
+from matplotlib.colors import LightSource  # noqa: E402
+from alsdb.utils.viz import plot_classification  # noqa: E402
 
 fig = plt.figure(figsize=(18, 11), constrained_layout=True)
 fig.suptitle(
     "alsdb · Brazil ALS 2014 — 1 km² tropical forest tile",
-    fontsize=14, fontweight="bold",
+    fontsize=14,
+    fontweight="bold",
 )
 
 gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.08, wspace=0.05)
 
-ax_pts  = fig.add_subplot(gs[0, 0])
-ax_chm  = fig.add_subplot(gs[0, 1])
-ax_dtm  = fig.add_subplot(gs[0, 2])
-ax_agb10  = fig.add_subplot(gs[1, 0])
+ax_pts = fig.add_subplot(gs[0, 0])
+ax_chm = fig.add_subplot(gs[0, 1])
+ax_dtm = fig.add_subplot(gs[0, 2])
+ax_agb10 = fig.add_subplot(gs[1, 0])
 ax_agb100 = fig.add_subplot(gs[1, 1])
-ax_wave   = fig.add_subplot(gs[1, 2])
+ax_wave = fig.add_subplot(gs[1, 2])
 
 # ── panel A: point cloud (classification colours) ──────────────────────────
 plot_classification(df_pts, resolution=1.0, ax=ax_pts)
@@ -192,8 +193,7 @@ ax_chm.tick_params(labelleft=False)
 dtm_arr = dtm.values
 ls = LightSource(azdeg=315, altdeg=45)
 dtm_filled = np.where(np.isnan(dtm_arr), np.nanmean(dtm_arr), dtm_arr)
-rgb = ls.shade(dtm_filled, cmap=plt.cm.terrain, blend_mode="soft",
-               vert_exag=3.0)
+rgb = ls.shade(dtm_filled, cmap=plt.cm.terrain, blend_mode="soft", vert_exag=3.0)
 ax_dtm.imshow(
     rgb,
     origin="upper",
@@ -208,7 +208,9 @@ agb10_arr = agb10.values
 x10 = ds10m.x.values
 y10 = ds10m.y.values
 im_agb10 = ax_agb10.pcolormesh(
-    x10, y10, agb10_arr,
+    x10,
+    y10,
+    agb10_arr,
     cmap="YlGn",
     vmin=0,
     vmax=float(np.nanpercentile(agb10_arr, 99)),
@@ -224,7 +226,9 @@ agb100_arr = agb100.values
 x100 = ds100m.x.values
 y100 = ds100m.y.values
 im_agb100 = ax_agb100.pcolormesh(
-    x100, y100, agb100_arr,
+    x100,
+    y100,
+    agb100_arr,
     cmap="YlGn",
     vmin=0,
     vmax=float(np.nanpercentile(agb100_arr, 99)),
@@ -256,9 +260,16 @@ ax_wave.plot(
 for rh, c in zip(rh_levels, colors):
     h = result.rh[rh]
     ax_wave.axhline(h, color=c, ls="--", lw=0.9, alpha=0.85)
-    ax_wave.text(1.03, h, f"RH{rh}\n{h:.1f} m",
-                 va="center", ha="left", fontsize=7, color=c,
-                 transform=ax_wave.get_yaxis_transform())
+    ax_wave.text(
+        1.03,
+        h,
+        f"RH{rh}\n{h:.1f} m",
+        va="center",
+        ha="left",
+        fontsize=7,
+        color=c,
+        transform=ax_wave.get_yaxis_transform(),
+    )
 
 ax_wave.axhline(0, color="saddlebrown", lw=1.2, ls="-", label="Ground")
 ax_wave.set_xlabel("Normalised energy")
@@ -267,7 +278,8 @@ ax_wave.set_xlim(0, 1.35)
 ax_wave.set_ylim(-3, max(result.rh[98] * 1.15, 5))
 ax_wave.set_title(
     f"f · GEDI-like waveform · cover={result.cover:.2f}",
-    loc="left", fontsize=10,
+    loc="left",
+    fontsize=10,
 )
 ax_wave.legend(fontsize=8, loc="upper right")
 
