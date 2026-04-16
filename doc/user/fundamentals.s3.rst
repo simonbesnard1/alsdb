@@ -4,7 +4,7 @@
 S3 Storage
 #############
 
-Both the TileDB point-cloud array and the Zarr gridded store can be hosted on any S3-compatible object storage — AWS S3, Ceph/RadosGW, MinIO, or others. The API is identical to local storage; only the constructor arguments change.
+Both the TileDB point-cloud array and the Zarr gridded store can be hosted on any S3-compatible object storage (e.g, AWS S3, Ceph/RadosGW). The API is identical to local storage; only the constructor arguments change.
 
 TileDB array on S3
 ------------------

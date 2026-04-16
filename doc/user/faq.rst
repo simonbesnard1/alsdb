@@ -4,14 +4,14 @@
 Frequently Asked Questions (FAQ)
 ################################
 
-How should I cite alsdb?
+How should I cite alsDB?
 -------------------------
 
-Please use the following citation when referencing alsdb in your work:
+Please use the following citation when referencing alsDB in your work:
 
-  Besnard, S. alsdb [Computer software]. https://github.com/simonbesnard1/alsdb
+  Besnard, S. alsDB [Computer software]. https://github.com/simonbesnard1/alsdb
 
-Why can't I install alsdb with pip alone?
+Why can't I install alsDB with pip alone?
 ------------------------------------------
 
 ``pdal`` and ``python-pdal`` are only available through conda-forge and cannot be installed via pip. Use `pixi <https://pixi.sh>`_ which resolves both conda-forge and PyPI dependencies automatically:
@@ -26,17 +26,17 @@ See :ref:`installing` for full instructions.
 Why does ingestion say "already ingested, skipping"?
 ------------------------------------------------------
 
-The manifest records every file that has been successfully ingested. Re-running ``ingest()`` or ``ingest_many()`` on the same files is safe — they are skipped by default. To force re-ingestion, pass ``overwrite=True``:
+The manifest records every file that has been successfully ingested. Re-running ``ingest()`` or ``ingest_many()`` on the same files is safe (i.e., they are skipped by default). To force re-ingestion, pass ``overwrite=True``:
 
 .. code-block:: python
 
     db.ingest("tile.laz", overwrite=True)
     db.ingest_many(paths, overwrite=True)
 
-What datasets does alsdb support?
+What datasets does alsDB support?
 -----------------------------------
 
-alsdb is dataset-agnostic. CRS, bounding box, and acquisition year are read from the LAZ/LAS header automatically via PDAL. Any dataset that follows the LAS specification works, including:
+alsDB is dataset-agnostic. CRS, bounding box, and acquisition year are read from the LAZ/LAS header automatically via PDAL. Any dataset that follows the LAS specification works, including:
 
 - Spanish PNOA (Plan Nacional de Ortofotografía Aérea)
 - German ATKIS DGM
@@ -71,15 +71,15 @@ Run the same processing function for each year. The ``overwrite=False`` default 
 
 Results are stored in the time axis of the Zarr arrays and can be accessed with ``.sel(time=year)``.
 
-My query returns empty results — what is wrong?
+My query returns empty results, what is wrong?
 -------------------------------------------------
 
 Check the following:
 
-1. **Year** — call ``reader.available_years()`` to confirm the year is stored.
-2. **Bounding box** — the coordinates must be in the same CRS as the array (typically UTM). Passing geographic coordinates (lon/lat) to a UTM array returns no data.
-3. **Fragment consolidation** — if you just ingested data, try ``db.consolidate()`` first.
-4. **Domain bounds** — data ingested outside the TileDB domain bounds is silently clipped. Check ``db.stored_crs()`` and verify the coordinates.
+1. **Year**: call ``reader.available_years()`` to confirm the year is stored.
+2. **Bounding box**: the coordinates must be in the same CRS as the array (typically UTM). Passing geographic coordinates (lon/lat) to a UTM array returns no data.
+3. **Fragment consolidation**: if you just ingested data, try ``db.consolidate()`` first.
+4. **Domain bounds**: data ingested outside the TileDB domain bounds is silently clipped. Check ``db.stored_crs()`` and verify the coordinates.
 
 Why is my CHM noisy at tile edges?
 ------------------------------------
@@ -123,7 +123,7 @@ Yes. Pass an ``s3://`` URI and ``storage_options`` with your credentials:
 
 See :ref:`fundamentals-s3` for a complete S3 setup guide.
 
-How do I contribute to alsdb?
+How do I contribute to alsDB?
 -------------------------------
 
 Contributions are welcome! See :ref:`devindex` for guidelines on submitting bug reports, feature requests, and pull requests.

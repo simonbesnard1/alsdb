@@ -284,7 +284,7 @@ def plot_intensity(
     )
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"Intensity  —  {resolution} m resolution")
+    #ax.set_title(f"Intensity  —  {resolution} m resolution")
     return ax
 
 
@@ -358,7 +358,7 @@ def plot_classification(
     )
     ax.set_xlabel("Easting (m)")
     ax.set_ylabel("Northing (m)")
-    ax.set_title(f"Classification  —  {resolution} m resolution")
+    #ax.set_title(f"Classification  —  {resolution} m resolution")
     return ax
 
 

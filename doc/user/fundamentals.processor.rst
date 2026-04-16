@@ -9,17 +9,17 @@ Data Ingestion
 Overview of the ingestion workflow
 ------------------------------------
 
-1. **Read the LAZ header** — year, CRS, bounding box, and tile name are extracted from the file using PDAL metadata and the ``PNOATileName`` / ``GenericTileName`` parser.
+1. **Read the LAZ header**: year, CRS, bounding box, and tile name are extracted from the file using PDAL metadata and the ``PNOATileName`` / ``GenericTileName`` parser.
 
-2. **Check the manifest** — if the file has already been ingested (same filename, status ``"ingested"``), the tile is skipped. Pass ``overwrite=True`` to force re-ingestion.
+2. **Check the manifest**: if the file has already been ingested (same filename, status ``"ingested"``), the tile is skipped. Pass ``overwrite=True`` to force re-ingestion.
 
-3. **Read points in chunks** — ``ALSTile.iter_chunks()`` yields ~1 M points at a time as structured NumPy arrays. An optional classification filter can restrict ingestion to specific LAS class codes (e.g. ground + vegetation only).
+3. **Read points in chunks**: ``ALSTile.iter_chunks()`` yields ~1 M points at a time as structured NumPy arrays. An optional classification filter can restrict ingestion to specific LAS class codes (e.g. ground + vegetation only).
 
-4. **Write to TileDB** — ``ALSDatabase.write()`` appends points to the sparse array. Each chunk creates or extends a TileDB fragment. Coordinates are clipped to the array domain bounds.
+4. **Write to TileDB**: ``ALSDatabase.write()`` appends points to the sparse array. Each chunk creates or extends a TileDB fragment. Coordinates are clipped to the array domain bounds.
 
-5. **Update the manifest** — on success the manifest entry is marked ``"ingested"`` with point count, CRS, and bbox recorded.
+5. **Update the manifest**: on success the manifest entry is marked ``"ingested"`` with point count, CRS, and bbox recorded.
 
-6. **Consolidate (optional)** — after every ``consolidate_every`` tiles ``ingest_many()`` triggers ``ALSDatabase.consolidate()`` to merge fragments.
+6. **Consolidate (optional)**: after every ``consolidate_every`` tiles ``ingest_many()`` triggers ``ALSDatabase.consolidate()`` to merge fragments.
 
 Example usage
 -------------
@@ -36,7 +36,7 @@ Example usage
     db = ALSDatabase(storage_type="local", uri="my_array")
     db.ingest("path/to/tile.laz")
 
-**Batch ingest — parallel, with consolidation**
+**Batch ingest (parallel, with consolidation)**
 
 .. code-block:: python
 

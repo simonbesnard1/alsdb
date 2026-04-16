@@ -4,12 +4,12 @@
 LAS Attributes and Classification
 ####################################
 
-This page describes the LAS attributes stored by alsdb and the classification scheme used throughout the processing pipeline.
+This page describes the LAS attributes stored by alsDB and the classification scheme used throughout the processing pipeline.
 
 LAS point attributes
 --------------------
 
-alsdb stores the following standard LAS attributes for each ingested point. Which attributes are present depends on the source file — most national ALS campaigns include at least the first seven.
+alsDB stores the following standard LAS attributes for each ingested point.
 
 .. list-table::
    :header-rows: 1
@@ -106,7 +106,7 @@ Pass a list of class codes to ``ingest()`` or ``ingest_many()`` to store only sp
     # Store only ground (2) and vegetation (3, 4, 5)
     db.ingest("tile.laz", classes=[2, 3, 4, 5])
 
-    # Store everything (default — no filter)
+    # Store everything (default is no filter)
     db.ingest("tile.laz")
 
 Reducing the stored classes saves array space and speeds up both ingestion and later queries. For most forest structure applications, classes 2–5 are sufficient.

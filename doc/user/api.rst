@@ -5,7 +5,7 @@
 API Reference
 =============
 
-This page provides an auto-generated summary of alsdb's public API. For usage examples and conceptual background, refer to the :ref:`user` guide.
+This page provides an auto-generated summary of alsDB's public API. For usage examples and conceptual background, refer to the :ref:`user` guide.
 
 Core classes
 ============

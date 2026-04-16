@@ -17,7 +17,7 @@ db = ALSDatabase(storage_type="local", uri="array_")
 
 # Skips already-ingested files automatically
 db.ingest(
-    "/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_6.laz",
+    "/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_11.laz",
     overwrite=True,
 )  # writes + records in manifest
 

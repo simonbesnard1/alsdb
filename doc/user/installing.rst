@@ -10,7 +10,7 @@ Installation
 Dependencies
 ------------
 
-alsdb requires Python ≥ 3.11 and the following dependencies, all resolved automatically by pixi:
+alsDB requires Python ≥ 3.11 and the following dependencies, all resolved automatically by pixi:
 
 +-------------------+-----------------+----------------------------------------------+
 | Dependency        | Minimum Version | Purpose                                      |
@@ -52,7 +52,7 @@ Install via **pixi** (recommended):
     pixi install          # resolves conda-forge + pip dependencies in one step
     pixi shell            # activate the environment
 
-This installs all dependencies — including ``pdal`` and ``python-pdal`` from conda-forge — and installs alsdb itself as an editable package.
+This installs all dependencies, including ``pdal`` and ``python-pdal`` from conda-forge, and installs alsdb itself as an editable package.
 
 .. note::
 

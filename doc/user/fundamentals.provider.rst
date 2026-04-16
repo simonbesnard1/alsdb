@@ -12,11 +12,11 @@ Data Provider
 Key capabilities
 ----------------
 
-- **Spatial queries** — retrieve all points within a bounding box.
-- **Temporal filtering** — restrict queries to a single survey year.
-- **Attribute selection** — choose which LAS attributes to return.
-- **Multi-year inspection** — list all years stored in the array.
-- **xarray output** — get results as a labelled ``xarray.Dataset``.
+- **Spatial queries**: retrieve all points within a bounding box.
+- **Temporal filtering**: restrict queries to a single survey year.
+- **Attribute selection**: choose which LAS attributes to return.
+- **Multi-year inspection**: list all years stored in the array.
+- **xarray output**: get results as a labelled ``xarray.Dataset``.
 
 Basic query example
 -------------------
@@ -27,7 +27,7 @@ Basic query example
 
     reader = ALSProvider(storage_type="local", uri="my_array")
 
-    # All points in a bounding box — returns pandas DataFrame
+    # All points in a bounding box. It returns pandas DataFrame
     df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000)
 
     print(df.columns.tolist())

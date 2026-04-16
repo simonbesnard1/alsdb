@@ -4,7 +4,7 @@
 Storage Architecture
 ***********************
 
-alsdb uses two complementary storage layers. Understanding how they fit together is the key to understanding the rest of the package.
+alsDB uses two complementary storage layers. Understanding how they fit together is the key to understanding the rest of the package.
 
 Overview
 --------
@@ -37,7 +37,7 @@ Overview
              └── 10m/  gap, lai, biomass,
                        h50…density            (T × ny × nx) float32
 
-Layer 1 — TileDB sparse array (point clouds)
+Layer 1: TileDB sparse array (point clouds)
 ---------------------------------------------
 
 Each ingested LAZ file writes its points into a single shared **TileDB sparse array**. The array has three dimensions:
@@ -63,10 +63,10 @@ All 18 standard LAS point attributes (``Z``, ``Intensity``, ``ReturnNumber``, ``
 
 **Why TileDB?**
 
-- **Sparse by design** — point density varies enormously; TileDB stores only occupied cells with no wasted space.
-- **Fragment-based writes** — each ingested tile appends a new *fragment*. No locking, no global index rebuild. Multiple workers can write simultaneously.
-- **Multi-temporal in one array** — surveys from 2019, 2021, and 2023 coexist in the same array. ``query_bbox(..., year=2021)`` reads only the 2021 fragments.
-- **S3-native** — the array URI can be ``s3://bucket/als_array``; TileDB handles multipart I/O transparently.
+- **Sparse by design**: point density varies enormously; TileDB stores only occupied cells with no wasted space.
+- **Fragment-based writes**: each ingested tile appends a new *fragment*. No locking, no global index rebuild. Multiple workers can write simultaneously.
+- **Multi-temporal in one array**:surveys from 2019, 2021, and 2023 coexist in the same array. ``query_bbox(..., year=2021)`` reads only the 2021 fragments.
+- **S3-native**: the array URI can be ``s3://bucket/als_array``; TileDB handles multipart I/O transparently.
 
 **Fragment consolidation**
 
@@ -76,10 +76,10 @@ Each ingest call creates a new fragment. After many ingestions, fragment count g
 
 The spatial domain (``X`` and ``Y`` extents of the TileDB array) is chosen automatically from the CRS of the first ingested tile. For UTM Zone 30N (EPSG:25830) the domain spans approximately [100 000, 1 000 000] × [0, 10 000 000]. For unknown CRS a global ±10⁷ fallback is used. The domain only needs to contain all future ingested data; it is set at array creation time and cannot be changed.
 
-Layer 2 — Zarr v3 store (gridded products)
+Layer 2: Zarr v3 store (gridded products)
 -------------------------------------------
 
-All processing outputs (CHM, DTM, DSM, gap fraction, LAI, structural metrics, biomass) are written to an ``ALSZarrStore`` — a Zarr v3 hierarchy on disk or S3:
+All processing outputs (CHM, DTM, DSM, gap fraction, LAI, structural metrics, biomass) are written to an ``ALSZarrStore`` (i.e., a Zarr v3 hierarchy on disk or S3):
 
 .. code-block:: text
 
@@ -100,13 +100,6 @@ All processing outputs (CHM, DTM, DSM, gap fraction, LAI, structural metrics, bi
        └── density (T, ny, nx)  float32   ← point density (pts/m²)
 
 The ``T`` (time) axis stores survey years as integers (e.g. 2019, 2021, 2023). Each variable has an associated ``x`` and ``y`` coordinate array. Opening the store with ``to_dataset(resolution=1.0)`` returns an ``xarray.Dataset`` with CRS attached via ``rioxarray``.
-
-**Why Zarr instead of GeoTIFF?**
-
-- **No mosaic step** — each tile writes directly to its spatial slice. When all tiles are done the product is already a single, complete array.
-- **Parallel writes** — non-overlapping crop bboxes guarantee no two workers write to the same chunk simultaneously.
-- **Multi-resolution** — 1 m and 10 m products live in the same store file. ``to_dataset(resolution=1.0)`` or ``to_dataset(resolution=10.0)`` opens either.
-- **Idempotent** — ``has_data(variable, resolution, year)`` checks whether data is already present; all compute functions skip already-written data unless ``overwrite=True``.
 
 Tiling strategy
 ----------------

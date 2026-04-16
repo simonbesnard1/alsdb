@@ -1,7 +1,7 @@
 .. _devindex:
 
 ***********************
-Contributing to alsdb
+Contributing to alsDB
 ***********************
 
 .. highlight:: shell
@@ -9,7 +9,7 @@ Contributing to alsdb
 Overview
 ========
 
-We welcome your skills and enthusiasm for the alsdb project! There are many ways to contribute beyond writing code — bug reports, documentation improvements, usage examples, and feature suggestions are all valuable.
+We welcome your skills and enthusiasm for the alsDB project! There are many ways to contribute beyond writing code: bug reports, documentation improvements, usage examples, and feature suggestions are all valuable.
 
 All contributions are expected to follow our `Code of Conduct <https://github.com/simonbesnard1/alsdb/blob/main/CODE_OF_CONDUCT.md>`_.
 
@@ -41,7 +41,7 @@ Look for issues tagged ``"enhancement"`` and ``"help wanted"``. Before starting 
 Write Documentation
 ~~~~~~~~~~~~~~~~~~~~
 
-alsdb documentation lives in ``doc/``. Improvements to explanations, additional usage examples, and fixes to typos are always welcome.
+alsDB documentation lives in ``doc/``. Improvements to explanations, additional usage examples, and fixes to typos are always welcome.
 
 Submit Feedback
 ~~~~~~~~~~~~~~~
@@ -92,7 +92,7 @@ Development Setup
 Code Style
 ----------
 
-alsdb uses `Ruff <https://docs.astral.sh/ruff/>`_ for linting and formatting with a line length of 100 characters. All code must pass ``ruff check`` and ``ruff format --check`` before merging (enforced by CI).
+alsDB uses `Ruff <https://docs.astral.sh/ruff/>`_ for linting and formatting with a line length of 100 characters. All code must pass ``ruff check`` and ``ruff format --check`` before merging (enforced by CI).
 
 Tests
 -----
@@ -136,4 +136,4 @@ Pull requests are reviewed by Simon Besnard (``@simonbesnard1``). Response times
 License
 -------
 
-By contributing to alsdb you agree that your contributions will be licensed under the `EUPL-1.2 <https://opensource.org/licenses/EUPL-1.2>`_ license.
+By contributing to alsDB you agree that your contributions will be licensed under the `EUPL-1.2 <https://opensource.org/licenses/EUPL-1.2>`_ license.

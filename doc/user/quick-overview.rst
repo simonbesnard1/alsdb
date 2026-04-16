@@ -4,7 +4,7 @@
 Quick Overview
 ##############
 
-This section provides a brief end-to-end example of the alsdb workflow: ingesting LAZ files, querying points, and computing a Canopy Height Model. For detailed explanations refer to :ref:`fundamentals`.
+This section provides a brief end-to-end example of the alsDB workflow: ingesting LAZ files, querying points, and computing a Canopy Height Model. For detailed explanations refer to :ref:`fundamentals`.
 
 Setup
 -----
@@ -62,7 +62,7 @@ Query points
 Compute a Canopy Height Model
 -----------------------------
 
-All processing functions write directly to an ``ALSZarrStore`` — a Zarr v3 hierarchy that holds multiple resolutions and survey years.
+All processing functions write directly to an ``ALSZarrStore``: a Zarr v3 hierarchy that holds multiple resolutions and survey years.
 
 .. code-block:: python
 
@@ -138,4 +138,4 @@ Simulate GEDI waveforms
 
 ---
 
-For a complete explanation of these concepts — including the two-layer storage architecture, tiling strategy, and overwrite semantics — continue to :ref:`fundamentals`.
+For a complete explanation of these concepts, including the two-layer storage architecture, tiling strategy, and overwrite semantics, continue to :ref:`fundamentals`.

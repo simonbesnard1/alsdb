@@ -1,10 +1,10 @@
 .. _user:
 
 ################
-alsdb User Guide
+alsDB User Guide
 ################
 
-Welcome to the **alsdb User Guide**. This guide covers the complete workflow from LAZ ingestion through to gridded forest structure products.
+Welcome to the **alsDB User Guide**. This guide covers the complete workflow from LAZ ingestion through to gridded forest structure products.
 
 .. toctree::
    :caption: Getting Started

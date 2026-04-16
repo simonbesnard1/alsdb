@@ -18,7 +18,7 @@ store = ALSZarrStore("output/brazil.zarr")
 
 compute_all(provider, store, resolution=1.0, year=2014, tile_size=500.0, tile_buffer=50.0)
 
-ds = store.to_dataset(1.0)  # → xarray.Dataset
+ds = store.to_dataset(100.0)  # → xarray.Dataset
 
 
 store = ALSZarrStore.create(

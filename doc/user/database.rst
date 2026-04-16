@@ -7,7 +7,7 @@ Visualisation and Advanced Usage
 Visualisation
 =============
 
-alsdb includes a set of plot functions for both point-cloud data and gridded products from the ``ALSZarrStore``.
+alsDB includes a set of plot functions for both point-cloud data and gridded products from the ``ALSZarrStore``.
 
 Point-cloud visualisation
 --------------------------

@@ -40,7 +40,7 @@ Canopy Height Model / DTM / DSM
         year=2021,
     )
 
-    # Large area — tiled (500 m sub-tiles, 50 m HAG buffer, 4 workers)
+    # Large area: tiled (500 m sub-tiles, 50 m HAG buffer, 4 workers)
     compute_chm(
         provider=reader,
         store=store,
@@ -66,9 +66,9 @@ Canopy Height Model / DTM / DSM
 
 The pipeline queries the TileDB array, runs PDAL's ``filters.hag_delaunay`` to compute height-above-ground, then rasterises with ``scipy.stats.binned_statistic_2d``:
 
-- **DTM** — minimum ``Z`` of ground points (``Classification == 2``) per cell.
-- **DSM** — maximum ``Z`` of first returns per cell.
-- **CHM** — ``HeightAboveGround`` 95th-percentile of vegetation returns per cell (equivalent to maximum canopy surface height; more robust to outliers than DSM − DTM).
+- **DTM**: minimum ``Z`` of ground points (``Classification == 2``) per cell.
+- **DSM**: maximum ``Z`` of first returns per cell.
+- **CHM**: ``HeightAboveGround`` 95th-percentile of vegetation returns per cell (equivalent to maximum canopy surface height; more robust to outliers than DSM − DTM).
 
 Sub-tiles with no returns remain ``NaN`` in the store. The 50 m buffer is used for CHM only; DTM and DSM do not require it.
 
@@ -97,7 +97,7 @@ Gap fraction and effective LAI
         k=0.5,       # extinction coefficient (spherical leaf angle distribution)
     )
 
-    # Large area — tiled
+    # Large area: tiled
     compute_gap_fraction(
         provider=reader,
         store=store,
@@ -151,7 +151,7 @@ Writes six variables to the store:
    * - ``h75``
      - 75th percentile (m)
    * - ``h95``
-     - 95th percentile (m) — commonly used as a proxy for top-of-canopy height
+     - 95th percentile (m) (commonly used as a proxy for top-of-canopy height)
    * - ``hmean``
      - Mean vegetation HeightAboveGround (m)
    * - ``cc``
@@ -174,7 +174,7 @@ Aboveground biomass
         year=2021,
     )
 
-    # Large area — tiled
+    # Large area: tiled
     compute_biomass(
         provider=reader,
         store=store,
@@ -185,7 +185,7 @@ Aboveground biomass
         n_workers=4,
     )
 
-**Default model — Næsset (2002) power law:**
+**Default model (i.e., Næsset (2002) power law):**
 
 .. math::
 
@@ -253,12 +253,12 @@ GEDI waveform simulation
         year=2021,
     )
 
-    print(result.rh[50])    # RH50 — height above ground at 50 % cumulative energy (m)
-    print(result.rh[98])    # RH98 — equivalent to GEDI L2A rh98
+    print(result.rh[50])    # RH50 (height above ground at 50 % cumulative energy (m))
+    print(result.rh[98])    # RH98 (equivalent to GEDI L2A rh98)
     print(result.cover)     # canopy cover fraction
     print(result.z_ground)  # estimated ground elevation (m)
 
-    # Batch — shots must be a DataFrame with center_x / center_y columns (UTM)
+    # Batch: shots must be a DataFrame with center_x / center_y columns (UTM)
     import pandas as pd
     import numpy as np
 
