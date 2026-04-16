@@ -1,7 +1,7 @@
 .. _alsdb_docs_mainpage:
 
 ##################
-alsdb Documentation
+alsDB Documentation
 ##################
 
 .. toctree::
@@ -16,7 +16,7 @@ alsdb Documentation
    Discussions <https://github.com/simonbesnard1/alsdb/discussions>
    Development <user/contributing>
 
-**alsdb** is an open-source Python package for processing Airborne Laser Scanning (ALS) point clouds at scale. It reads LAZ/LAS files via `PDAL <https://pdal.io>`_, stores them in a `TileDB <https://tiledb.com>`_ sparse array (locally or on S3), and provides a full pipeline for forest structure products: Canopy Height Model, DTM, DSM, gap fraction, LAI, LiDAR structural metrics, aboveground biomass, and GEDI-style waveform simulation. All gridded outputs are written directly to a `Zarr <https://zarr.dev>`_ v3 store — no GeoTIFF intermediates, no mosaic step.
+**alsDB** is an open-source Python package for processing Airborne Laser Scanning (ALS) point clouds at scale. It reads LAZ/LAS files via `PDAL <https://pdal.io>`_, stores them in a `TileDB <https://tiledb.com>`_ sparse array (locally or on S3), and provides a full pipeline for forest structure products: Canopy Height Model, DTM, DSM, gap fraction, LAI, LiDAR structural metrics, aboveground biomass, and GEDI-style waveform simulation. All gridded outputs are written directly to a `Zarr <https://zarr.dev>`_ v3 store — no GeoTIFF intermediates, no mosaic step.
 
 .. grid:: 1 1 2 2
     :gutter: 2 3 4 4
@@ -27,7 +27,7 @@ alsdb Documentation
         **Getting Started**
         ^^^
 
-        New to alsdb? Start here for a quick introduction to ingesting LAZ files and running your first processing pipeline.
+        New to alsDB? Start here for a quick introduction to ingesting LAZ files and running your first processing pipeline.
 
         +++
 
@@ -78,7 +78,7 @@ alsdb Documentation
         **Contributor's Guide**
         ^^^
 
-        Want to contribute to alsdb? This guide covers how to set up a development environment, run tests, and submit pull requests.
+        Want to contribute to alsDB? This guide covers how to set up a development environment, run tests, and submit pull requests.
 
         +++
 
