@@ -17,8 +17,9 @@ db = ALSDatabase(storage_type="local", uri="array_")
 
 # Skips already-ingested files automatically
 db.ingest(
-    "/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/brazil_als/RIB_A01_2014_laz_11.laz",
+    "/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/USGS_LPC_GA_Georgia_Lidar_2016_D16_GAW2130010250.laz",
     overwrite=True,
+    reclassify=True,
 )  # writes + records in manifest
 
 # # Ingest thousands of files at once, auto-consolidates every 50

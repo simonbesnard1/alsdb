@@ -268,6 +268,7 @@ class ALSDatabase(TileDBProvider):
         classification_filter: Optional[list[int]],
         stored_crs: Optional[str],
         _tile: Optional[ALSTile] = None,
+        reclassify: bool = False,
     ) -> Tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
@@ -278,7 +279,9 @@ class ALSDatabase(TileDBProvider):
         Raises ``ValueError`` on CRS mismatch.
         """
         filename = laz_path.name
-        tile = _tile or ALSTile(laz_path, classification_filter=classification_filter)
+        tile = _tile or ALSTile(
+            laz_path, classification_filter=classification_filter, reclassify=reclassify
+        )
         tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
         crs = tile_name.crs
@@ -328,6 +331,7 @@ class ALSDatabase(TileDBProvider):
         chunk_size: Optional[int] = None,
         classification_filter: Optional[list[int]] = None,
         overwrite: bool = False,
+        reclassify: bool = False,
     ) -> int:
         """
         Ingest a single LAZ tile into the TileDB array.
@@ -350,6 +354,11 @@ class ALSDatabase(TileDBProvider):
             Optional list of LAS classification codes to retain.
         overwrite:
             Re-ingest even if the file is already in the manifest as ``"ok"``.
+        reclassify:
+            If ``True``, run SMRF + HAG during ingestion to assign ground (2)
+            and vegetation (3/4/5) classes to unclassified (class 1) points.
+            Use this for surveys delivered with minimal classification (e.g.
+            USGS LPC files where non-ground returns are all class 1).
 
         Returns
         -------
@@ -371,7 +380,7 @@ class ALSDatabase(TileDBProvider):
         # Read tile metadata once up front so the CRS is available before the
         # array is (re)created and is reused in _ingest_tile without a second
         # PDAL pass.
-        tile = ALSTile(laz_path, classification_filter=classification_filter)
+        tile = ALSTile(laz_path, classification_filter=classification_filter, reclassify=reclassify)
         tile_crs = tile.name.crs
 
         if overwrite and self.array_exists():
@@ -381,7 +390,12 @@ class ALSDatabase(TileDBProvider):
 
         try:
             total, entry = self._ingest_tile(
-                laz_path, chunk_size, classification_filter, stored, _tile=tile
+                laz_path,
+                chunk_size,
+                classification_filter,
+                stored,
+                _tile=tile,
+                reclassify=reclassify,
             )
             manifest[filename] = entry
         except Exception as exc:
@@ -404,6 +418,7 @@ class ALSDatabase(TileDBProvider):
         consolidate_every: int = 50,
         max_workers: int = 1,
         overwrite: bool = False,
+        reclassify: bool = False,
     ) -> Dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -468,7 +483,9 @@ class ALSDatabase(TileDBProvider):
         newly_written = 0
 
         def _worker(path: Path) -> Tuple[str, int, dict]:
-            total, entry = self._ingest_tile(path, chunk_size, classification_filter, stored)
+            total, entry = self._ingest_tile(
+                path, chunk_size, classification_filter, stored, reclassify=reclassify
+            )
             return path.name, total, entry
 
         # Process in batches so consolidation only runs after all workers in a

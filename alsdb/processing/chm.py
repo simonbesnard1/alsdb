@@ -18,8 +18,8 @@ Pipeline (CHM)
 numpy array input
     → ``filters.hag_delaunay``  builds a TIN from Class-2 ground points,
                                  attaches ``HeightAboveGround`` to every point
-    → ``filters.range``         keeps vegetation points only (Class 3–5)
     → ``filters.assign``        clamps negative HAG values to 0
+    → ``filters.range``         keeps vegetation points only (Class 3–5)
     → ``filters.crop``          clips to the non-buffered tile extent
     → rasterise max(HAG) in numpy → written to Zarr
 
@@ -113,7 +113,7 @@ def _run(stages: list, arr: np.ndarray) -> np.ndarray:
     """Execute a PDAL pipeline and return the output point array."""
     p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
     p.execute()
-    return p.arrays[0]
+    return p.arrays[0] if p.arrays else arr[:0]
 
 
 # ---------------------------------------------------------------------------
@@ -144,11 +144,11 @@ def _process_tile_chm(
         veg_limits += ",ReturnNumber[1:1]"
     stages = [
         {"type": "filters.hag_delaunay"},
-        {"type": "filters.range", "limits": veg_limits},
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
         },
+        {"type": "filters.range", "limits": veg_limits},
         {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
     ]
     try:
@@ -348,11 +348,11 @@ def _process_tile_all(
             veg_limits += ",ReturnNumber[1:1]"
         stages = [
             {"type": "filters.hag_delaunay"},
-            {"type": "filters.range", "limits": veg_limits},
             {
                 "type": "filters.assign",
                 "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
             },
+            {"type": "filters.range", "limits": veg_limits},
             {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
         ]
         try:
