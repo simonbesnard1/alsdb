@@ -243,5 +243,4 @@ def _parse_crs(srs: dict) -> str:
     except (ImportError, AttributeError, ValueError):
         pass
 
-    # Last resort: first 120 chars of WKT name
-    return wkt[:120]
+    return wkt

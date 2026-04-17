@@ -20,6 +20,7 @@ db.ingest(
     "/home/simon/Documents/science/GFZ/projects/alsdb/data/example_als/USGS_LPC_GA_Georgia_Lidar_2016_D16_GAW2130010250.laz",
     overwrite=True,
     reclassify=True,
+    reproject_to="auto",
 )  # writes + records in manifest
 
 # # Ingest thousands of files at once, auto-consolidates every 50

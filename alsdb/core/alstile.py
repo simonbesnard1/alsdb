@@ -16,23 +16,58 @@ from alsdb.utils.schema import LAS_ATTRIBUTES
 
 logger = logging.getLogger(__name__)
 
-# Height-above-ground thresholds for LAS vegetation classes 3 / 4 / 5.
-# Values are in the native Z units of the LAZ file (metres or feet depending
-# on the CRS).  The subdivision into 3/4/5 is approximate; what matters for
-# CHM/gap/biomass is that all vegetation ends up in class 3–5, not the exact
-# boundary between them.
+# Height-above-ground thresholds in metres for LAS vegetation classes 3 / 4 / 5.
+# Only applied to unclassified (class 1) points when reclassify=True.
+# Data is always in metres at the point of reclassification (reprojected if needed).
 _HAG_LOW: float = 0.5  # below this → leave as class 1 (noise / bare ground fringe)
-_HAG_MED: float = 2.0  # 0.5–2.0    → class 3 (low vegetation)
-_HAG_HIGH: float = 5.0  # 2.0–5.0    → class 4 (medium vegetation)
-# ≥ 5.0      → class 5 (high vegetation)
+_HAG_MED: float = 2.0  # 0.5–2.0 m  → class 3 (low vegetation)
+_HAG_HIGH: float = 5.0  # 2.0–5.0 m  → class 4 (medium vegetation)
+# ≥ 5.0 m    → class 5 (high vegetation)
+
+_UNRESOLVED = object()  # sentinel for lazy CRS resolution
+
+
+def _crs_is_feet(crs_str: str) -> bool:
+    """Return True if any axis of *crs_str* uses feet as its linear unit."""
+    # Fast path: check common feet keywords in the CRS string itself
+    # (catches WKT strings even when pyproj can't fully parse them).
+    lower = crs_str.lower()
+    if any(kw in lower for kw in ("ftus", "survey foot", "survey feet", "us foot")):
+        return True
+    return False
+
+
+def _find_utm_crs(native_crs_str: str, bbox: tuple) -> str:
+    """
+    Return the WGS 84 UTM CRS that best covers the centre of *bbox*
+    (expressed in *native_crs_str* coordinates).
+
+    Uses a one-point PDAL reprojection to WGS84, then derives the UTM zone
+    mathematically — no pyproj dependency required.
+    """
+    cx = (bbox[0] + bbox[2]) / 2.0
+    cy = (bbox[1] + bbox[3]) / 2.0
+
+    dt = np.dtype([("X", "f8"), ("Y", "f8"), ("Z", "f8")])
+    arr = np.array([(cx, cy, 0.0)], dtype=dt)
+    stages = [{"type": "filters.reprojection", "in_srs": native_crs_str, "out_srs": "EPSG:4326"}]
+    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+    p.execute()
+    lon = float(p.arrays[0]["X"][0])
+    lat = float(p.arrays[0]["Y"][0])
+
+    zone = int((lon + 180.0) / 6.0) + 1
+    epsg = 32600 + zone if lat >= 0 else 32700 + zone
+    return f"EPSG:{epsg}"
 
 
 class ALSTile:
     """
     Processes a single LAZ tile into arrays ready for TileDB ingestion.
 
-    Wraps :class:`~alsdb.tile.Tile.Tile` and applies an optional point filter
-    before handing data to :class:`~alsdb.core.alsdatabase.ALSDatabase`.
+    Wraps :class:`~alsdb.tile.Tile.Tile` and applies optional reprojection,
+    reclassification, and point filtering before handing data to
+    :class:`~alsdb.core.alsdatabase.ALSDatabase`.
 
     Parameters
     ----------
@@ -40,15 +75,19 @@ class ALSTile:
         Path to the ``.laz`` file.
     classification_filter:
         If provided, only points whose ``Classification`` code is in this list
-        are passed through.  E.g. ``[2]`` for ground only,
-        ``[1, 2, 5]`` for unclassified + ground + high vegetation.
+        are passed through.
     reclassify:
-        If ``True``, run ``filters.smrf`` to identify ground points (class 2),
-        then assign LAS vegetation classes (3/4/5) to unclassified (class 1)
-        points based on height above ground.  Use this when ingesting surveys
-        that were delivered with only minimal classification (e.g. USGS LPC
-        files where all non-ground returns are class 1).  Points already
-        carrying a non-unclassified label are left unchanged.
+        If ``True``, run ``filters.smrf`` + HAG to assign ground (class 2) and
+        vegetation (classes 3/4/5) labels to unclassified (class 1) points.
+        Thresholds are always in metres; use together with ``reproject_to`` for
+        non-metric source files.
+    reproject_to:
+        Target CRS for the output points.
+
+        - ``None`` (default) — keep native CRS, no reprojection.
+        - ``"auto"`` — detect feet-based CRS and reproject to the appropriate
+          WGS 84 UTM zone; metric CRS files are left unchanged.
+        - ``"EPSG:XXXX"`` — reproject to an explicit CRS.
     """
 
     def __init__(
@@ -56,10 +95,13 @@ class ALSTile:
         path: str | Path,
         classification_filter: Optional[list[int]] = None,
         reclassify: bool = False,
+        reproject_to: Optional[str] = None,
     ) -> None:
         self._tile = Tile(path)
         self._classification_filter = classification_filter
         self._reclassify = reclassify
+        self._reproject_to = reproject_to
+        self._resolved_crs = _UNRESOLVED  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
     # Properties
@@ -73,9 +115,45 @@ class ALSTile:
     def name(self) -> TileNameBase:
         return self._tile.name
 
+    @property
+    def target_crs(self) -> str:
+        """CRS of the data after ingestion (native or reprojected)."""
+        out = self._get_out_crs()
+        return out if out is not None else self.name.crs
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _get_z_scale(self) -> Optional[float]:
+        """Return foot→metre scale factor when reprojecting a feet-based 2-D CRS, else None."""
+        if self._get_out_crs() is not None and _crs_is_feet(self.name.crs):
+            return 0.3048006096  # US survey foot
+        return None
+
+    def _get_out_crs(self) -> Optional[str]:
+        """Resolve the reprojection target CRS (cached). Returns None if no reprojection."""
+        if self._resolved_crs is not _UNRESOLVED:
+            return self._resolved_crs  # type: ignore[return-value]
+
+        if self._reproject_to is None:
+            self._resolved_crs = None
+        elif self._reproject_to != "auto":
+            self._resolved_crs = self._reproject_to
+        else:
+            native = self.name.crs
+            if _crs_is_feet(native):
+                target = _find_utm_crs(native, self.name.bbox_native)
+                import re as _re
+
+                m = _re.search(r'AUTHORITY\["EPSG","(\d+)"\]\s*\]?\s*$', native)
+                native_label = f"EPSG:{m.group(1)}" if m else native.split('"')[1]
+                logger.info("Auto-reprojection: %s → %s", native_label, target)
+                self._resolved_crs = target
+            else:
+                self._resolved_crs = None  # already metric
+
+        return self._resolved_crs  # type: ignore[return-value]
 
     def _apply_filter(self, data: np.ndarray) -> np.ndarray:
         if self._classification_filter is None:
@@ -89,64 +167,42 @@ class ALSTile:
         )
         return data[mask]
 
-    def _z_unit_scale(self) -> float:
-        """Return metres-to-native-Z scale factor (1.0 for metric CRS, ~3.281 for feet)."""
-        try:
-            from pyproj import CRS
-
-            crs = CRS.from_user_input(self.name.crs)
-            unit = (
-                crs.axis_info[2].unit_name if len(crs.axis_info) > 2 else crs.axis_info[0].unit_name
-            )
-            if "foot" in unit.lower() or "feet" in unit.lower():
-                return 3.280839895
-        except Exception:
-            pass
-        return 1.0
-
     def _apply_reclassification(self, data: np.ndarray) -> np.ndarray:
         """
         Classify ground and vegetation points using SMRF + HAG.
 
-        Only unclassified (class 1) points are relabelled — existing
-        classifications (ground, noise, overlap, etc.) are preserved.
-        Thresholds are defined in metres and scaled to the file's native Z units.
+        Thresholds are in metres.  Data must already be in a metric CRS
+        (use reproject_to to ensure this for feet-based source files).
+        Only unclassified (class 1) points are relabelled.
         """
-        scale = self._z_unit_scale()
-        low = _HAG_LOW * scale
-        med = _HAG_MED * scale
-        high = _HAG_HIGH * scale
-
         stages = [
-            # SMRF: promotes class-1 ground candidates to class 2.
-            # ignore high-noise (18) so they don't confuse the surface model.
             {"type": "filters.smrf", "ignore": "Classification[7:7],Classification[18:18]"},
             {"type": "filters.hag_delaunay"},
             {
                 "type": "filters.assign",
                 "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
             },
-            # Assign vegetation classes only to still-unclassified points.
             {
                 "type": "filters.assign",
                 "value": (
                     f"Classification = 3 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {low}"
-                    f" && HeightAboveGround < {med}"
+                    f" && HeightAboveGround >= {_HAG_LOW}"
+                    f" && HeightAboveGround < {_HAG_MED}"
                 ),
             },
             {
                 "type": "filters.assign",
                 "value": (
                     f"Classification = 4 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {med}"
-                    f" && HeightAboveGround < {high}"
+                    f" && HeightAboveGround >= {_HAG_MED}"
+                    f" && HeightAboveGround < {_HAG_HIGH}"
                 ),
             },
             {
                 "type": "filters.assign",
                 "value": (
-                    f"Classification = 5 WHERE Classification == 1 && HeightAboveGround >= {high}"
+                    f"Classification = 5 WHERE Classification == 1"
+                    f" && HeightAboveGround >= {_HAG_HIGH}"
                 ),
             },
         ]
@@ -169,8 +225,8 @@ class ALSTile:
 
         Each tuple contains:
 
-        - ``x`` – 1-D ``float64`` array of UTM easting coordinates.
-        - ``y`` – 1-D ``float64`` array of UTM northing coordinates.
+        - ``x`` – 1-D ``float64`` array of easting coordinates.
+        - ``y`` – 1-D ``float64`` array of northing coordinates.
         - ``attrs`` – dict mapping LAS attribute names to typed numpy arrays.
 
         Parameters
@@ -178,13 +234,19 @@ class ALSTile:
         chunk_size:
             Points per chunk.  Pass ``None`` to read the full tile at once.
         """
+        out_crs = self._get_out_crs()
+        z_scale = self._get_z_scale()
+
         if self._reclassify:
-            # SMRF needs to see the full tile to build a reliable ground model,
-            # so we read everything at once, reclassify, then re-chunk.
-            chunks = list(self._tile.read(chunk_size=None))
+            # SMRF needs to see the full tile for a reliable ground model.
+            chunks = list(self._tile.read(chunk_size=None, out_crs=out_crs))
             if not chunks:
                 return
-            data = self._apply_filter(self._apply_reclassification(chunks[0]))
+            raw = chunks[0]
+            if z_scale is not None:
+                raw = raw.copy()
+                raw["Z"] = raw["Z"] * z_scale
+            data = self._apply_filter(self._apply_reclassification(raw))
             if len(data) == 0:
                 return
             step = chunk_size or len(data)
@@ -197,7 +259,10 @@ class ALSTile:
                 }
                 yield chunk["X"], chunk["Y"], attrs
         else:
-            for raw in self._tile.read(chunk_size=chunk_size):
+            for raw in self._tile.read(chunk_size=chunk_size, out_crs=out_crs):
+                if z_scale is not None:
+                    raw = raw.copy()
+                    raw["Z"] = raw["Z"] * z_scale
                 data = self._apply_filter(raw)
                 if len(data) == 0:
                     continue

@@ -269,6 +269,7 @@ class ALSDatabase(TileDBProvider):
         stored_crs: Optional[str],
         _tile: Optional[ALSTile] = None,
         reclassify: bool = False,
+        reproject_to: Optional[str] = None,
     ) -> Tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
@@ -280,11 +281,14 @@ class ALSDatabase(TileDBProvider):
         """
         filename = laz_path.name
         tile = _tile or ALSTile(
-            laz_path, classification_filter=classification_filter, reclassify=reclassify
+            laz_path,
+            classification_filter=classification_filter,
+            reclassify=reclassify,
+            reproject_to=reproject_to,
         )
         tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
-        crs = tile_name.crs
+        crs = tile.target_crs  # use post-reprojection CRS for storage
 
         if stored_crs and stored_crs != crs:
             raise ValueError(
@@ -332,6 +336,7 @@ class ALSDatabase(TileDBProvider):
         classification_filter: Optional[list[int]] = None,
         overwrite: bool = False,
         reclassify: bool = False,
+        reproject_to: Optional[str] = None,
     ) -> int:
         """
         Ingest a single LAZ tile into the TileDB array.
@@ -359,6 +364,11 @@ class ALSDatabase(TileDBProvider):
             and vegetation (3/4/5) classes to unclassified (class 1) points.
             Use this for surveys delivered with minimal classification (e.g.
             USGS LPC files where non-ground returns are all class 1).
+        reproject_to:
+            Target CRS for the stored points.  ``"auto"`` detects feet-based
+            CRS and reprojects to the appropriate UTM zone; an explicit
+            ``"EPSG:XXXX"`` string reprojects to that CRS; ``None`` (default)
+            keeps the native CRS.
 
         Returns
         -------
@@ -380,8 +390,13 @@ class ALSDatabase(TileDBProvider):
         # Read tile metadata once up front so the CRS is available before the
         # array is (re)created and is reused in _ingest_tile without a second
         # PDAL pass.
-        tile = ALSTile(laz_path, classification_filter=classification_filter, reclassify=reclassify)
-        tile_crs = tile.name.crs
+        tile = ALSTile(
+            laz_path,
+            classification_filter=classification_filter,
+            reclassify=reclassify,
+            reproject_to=reproject_to,
+        )
+        tile_crs = tile.target_crs
 
         if overwrite and self.array_exists():
             self.create(overwrite=True, crs=tile_crs)
@@ -396,6 +411,7 @@ class ALSDatabase(TileDBProvider):
                 stored,
                 _tile=tile,
                 reclassify=reclassify,
+                reproject_to=reproject_to,
             )
             manifest[filename] = entry
         except Exception as exc:
@@ -419,6 +435,7 @@ class ALSDatabase(TileDBProvider):
         max_workers: int = 1,
         overwrite: bool = False,
         reclassify: bool = False,
+        reproject_to: Optional[str] = None,
     ) -> Dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -472,8 +489,10 @@ class ALSDatabase(TileDBProvider):
 
         # Ensure the array exists (or recreate it) before dispatching workers
         # so they never race on array creation.
-        first_tile = ALSTile(pending[0], classification_filter=classification_filter)
-        first_crs = first_tile.name.crs
+        first_tile = ALSTile(
+            pending[0], classification_filter=classification_filter, reproject_to=reproject_to
+        )
+        first_crs = first_tile.target_crs
         if overwrite and self.array_exists():
             self.create(overwrite=True, crs=first_crs)
         elif not self.array_exists():
@@ -484,7 +503,12 @@ class ALSDatabase(TileDBProvider):
 
         def _worker(path: Path) -> Tuple[str, int, dict]:
             total, entry = self._ingest_tile(
-                path, chunk_size, classification_filter, stored, reclassify=reclassify
+                path,
+                chunk_size,
+                classification_filter,
+                stored,
+                reclassify=reclassify,
+                reproject_to=reproject_to,
             )
             return path.name, total, entry
 

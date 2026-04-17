@@ -83,7 +83,11 @@ class Tile:
     # Reading
     # ------------------------------------------------------------------
 
-    def read(self, chunk_size: Optional[int] = None) -> Generator[np.ndarray, None, None]:
+    def read(
+        self,
+        chunk_size: Optional[int] = None,
+        out_crs: Optional[str] = None,
+    ) -> Generator[np.ndarray, None, None]:
         """
         Yield structured numpy arrays of LAS points read via PDAL.
 
@@ -92,8 +96,14 @@ class Tile:
         chunk_size:
             Maximum number of points per yielded array.
             If None, the entire file is returned as a single array.
+        out_crs:
+            If provided, reproject points to this CRS (e.g. ``"EPSG:32616"``)
+            using ``filters.reprojection`` before returning.
         """
-        pipeline = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(self._path)}]))
+        stages: list = [{"type": "readers.las", "filename": str(self._path)}]
+        if out_crs:
+            stages.append({"type": "filters.reprojection", "out_srs": out_crs})
+        pipeline = pdal.Pipeline(json.dumps(stages))
         pipeline.execute()
 
         arrays = pipeline.arrays
