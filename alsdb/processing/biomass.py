@@ -253,6 +253,95 @@ def wrap_sklearn_model(
 
 
 # ---------------------------------------------------------------------------
+# BABA (Buffered Area-Based Approach) metric extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_metrics_baba(
+    points: np.ndarray,
+    resolution: float,
+    bbox: tuple[float, float, float, float],
+    baba_radius: float,
+    cc_threshold: float = _DEFAULT_CC_THRESHOLD,
+) -> dict[str, np.ndarray]:
+    """
+    Compute per-cell LiDAR metrics using a circular neighbourhood of radius
+    *baba_radius* around each cell centre (Buffered Area-Based Approach).
+
+    Each output cell's metrics are derived from all points within *baba_radius*
+    metres of the cell centre, not just points within the cell itself.  This
+    gives statistically robust estimates even at fine output resolutions where
+    individual cells may contain very few points.
+
+    The caller must ensure the queried point array extends at least *baba_radius*
+    beyond *bbox* on all sides (i.e. ``tile_buffer >= baba_radius``).
+    """
+    from scipy.spatial import cKDTree
+
+    x_min, y_min, x_max, y_max = bbox
+    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
+    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
+
+    # Cell centres; row 0 = min_y (flipped to north-up at the end)
+    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
+    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
+    CX, CY = np.meshgrid(cx_arr, cy_arr)  # both (ny, nx)
+    centres = np.column_stack([CX.ravel(), CY.ravel()])  # (ny*nx, 2)
+
+    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    kd = cKDTree(xy)
+    indices_list = kd.query_ball_point(centres, r=baba_radius)
+
+    shape = (ny, nx)
+    h50 = np.full(shape, np.nan, dtype=np.float64)
+    h75 = np.full(shape, np.nan, dtype=np.float64)
+    h95 = np.full(shape, np.nan, dtype=np.float64)
+    hmean = np.full(shape, np.nan, dtype=np.float64)
+    cc = np.full(shape, np.nan, dtype=np.float64)
+    density = np.full(shape, np.nan, dtype=np.float64)
+
+    neighbourhood_area = np.pi * baba_radius**2
+    hag_all = points["HeightAboveGround"]
+    cls_all = points["Classification"]
+    ret_all = points["ReturnNumber"]
+
+    for k, idxs in enumerate(indices_list):
+        if not idxs:
+            continue
+        row, col = divmod(k, nx)
+        hag_k = hag_all[idxs]
+        cls_k = cls_all[idxs]
+        ret_k = ret_all[idxs]
+
+        veg = np.isin(cls_k, _VEG_CLASSES) & (hag_k > 0)
+        hag_v = hag_k[veg]
+        if hag_v.size > 0:
+            h50[row, col] = np.percentile(hag_v, 50)
+            h75[row, col] = np.percentile(hag_v, 75)
+            h95[row, col] = np.percentile(hag_v, 95)
+            hmean[row, col] = hag_v.mean()
+
+        fr = ret_k == 1
+        n_fr = int(fr.sum())
+        if n_fr > 0:
+            cc[row, col] = float((hag_k[fr] > cc_threshold).sum()) / n_fr
+
+        density[row, col] = len(idxs) / neighbourhood_area
+
+    def _flip(a: np.ndarray) -> np.ndarray:
+        return np.flipud(a).astype(np.float32)
+
+    return {
+        "h50": _flip(h50),
+        "h75": _flip(h75),
+        "h95": _flip(h95),
+        "hmean": _flip(hmean),
+        "cc": _flip(cc),
+        "density": _flip(density),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Per-tile workers
 # ---------------------------------------------------------------------------
 
@@ -266,6 +355,7 @@ def _process_tile_metrics(
     resolution: float,
     year: Optional[int],
     cc_threshold: float,
+    baba_radius: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -273,7 +363,12 @@ def _process_tile_metrics(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
+    if baba_radius > 0:
+        metrics = _extract_metrics_baba(
+            points, resolution, bbox=crop_bbox, baba_radius=baba_radius, cc_threshold=cc_threshold
+        )
+    else:
+        metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
 
     for name, grid in metrics.items():
         if not np.all(np.isnan(grid)):
@@ -292,6 +387,7 @@ def _process_tile_biomass(
     year: Optional[int],
     cc_threshold: float,
     model_fn: Callable,
+    baba_radius: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -299,7 +395,12 @@ def _process_tile_biomass(
         return
 
     points = attach_hag(arr)
-    metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
+    if baba_radius > 0:
+        metrics = _extract_metrics_baba(
+            points, resolution, bbox=crop_bbox, baba_radius=baba_radius, cc_threshold=cc_threshold
+        )
+    else:
+        metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
     agb = model_fn(metrics)
 
     if np.all(np.isnan(agb)):
@@ -323,6 +424,7 @@ def compute_metrics(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
+    baba_radius: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -371,13 +473,15 @@ def compute_metrics(
     crs = array_crs(provider)
     for var in _METRIC_NAMES:
         store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    effective_buffer = max(tile_buffer, baba_radius)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
     logger.info(
-        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s)",
+        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
+        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
     )
     run_tiled(
         _process_tile_metrics,
@@ -388,6 +492,7 @@ def compute_metrics(
         resolution=resolution,
         year=year,
         cc_threshold=cc_threshold,
+        baba_radius=baba_radius,
     )
 
 
@@ -400,6 +505,7 @@ def compute_biomass(
     year: Optional[int] = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
+    baba_radius: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -445,13 +551,15 @@ def compute_biomass(
         logger.info("Biomass already present for year %d at %.0f m — skipping", year, resolution)
         return
     store.ensure_group("biomass", resolution, effective_bbox, array_crs(provider), tile_size)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    effective_buffer = max(tile_buffer, baba_radius)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
     logger.info(
-        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s)",
+        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
+        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
     )
     run_tiled(
         _process_tile_biomass,
@@ -463,4 +571,5 @@ def compute_biomass(
         year=year,
         cc_threshold=cc_threshold,
         model_fn=model_fn,
+        baba_radius=baba_radius,
     )

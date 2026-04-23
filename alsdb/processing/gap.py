@@ -124,6 +124,58 @@ def _gap_to_lai(gap: np.ndarray, k: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# BABA gap fraction
+# ---------------------------------------------------------------------------
+
+
+def _compute_gap_grid_baba(
+    points: np.ndarray,
+    resolution: float,
+    bbox: tuple[float, float, float, float],
+    baba_radius: float,
+) -> np.ndarray:
+    """
+    Compute per-cell gap fraction using a circular neighbourhood of radius
+    *baba_radius* around each cell centre (Buffered Area-Based Approach).
+    """
+    from scipy.spatial import cKDTree
+
+    x_min, y_min, x_max, y_max = bbox
+    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
+    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
+
+    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
+    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
+    CX, CY = np.meshgrid(cx_arr, cy_arr)
+    centres = np.column_stack([CX.ravel(), CY.ravel()])
+
+    fr_mask = points["ReturnNumber"] == 1
+    fr_pts = points[fr_mask]
+    if len(fr_pts) == 0:
+        return np.full((ny, nx), np.nan, dtype=np.float32)
+
+    xy_fr = np.column_stack([fr_pts["X"].astype(np.float64), fr_pts["Y"].astype(np.float64)])
+    kd = cKDTree(xy_fr)
+    indices_list = kd.query_ball_point(centres, r=baba_radius)
+
+    cls_fr = fr_pts["Classification"]
+    gap = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    for k, idxs in enumerate(indices_list):
+        if not idxs:
+            continue
+        row, col = divmod(k, nx)
+        cls_k = cls_fr[idxs]
+        n_gnd = int((cls_k == _GROUND_CLASS).sum())
+        n_veg = int(np.isin(cls_k, _VEG_CLASSES).sum())
+        total = n_gnd + n_veg
+        if total > 0:
+            gap[row, col] = n_gnd / total
+
+    return np.flipud(gap).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Per-tile worker
 # ---------------------------------------------------------------------------
 
@@ -138,6 +190,7 @@ def _process_tile(
     year: Optional[int],
     lai: bool,
     k: float,
+    baba_radius: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -146,7 +199,10 @@ def _process_tile(
 
     points = attach_hag(arr)
 
-    gap = _compute_gap_grid(points, resolution, crop_bbox)
+    if baba_radius > 0:
+        gap = _compute_gap_grid_baba(points, resolution, crop_bbox, baba_radius)
+    else:
+        gap = _compute_gap_grid(points, resolution, crop_bbox)
 
     if np.all(np.isnan(gap)):
         logger.debug("Gap tile %d: all NaN, skipping", tile_index)
@@ -175,6 +231,7 @@ def compute_gap_fraction(
     *,
     lai: bool = False,
     k: float = _LAI_K_DEFAULT,
+    baba_radius: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -236,14 +293,16 @@ def compute_gap_fraction(
     store.ensure_group("gap", resolution, effective_bbox, crs, tile_size)
     if lai:
         store.ensure_group("lai", resolution, effective_bbox, crs, tile_size)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+    effective_buffer = max(tile_buffer, baba_radius)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
     logger.info(
-        "Computing gap fraction  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
+        "Computing gap fraction  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
         ", LAI" if lai else "",
+        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
     )
 
     run_tiled(
@@ -256,4 +315,5 @@ def compute_gap_fraction(
         year=year,
         lai=lai,
         k=k,
+        baba_radius=baba_radius,
     )
