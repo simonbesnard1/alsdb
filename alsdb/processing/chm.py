@@ -84,8 +84,18 @@ def _rasterise(
 
     Returns a ``(ny, nx)`` float32 array in north-up orientation.
     Empty bins are ``np.nan``.
+
+    *statistic* may be any scipy built-in string (``"max"``, ``"mean"``, …)
+    or a percentile shorthand such as ``"p95"`` (the 95th percentile).
     """
     from scipy.stats import binned_statistic_2d
+
+    # Resolve percentile shorthand → callable
+    if isinstance(statistic, str) and statistic.startswith("p") and statistic[1:].isdigit():
+        q = int(statistic[1:])
+        stat_fn = lambda arr: np.nanpercentile(arr, q) if len(arr) > 0 else np.nan  # noqa: E731
+    else:
+        stat_fn = statistic  # type: ignore[assignment]
 
     cx0, cy0, cx1, cy1 = crop_bbox
     nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
@@ -97,11 +107,60 @@ def _rasterise(
         x,
         y,
         values,
-        statistic=statistic,
+        statistic=stat_fn,
         bins=[x_edges, y_edges],
     ).statistic  # shape (nx, ny)
 
     return np.flipud(grid.T).astype(np.float32)  # → (ny, nx) north-up
+
+
+# ---------------------------------------------------------------------------
+# CHM post-processing
+# ---------------------------------------------------------------------------
+
+
+def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
+    """
+    Remove spurious pits (NaN holes inside the canopy) and spikes from a CHM.
+
+    Two-pass approach:
+    1. Fill NaN pits adjacent to valid canopy with local median.
+    2. Detect spikes via Laplacian (sharp local maxima) and replace them with
+       the local median.  The Laplacian threshold is adaptive (99th percentile
+       of all non-zero Laplacian values), so mild canopy curvature is kept.
+
+    Parameters
+    ----------
+    grid:
+        Input CHM as ``(ny, nx)`` float32 north-up array.
+    window:
+        Neighbourhood window size for median filter (default 3 = 3×3 pixels).
+    """
+    from scipy.ndimage import binary_dilation, laplace, median_filter
+
+    out = grid.copy()
+    nan_mask = np.isnan(out)
+
+    # Pass 1 — fill NaN pits that are directly adjacent to valid canopy
+    if nan_mask.any():
+        adjacent = nan_mask & binary_dilation(~nan_mask, iterations=1)
+        if adjacent.any():
+            safe = np.where(nan_mask, 0.0, out)
+            local_med = median_filter(safe, size=window)
+            out = np.where(adjacent & (local_med > 0), local_med, out)
+
+    # Pass 2 — remove spikes via Laplacian thresholding
+    safe = np.where(np.isnan(out), 0.0, out)
+    lap = np.abs(laplace(safe))
+    lap_vals = lap[lap > 0]
+    if lap_vals.size > 0:
+        threshold = float(np.percentile(lap_vals, 99))
+        spike_mask = ~np.isnan(out) & (lap > threshold)
+        if spike_mask.any():
+            local_med = median_filter(safe, size=window)
+            out = np.where(spike_mask, local_med.astype(np.float32), out)
+
+    return out.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +189,8 @@ def _process_tile_chm(
     resolution: float,
     year: Optional[int],
     first_returns_only: bool,
+    height_statistic: str = "max",
+    pit_fill: bool = True,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -168,8 +229,10 @@ def _process_tile_chm(
         points["HeightAboveGround"],
         crop_bbox,
         resolution,
-        statistic="max",
+        statistic=height_statistic,
     )
+    if pit_fill:
+        grid = _pit_fill(grid)
     store.write_tile("chm", resolution, year, grid, crop_bbox)
     logger.debug("CHM tile %d written", tile_index)
 
@@ -279,6 +342,8 @@ def _process_tile_all(
     need_dtm: bool,
     need_dsm: bool,
     need_chm: bool,
+    height_statistic: str = "max",
+    pit_fill: bool = True,
 ) -> None:
     """
     Single-pass tile worker for :func:`compute_all`.
@@ -358,20 +423,17 @@ def _process_tile_all(
         try:
             pts = _run(stages, arr)
             if len(pts):
-                store.write_tile(
-                    "chm",
-                    resolution,
-                    year,
-                    _rasterise(
-                        pts["X"],
-                        pts["Y"],
-                        pts["HeightAboveGround"],
-                        crop_bbox,
-                        resolution,
-                        "max",
-                    ),
+                chm_grid = _rasterise(
+                    pts["X"],
+                    pts["Y"],
+                    pts["HeightAboveGround"],
                     crop_bbox,
+                    resolution,
+                    height_statistic,
                 )
+                if pit_fill:
+                    chm_grid = _pit_fill(chm_grid)
+                store.write_tile("chm", resolution, year, chm_grid, crop_bbox)
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():
                 raise
@@ -398,6 +460,8 @@ def compute_chm(
     year: Optional[int] = None,
     *,
     first_returns_only: bool = True,
+    height_statistic: str = "max",
+    pit_fill: bool = True,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -467,6 +531,8 @@ def compute_chm(
         resolution=resolution,
         year=year,
         first_returns_only=first_returns_only,
+        height_statistic=height_statistic,
+        pit_fill=pit_fill,
     )
 
 
@@ -479,6 +545,7 @@ def compute_dtm(
     *,
     overwrite: bool = False,
     tile_size: float = 500.0,
+    tile_buffer: float = 10.0,
     n_workers: int = 1,
 ) -> None:
     """
@@ -513,7 +580,7 @@ def compute_dtm(
         logger.info("DTM already present for year %d at %.1f m — skipping", year, resolution)
         return
     store.ensure_group("dtm", resolution, effective_bbox, array_crs(provider), tile_size)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=0.0)
+    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
         "Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
         resolution,
@@ -608,6 +675,8 @@ def compute_all(
     tile_buffer: float = 50.0,
     n_workers: int = 1,
     first_returns_only: bool = True,
+    height_statistic: str = "max",
+    pit_fill: bool = True,
     overwrite: bool = False,
 ) -> None:
     """
@@ -694,4 +763,6 @@ def compute_all(
         need_dtm=need_dtm,
         need_dsm=need_dsm,
         need_chm=need_chm,
+        height_statistic=height_statistic,
+        pit_fill=pit_fill,
     )
