@@ -71,13 +71,8 @@ _TREE_ID_STRIDE = 100_000
 # ---------------------------------------------------------------------------
 
 
-def _pdal_stages(
-    min_height: float,
-    min_points: int,
-    radius: float,
-    voxel_size: Optional[float],
-) -> list[dict]:
-    """Build the PDAL filter stage list shared by all code paths."""
+def _hag_stages(min_height: float, voxel_size: Optional[float]) -> list[dict]:
+    """HAG + pre-filter stages shared by all code paths (run before litree)."""
     stages: list[dict] = [
         {"type": "filters.hag_delaunay"},
         {
@@ -90,15 +85,24 @@ def _pdal_stages(
     ]
     if voxel_size is not None:
         stages.append({"type": "filters.sample", "radius": voxel_size})
-    stages.append(
-        {
-            "type": "filters.litree",
-            "min_points": min_points,
-            "min_height": min_height,
-            "radius": radius,
-        }
-    )
     return stages
+
+
+def _litree_stage(min_height: float, min_points: int, radius: float) -> dict:
+    return {
+        "type": "filters.litree",
+        "min_points": min_points,
+        "min_height": min_height,
+        "radius": radius,
+    }
+
+
+def _compute_adaptive_radius(points: np.ndarray) -> float:
+    """Return litree search radius derived from P75 HAG: wf(h) = 0.07*h + 0.6."""
+    hag = points["HeightAboveGround"].astype(np.float64)
+    above = hag[hag > 0]
+    p75 = float(np.percentile(above, 75)) if above.size > 0 else 5.0
+    return 0.07 * p75 + 0.6
 
 
 def _tree_metrics(points: np.ndarray) -> list[dict]:
@@ -149,6 +153,7 @@ def _process_tile(
     min_height: float,
     radius: float,
     voxel_size: Optional[float],
+    adaptive_radius: bool = False,
 ) -> Optional[tuple[np.ndarray, pd.DataFrame]]:
     """
     Segment trees within one sub-tile.
@@ -162,11 +167,25 @@ def _process_tile(
     if arr.size == 0:
         return None
 
-    stages = _pdal_stages(min_height, min_points, radius, voxel_size)
     try:
-        p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+        p = pdal.Pipeline(json.dumps(_hag_stages(min_height, voxel_size)), arrays=[arr])
         p.execute()
-        points = p.arrays[0]
+        hag_points = p.arrays[0] if p.arrays else arr[:0]
+    except RuntimeError as exc:
+        if "no points" in str(exc).lower():
+            return None
+        raise
+
+    if hag_points.size == 0:
+        return None
+
+    r = _compute_adaptive_radius(hag_points) if adaptive_radius else radius
+    try:
+        p2 = pdal.Pipeline(
+            json.dumps([_litree_stage(min_height, min_points, r)]), arrays=[hag_points]
+        )
+        p2.execute()
+        points = p2.arrays[0] if p2.arrays else hag_points[:0]
     except RuntimeError as exc:
         if "no points" in str(exc).lower():
             return None
@@ -213,6 +232,7 @@ def segment_trees(
     min_points: int = 10,
     min_height: float = 3.0,
     radius: float = 2.0,
+    adaptive_radius: bool = False,
     voxel_size: Optional[float] = None,
     tile_size: Optional[float] = None,
     tile_buffer: float = 30.0,
@@ -235,8 +255,12 @@ def segment_trees(
     min_height:
         Minimum tree height in metres.
     radius:
-        ``filters.litree`` search radius (m).  Increase for sparser clouds
-        or wider-crowned trees.
+        ``filters.litree`` search radius (m).  Used when *adaptive_radius*
+        is ``False``.  Increase for sparser clouds or wider-crowned trees.
+    adaptive_radius:
+        If ``True``, compute the search radius per tile from P75 HAG using
+        ``wf(h) = 0.07 * h + 0.6`` (Murphy et al. lidar-forestry approach).
+        Overrides *radius*.
     voxel_size:
         Poisson disk sampling radius (m) applied before ``filters.litree``
         to speed up the graph build.  ``0.5`` m is a good starting point for
@@ -267,11 +291,12 @@ def segment_trees(
     # ------------------------------------------------------------------ #
     if tile_size is None:
         logger.info(
-            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  radius=%.1f m  voxel_size=%s",
+            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  "
+            "radius=%s  voxel_size=%s",
             effective_bbox,
             year,
             min_height,
-            radius,
+            "adaptive" if adaptive_radius else f"{radius:.1f} m",
             f"{voxel_size} m" if voxel_size else "none",
         )
         arr = query_to_array(provider, effective_bbox, year=year)
@@ -280,10 +305,15 @@ def segment_trees(
             return arr, pd.DataFrame()
 
         logger.info("  %d points queried — running filters.litree…", arr.size)
-        stages = _pdal_stages(min_height, min_points, radius, voxel_size)
-        p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
+        p = pdal.Pipeline(json.dumps(_hag_stages(min_height, voxel_size)), arrays=[arr])
         p.execute()
-        points = p.arrays[0]
+        hag_points = p.arrays[0] if p.arrays else arr[:0]
+        r = _compute_adaptive_radius(hag_points) if adaptive_radius else radius
+        p2 = pdal.Pipeline(
+            json.dumps([_litree_stage(min_height, min_points, r)]), arrays=[hag_points]
+        )
+        p2.execute()
+        points = p2.arrays[0] if p2.arrays else hag_points[:0]
 
         records = _tree_metrics(points)
         if not records:
@@ -320,7 +350,8 @@ def segment_trees(
 
     def _worker(idx: int, qb, cb):
         result = _process_tile(
-            provider, qb, cb, idx, year, min_points, min_height, radius, voxel_size
+            provider, qb, cb, idx, year, min_points, min_height, radius, voxel_size,
+            adaptive_radius=adaptive_radius,
         )
         n = len(result[1]) if result is not None else 0
         logger.debug("  tile %d/%d: %d trees", idx + 1, n_tiles, n)
