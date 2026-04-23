@@ -77,10 +77,27 @@ class ALSTile:
         If provided, only points whose ``Classification`` code is in this list
         are passed through.
     reclassify:
-        If ``True``, run ``filters.smrf`` + HAG to assign ground (class 2) and
-        vegetation (classes 3/4/5) labels to unclassified (class 1) points.
+        If ``True``, run ground classification + HAG to assign ground (class 2)
+        and vegetation (classes 3/4/5) labels to unclassified (class 1) points.
         Thresholds are always in metres; use together with ``reproject_to`` for
         non-metric source files.
+    ground_classifier:
+        Algorithm used for ground classification when ``reclassify=True``.
+
+        - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016).
+          Good general-purpose choice; handles gentle-to-moderate terrain well.
+        - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003),
+          PDAL's ``filters.pmf``.  More robust on steep or complex terrain
+          (analogous to Axelsson 2000 PTD).
+    denoise:
+        If ``True``, run noise detection before reclassification:
+
+        - ``filters.elm`` flags below-ground outliers as class 7.
+        - ``filters.outlier`` (radius method) flags isolated points as class 7.
+
+        These class-7 points are then excluded from the ground classifier and
+        HAG computation.  Useful when the source LAZ has no pre-existing noise
+        classification (classes 7/18 not set).
     reproject_to:
         Target CRS for the output points.
 
@@ -95,11 +112,17 @@ class ALSTile:
         path: str | Path,
         classification_filter: Optional[list[int]] = None,
         reclassify: bool = False,
+        ground_classifier: str = "csf",
+        denoise: bool = False,
         reproject_to: Optional[str] = None,
     ) -> None:
+        if ground_classifier not in ("csf", "pmf"):
+            raise ValueError(f"ground_classifier must be 'csf' or 'pmf', got {ground_classifier!r}")
         self._tile = Tile(path)
         self._classification_filter = classification_filter
         self._reclassify = reclassify
+        self._ground_classifier = ground_classifier
+        self._denoise = denoise
         self._reproject_to = reproject_to
         self._resolved_crs = _UNRESOLVED  # type: ignore[assignment]
 
@@ -167,16 +190,56 @@ class ALSTile:
         )
         return data[mask]
 
+    def _apply_denoise(self, data: np.ndarray) -> np.ndarray:
+        """
+        Flag noise points using ELM (below-ground outliers) and radius-based
+        outlier detection (isolated points).  Flagged points receive class 7
+        and are excluded from subsequent ground classification and HAG.
+        """
+        stages = [
+            {"type": "filters.elm"},
+            {
+                "type": "filters.outlier",
+                "method": "radius",
+                "radius": 1.0,
+                "min_k": 2,
+            },
+        ]
+        p = pdal.Pipeline(json.dumps(stages), arrays=[data])
+        p.execute()
+        result = p.arrays[0] if p.arrays else data
+        n_noise = int((result["Classification"] == 7).sum())
+        logger.debug("Denoise: %d noise points flagged (class 7)", n_noise)
+        return result
+
     def _apply_reclassification(self, data: np.ndarray) -> np.ndarray:
         """
-        Classify ground and vegetation points using SMRF + HAG.
+        Classify ground and vegetation points using CSF or PMF + HAG.
 
         Thresholds are in metres.  Data must already be in a metric CRS
         (use reproject_to to ensure this for feet-based source files).
         Only unclassified (class 1) points are relabelled.
         """
+        ignore = "Classification[7:7],Classification[18:18]"
+        if self._ground_classifier == "pmf":
+            ground_stage: dict = {
+                "type": "filters.pmf",
+                "ignore": ignore,
+                "max_window_size": 33,
+                "slope": 1.0,
+                "initial_distance": 0.15,
+                "max_distance": 2.5,
+            }
+        else:
+            ground_stage = {
+                "type": "filters.csf",
+                "ignore": ignore,
+                "resolution": 0.5,
+                "threshold": 0.5,
+                "rigidness": 1,
+            }
         stages = [
-            {"type": "filters.smrf", "ignore": "Classification[7:7],Classification[18:18]"},
+            ground_stage,
             {"type": "filters.hag_delaunay"},
             {
                 "type": "filters.assign",
@@ -238,7 +301,7 @@ class ALSTile:
         z_scale = self._get_z_scale()
 
         if self._reclassify:
-            # SMRF needs to see the full tile for a reliable ground model.
+            # Ground classifier needs to see the full tile for a reliable ground model.
             chunks = list(self._tile.read(chunk_size=None, out_crs=out_crs))
             if not chunks:
                 return
@@ -246,6 +309,8 @@ class ALSTile:
             if z_scale is not None:
                 raw = raw.copy()
                 raw["Z"] = raw["Z"] * z_scale
+            if self._denoise:
+                raw = self._apply_denoise(raw)
             data = self._apply_filter(self._apply_reclassification(raw))
             if len(data) == 0:
                 return
@@ -263,6 +328,8 @@ class ALSTile:
                 if z_scale is not None:
                     raw = raw.copy()
                     raw["Z"] = raw["Z"] * z_scale
+                if self._denoise:
+                    raw = self._apply_denoise(raw)
                 data = self._apply_filter(raw)
                 if len(data) == 0:
                     continue

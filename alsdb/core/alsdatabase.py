@@ -269,6 +269,8 @@ class ALSDatabase(TileDBProvider):
         stored_crs: Optional[str],
         _tile: Optional[ALSTile] = None,
         reclassify: bool = False,
+        ground_classifier: str = "csf",
+        denoise: bool = False,
         reproject_to: Optional[str] = None,
     ) -> Tuple[int, dict]:
         """
@@ -284,6 +286,8 @@ class ALSDatabase(TileDBProvider):
             laz_path,
             classification_filter=classification_filter,
             reclassify=reclassify,
+            ground_classifier=ground_classifier,
+            denoise=denoise,
             reproject_to=reproject_to,
         )
         tile_name = tile.name  # metadata cached on first access
@@ -336,6 +340,8 @@ class ALSDatabase(TileDBProvider):
         classification_filter: Optional[list[int]] = None,
         overwrite: bool = False,
         reclassify: bool = False,
+        ground_classifier: str = "csf",
+        denoise: bool = False,
         reproject_to: Optional[str] = None,
     ) -> int:
         """
@@ -394,6 +400,8 @@ class ALSDatabase(TileDBProvider):
             laz_path,
             classification_filter=classification_filter,
             reclassify=reclassify,
+            ground_classifier=ground_classifier,
+            denoise=denoise,
             reproject_to=reproject_to,
         )
         tile_crs = tile.target_crs
@@ -411,6 +419,8 @@ class ALSDatabase(TileDBProvider):
                 stored,
                 _tile=tile,
                 reclassify=reclassify,
+                ground_classifier=ground_classifier,
+                denoise=denoise,
                 reproject_to=reproject_to,
             )
             manifest[filename] = entry
@@ -435,6 +445,8 @@ class ALSDatabase(TileDBProvider):
         max_workers: int = 1,
         overwrite: bool = False,
         reclassify: bool = False,
+        ground_classifier: str = "csf",
+        denoise: bool = False,
         reproject_to: Optional[str] = None,
     ) -> Dict[str, int]:
         """
@@ -490,7 +502,11 @@ class ALSDatabase(TileDBProvider):
         # Ensure the array exists (or recreate it) before dispatching workers
         # so they never race on array creation.
         first_tile = ALSTile(
-            pending[0], classification_filter=classification_filter, reproject_to=reproject_to
+            pending[0],
+            classification_filter=classification_filter,
+            reproject_to=reproject_to,
+            ground_classifier=ground_classifier,
+            denoise=denoise,
         )
         first_crs = first_tile.target_crs
         if overwrite and self.array_exists():
@@ -508,6 +524,8 @@ class ALSDatabase(TileDBProvider):
                 classification_filter,
                 stored,
                 reclassify=reclassify,
+                ground_classifier=ground_classifier,
+                denoise=denoise,
                 reproject_to=reproject_to,
             )
             return path.name, total, entry
