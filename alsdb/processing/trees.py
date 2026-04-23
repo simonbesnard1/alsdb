@@ -291,8 +291,7 @@ def segment_trees(
     # ------------------------------------------------------------------ #
     if tile_size is None:
         logger.info(
-            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  "
-            "radius=%s  voxel_size=%s",
+            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  radius=%s  voxel_size=%s",
             effective_bbox,
             year,
             min_height,
@@ -350,7 +349,15 @@ def segment_trees(
 
     def _worker(idx: int, qb, cb):
         result = _process_tile(
-            provider, qb, cb, idx, year, min_points, min_height, radius, voxel_size,
+            provider,
+            qb,
+            cb,
+            idx,
+            year,
+            min_points,
+            min_height,
+            radius,
+            voxel_size,
             adaptive_radius=adaptive_radius,
         )
         n = len(result[1]) if result is not None else 0
