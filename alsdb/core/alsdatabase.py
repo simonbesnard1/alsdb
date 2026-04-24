@@ -169,7 +169,7 @@ class ALSDatabase(TileDBProvider):
     def consolidate(
         self,
         fragment_size: int = 2_000_000_000,
-        memory_budget: int = 4_000_000_000,
+        memory_budget: int = 1_000_000_000,
         step_size_ratio: float = 0.0,
     ) -> None:
         """
@@ -198,7 +198,7 @@ class ALSDatabase(TileDBProvider):
                 "sm.consolidation.buffer_size": str(fragment_size),
                 "sm.consolidation.total_buffer_size": str(memory_budget),
                 "sm.consolidation.step_min_frags": "2",
-                "sm.consolidation.step_max_frags": "200",
+                "sm.consolidation.step_max_frags": "50",
                 "sm.consolidation.step_size_ratio": str(step_size_ratio),
                 "sm.consolidation.amplification": "1.0",
             }
@@ -301,19 +301,29 @@ class ALSDatabase(TileDBProvider):
                 "Use a separate array or reproject the tile."
             )
 
+        # Open TileDB once for the whole tile so all chunks land in a single
+        # fragment.  Calling write() per chunk opened/closed the array each
+        # time, producing ~30 fragments per tile → 300+ total → OOM on consolidate.
+        if not self.array_exists():
+            self.create(crs=crs)
         total = 0
-        for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
-            self.write(x, y, year, attrs, crs=crs)
-            total += len(x)
-            logger.debug(
-                "Ingested %d points from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                len(x),
-                filename,
-                year,
-                crs,
-                self.array_uri,
-                total,
-            )
+        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as tdb_arr:
+            schema_attrs = {
+                tdb_arr.schema.attr(i).name: tdb_arr.schema.attr(i)
+                for i in range(tdb_arr.schema.nattr)
+            }
+            for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
+                year_arr = np.full(len(x), year, dtype=np.int16)
+                n = len(x)
+                for name, a in schema_attrs.items():
+                    if name not in attrs:
+                        attrs[name] = np.zeros(n, dtype=a.dtype)
+                tdb_arr[x, y, year_arr] = attrs
+                total += len(x)
+                logger.debug(
+                    "Wrote %d pts from %s (year=%d, crs=%s) → %s  (running total: %d)",
+                    n, filename, year, crs, self.array_uri, total,
+                )
 
         logger.info(
             "Done: %d points from %s (year=%d, crs=%s) → %s",
