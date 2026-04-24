@@ -83,7 +83,36 @@ logger = logging.getLogger(__name__)
 _VEG_CLASSES = (3, 4, 5)
 _DEFAULT_CC_THRESHOLD = 2.0  # m — first returns above this count as "canopy"
 
-_METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density"]
+_METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density", "fhd", "vci"]
+
+# FHD/VCI vertical binning: 1 m bands up to _FHD_MAX_H.
+# Normalisation uses the total number of bins (not occupied bins) so VCI is
+# comparable across cells and scenes regardless of local canopy height range.
+_FHD_BIN_SIZE: float = 1.0
+_FHD_MAX_H: float = 60.0
+_FHD_BINS = np.arange(0.0, _FHD_MAX_H + _FHD_BIN_SIZE, _FHD_BIN_SIZE)
+_FHD_N_BINS: int = len(_FHD_BINS) - 1  # number of 1 m bands
+_VCI_MAX_ENTROPY: float = np.log(_FHD_N_BINS)
+
+
+def _fhd_from_hag(hag_vals: np.ndarray) -> float:
+    """Shannon entropy of the vertical HAG distribution (Foliage Height Diversity)."""
+    if len(hag_vals) == 0:
+        return np.nan
+    counts, _ = np.histogram(hag_vals, bins=_FHD_BINS)
+    c = counts[counts > 0].astype(np.float64)
+    if c.size == 0:
+        return np.nan
+    p = c / c.sum()
+    return float(-np.sum(p * np.log(p)))
+
+
+def _vci_from_hag(hag_vals: np.ndarray) -> float:
+    """Vegetation Complexity Index — FHD normalised to [0, 1]."""
+    fhd = _fhd_from_hag(hag_vals)
+    if np.isnan(fhd) or _VCI_MAX_ENTROPY == 0:
+        return np.nan
+    return float(fhd / _VCI_MAX_ENTROPY)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +178,12 @@ def _extract_metrics(
         "hmean": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic),
         "cc": cc,
         "density": _flip(n_all / cell_area),
+        "fhd": _flip(
+            binned_statistic_2d(x_v, y_v, hag_v, statistic=_fhd_from_hag, bins=bins).statistic
+        ),
+        "vci": _flip(
+            binned_statistic_2d(x_v, y_v, hag_v, statistic=_vci_from_hag, bins=bins).statistic
+        ),
     }
     return metrics
 
@@ -299,6 +334,8 @@ def _extract_metrics_baba(
     hmean = np.full(shape, np.nan, dtype=np.float64)
     cc = np.full(shape, np.nan, dtype=np.float64)
     density = np.full(shape, np.nan, dtype=np.float64)
+    fhd = np.full(shape, np.nan, dtype=np.float64)
+    vci = np.full(shape, np.nan, dtype=np.float64)
 
     neighbourhood_area = np.pi * baba_radius**2
     hag_all = points["HeightAboveGround"]
@@ -320,6 +357,8 @@ def _extract_metrics_baba(
             h75[row, col] = np.percentile(hag_v, 75)
             h95[row, col] = np.percentile(hag_v, 95)
             hmean[row, col] = hag_v.mean()
+            fhd[row, col] = _fhd_from_hag(hag_v)
+            vci[row, col] = _vci_from_hag(hag_v)
 
         fr = ret_k == 1
         n_fr = int(fr.sum())
@@ -338,6 +377,8 @@ def _extract_metrics_baba(
         "hmean": _flip(hmean),
         "cc": _flip(cc),
         "density": _flip(density),
+        "fhd": _flip(fhd),
+        "vci": _flip(vci),
     }
 
 
