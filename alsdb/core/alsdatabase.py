@@ -4,6 +4,9 @@
 
 import json
 import logging
+import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +23,21 @@ logger = logging.getLogger(__name__)
 
 _MANIFEST_KEY = "ingestion_manifest"
 _CRS_KEY = "crs"
+
+_EPSG_RE = re.compile(r'AUTHORITY\["EPSG","(\d+)"\]\s*\]?\s*$')
+_NAME_RE = re.compile(r'(?:PROJCS|GEOGCS)\["([^"]+)"')
+
+
+def _short_crs(crs_str: str) -> str:
+    """Return a compact CRS label for logging (e.g. EPSG:25830)."""
+    m = _EPSG_RE.search(crs_str.strip())
+    if m:
+        return f"EPSG:{m.group(1)}"
+    m2 = _NAME_RE.match(crs_str)
+    if m2:
+        name = m2.group(1)
+        return name if len(name) <= 40 else name[:37] + "..."
+    return crs_str[:40]
 
 
 class ALSDatabase(TileDBProvider):
@@ -121,7 +139,7 @@ class ALSDatabase(TileDBProvider):
 
         schema = create_schema(cfg)
         tiledb.Array.create(self.array_uri, schema, ctx=self.ctx)
-        logger.info("Created array at %s (CRS=%s)", self.array_uri, crs or "unknown")
+        logger.info("Created array at %s (CRS=%s)", self.array_uri, _short_crs(crs) if crs else "unknown")
 
         if crs:
             with self.open("w") as arr:
@@ -322,15 +340,15 @@ class ALSDatabase(TileDBProvider):
                 total += len(x)
                 logger.debug(
                     "Wrote %d pts from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                    n, filename, year, crs, self.array_uri, total,
+                    n, filename, year, _short_crs(crs), self.array_uri, total,
                 )
 
-        logger.info(
+        logger.debug(
             "Done: %d points from %s (year=%d, crs=%s) → %s",
             total,
             filename,
             year,
-            crs,
+            _short_crs(crs),
             self.array_uri,
         )
         entry = {
@@ -501,12 +519,17 @@ class ALSDatabase(TileDBProvider):
         results: Dict[str, int] = {}
         for p in laz_paths:
             if not overwrite and manifest.get(p.name, {}).get("status") == "ok":
-                logger.info("Already ingested %s — skipping", p.name)
+                logger.debug("Already ingested %s — skipping", p.name)
                 results[p.name] = 0
             else:
                 pending.append(p)
 
+        n_skip = len(laz_paths) - len(pending)
+        if n_skip:
+            logger.info("Skipping %d already-ingested file(s)", n_skip)
+
         if not pending:
+            logger.info("Nothing to ingest — all files already present in manifest")
             return results
 
         # Ensure the array exists (or recreate it) before dispatching workers
@@ -526,6 +549,24 @@ class ALSDatabase(TileDBProvider):
 
         stored = self.stored_crs()
         newly_written = 0
+        n_pending = len(pending)
+        # ~20 progress lines regardless of file count; at least every 50 files
+        progress_every = max(1, min(50, n_pending // 20))
+
+        logger.info(
+            "Ingesting %d file(s) → %s  [workers=%d, consolidate_every=%d]",
+            n_pending,
+            self.array_uri,
+            max_workers,
+            consolidate_every,
+        )
+
+        # Progress counters — updated under _progress_lock by the main thread
+        _progress_lock = threading.Lock()
+        _completed = 0
+        _total_pts = 0
+        _n_failed = 0
+        _t0 = time.monotonic()
 
         def _worker(path: Path) -> Tuple[str, int, dict]:
             total, entry = self._ingest_tile(
@@ -543,7 +584,7 @@ class ALSDatabase(TileDBProvider):
         # Process in batches so consolidation only runs after all workers in a
         # batch have finished — avoids the race where consolidate() tries to
         # access .wrt commit files that concurrent writers are still using.
-        for batch_start in range(0, len(pending), consolidate_every):
+        for batch_start in range(0, n_pending, consolidate_every):
             batch = pending[batch_start : batch_start + consolidate_every]
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -565,6 +606,27 @@ class ALSDatabase(TileDBProvider):
                             "ts": datetime.now(timezone.utc).isoformat(),
                         }
                         results[filename] = 0
+                        n = 0
+
+                    # Update progress counters (main thread only — no race)
+                    nonlocal_n = results.get(path.name, 0)
+                    _completed += 1
+                    _total_pts += nonlocal_n
+                    if results.get(path.name, -1) == 0 and path.name not in manifest:
+                        _n_failed += 1
+
+                    if _completed % progress_every == 0 or _completed == n_pending:
+                        elapsed = time.monotonic() - _t0
+                        rate = _total_pts / elapsed if elapsed > 0 else 0
+                        eta = (n_pending - _completed) * elapsed / _completed if _completed > 0 else 0
+                        logger.info(
+                            "  [%d/%d] %5.1f%%  |  %.2f B pts  |  %5.1f M pts/s  |  ETA ~%.0f min",
+                            _completed, n_pending,
+                            100.0 * _completed / n_pending,
+                            _total_pts / 1e9,
+                            rate / 1e6,
+                            eta / 60,
+                        )
 
                     # Save manifest after every tile so progress survives crashes
                     self._save_manifest(manifest)
@@ -576,9 +638,23 @@ class ALSDatabase(TileDBProvider):
             if newly_written > 0:
                 self.consolidate()
 
+        elapsed_total = time.monotonic() - _t0
+        n_failed = sum(
+            1 for v in manifest.values() if v.get("status") == "failed"
+        )
+        logger.info(
+            "Ingestion done: %d/%d files  |  %.2f B pts  |  avg %.1f M pts/s  |  %.1f min%s",
+            newly_written,
+            n_pending,
+            _total_pts / 1e9,
+            (_total_pts / elapsed_total / 1e6) if elapsed_total > 0 else 0,
+            elapsed_total / 60,
+            f"  |  {n_failed} FAILED" if n_failed else "",
+        )
+
         # Final full compaction: step_size_ratio=0.0 ignores size differences
         # and merges ALL remaining fragments into one regardless of size.
-        n_batches = max(1, len(pending) // consolidate_every)
+        n_batches = max(1, n_pending // consolidate_every)
         if newly_written > 0 and n_batches > 1:
             logger.info("Final compaction — merging all batch fragments…")
             self.consolidate(step_size_ratio=0.0)
