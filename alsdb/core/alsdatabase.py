@@ -139,7 +139,9 @@ class ALSDatabase(TileDBProvider):
 
         schema = create_schema(cfg)
         tiledb.Array.create(self.array_uri, schema, ctx=self.ctx)
-        logger.info("Created array at %s (CRS=%s)", self.array_uri, _short_crs(crs) if crs else "unknown")
+        logger.info(
+            "Created array at %s (CRS=%s)", self.array_uri, _short_crs(crs) if crs else "unknown"
+        )
 
         if crs:
             with self.open("w") as arr:
@@ -340,7 +342,12 @@ class ALSDatabase(TileDBProvider):
                 total += len(x)
                 logger.debug(
                     "Wrote %d pts from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                    n, filename, year, _short_crs(crs), self.array_uri, total,
+                    n,
+                    filename,
+                    year,
+                    _short_crs(crs),
+                    self.array_uri,
+                    total,
                 )
 
         logger.debug(
@@ -618,10 +625,13 @@ class ALSDatabase(TileDBProvider):
                     if _completed % progress_every == 0 or _completed == n_pending:
                         elapsed = time.monotonic() - _t0
                         rate = _total_pts / elapsed if elapsed > 0 else 0
-                        eta = (n_pending - _completed) * elapsed / _completed if _completed > 0 else 0
+                        eta = (
+                            (n_pending - _completed) * elapsed / _completed if _completed > 0 else 0
+                        )
                         logger.info(
                             "  [%d/%d] %5.1f%%  |  %.2f B pts  |  %5.1f M pts/s  |  ETA ~%.0f min",
-                            _completed, n_pending,
+                            _completed,
+                            n_pending,
                             100.0 * _completed / n_pending,
                             _total_pts / 1e9,
                             rate / 1e6,
@@ -639,9 +649,7 @@ class ALSDatabase(TileDBProvider):
                 self.consolidate()
 
         elapsed_total = time.monotonic() - _t0
-        n_failed = sum(
-            1 for v in manifest.values() if v.get("status") == "failed"
-        )
+        n_failed = sum(1 for v in manifest.values() if v.get("status") == "failed")
         logger.info(
             "Ingestion done: %d/%d files  |  %.2f B pts  |  avg %.1f M pts/s  |  %.1f min%s",
             newly_written,
