@@ -412,8 +412,7 @@ def _process_tile_metrics(
         metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
 
     for name, grid in metrics.items():
-        if not np.all(np.isnan(grid)):
-            store.write_tile(name, resolution, year, grid, crop_bbox)
+        store.write_tile(name, resolution, year, grid, crop_bbox)
 
     logger.debug("Metrics tile %d written", tile_index)
 

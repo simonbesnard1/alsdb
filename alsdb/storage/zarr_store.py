@@ -389,15 +389,25 @@ class ALSZarrStore:
             "x": ("x", x_vals),
         }
 
+        n_time = len(time_vals)
+        n_y = len(y_vals)
+        n_x = len(x_vals)
+
         data_vars: dict = {}
         for name in grp.array_keys():
             if name in _COORD_ARRAYS:
                 continue
+            arr = grp[name]
+            if arr.shape[0] == 0:
+                # Variable was initialised but no data written yet — fill with NaN
+                data = np.full((n_time, n_y, n_x), np.nan, dtype=np.float32)
+            else:
+                data = arr[:]
             da = xr.DataArray(
-                grp[name],
+                data,
                 dims=["time", "y", "x"],
                 coords=coords,
-                attrs=dict(grp[name].attrs),
+                attrs=dict(arr.attrs),
             )
             data_vars[name] = da
 
