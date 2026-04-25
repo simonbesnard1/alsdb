@@ -3,16 +3,47 @@
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
 """
-GEDI large-footprint waveform simulator from ALS TileDB point clouds.
+Large-footprint waveform simulator from ALS TileDB point clouds.
+
+The pipeline is sensor-agnostic: any ALS point cloud stored in TileDB can be
+used as input.  Default parameters are tuned for **GEDI** (25 m footprint,
+0.15 m bins, GEDI beam TX kernels); other spaceborne or airborne instruments
+can be targeted by overriding the relevant parameters — see *Sensor presets*
+below.
 
 Pipeline
 --------
-1. Query TileDB for all ALS points within a 25 m diameter circular footprint.
-2. Build a vertical histogram of Z values (0.15 m bins — GEDI native resolution),
-   optionally weighted by return intensity.
-3. Convolve with the TX pulse kernel (per-beam mean shape, or Gaussian fallback).
+1. Query TileDB for all ALS points within a circular footprint.
+2. Build a vertical histogram of Z values, optionally weighted by return
+   intensity and/or the Gaussian beam profile.
+3. Convolve with a TX pulse kernel (per-beam empirical shape, or Gaussian).
 4. Detect the ground peak (lowest significant peak in the waveform).
-5. Extract GEDI-style metrics: RH10–RH100, HOME, canopy cover.
+5. Extract relative-height metrics: RH0–RH100, HOME, canopy cover.
+
+Sensor presets
+--------------
+GEDI (default)::
+
+    simulate_waveform(provider, x, y,
+                      footprint_radius=12.5,   # 25 m diameter
+                      z_step=0.15,             # GEDI native vertical resolution
+                      beam_id="BEAM0000")      # uses bundled TX pulse kernel
+
+LVIS (NASA airborne full-waveform)::
+
+    simulate_waveform(provider, x, y,
+                      footprint_radius=10.0,   # campaign-dependent (typically 10–25 m)
+                      z_step=0.15,
+                      beam_id=None,            # no bundled LVIS kernel; Gaussian used
+                      sigma=0.7)               # approximate LVIS pulse width
+
+ICESat / GLAS::
+
+    simulate_waveform(provider, x, y,
+                      footprint_radius=32.5,   # 65 m diameter
+                      z_step=0.15,
+                      beam_id=None,
+                      sigma=2.0)               # GLAS pulse σ ≈ 2 m
 
 Key references
 --------------
@@ -20,6 +51,8 @@ Key references
   simulator for calibration and validation of spaceborne missions.
   Remote Sensing of Environment, 220, 309–323.
 - GEDI Algorithm Theoretical Basis Document (ATBD), NASA (2019).
+- Blair et al. (1999). The Laser Vegetation Imaging Sensor (LVIS).
+  IGARSS, Hamburg.
 
 Validation use case
 -------------------
@@ -54,16 +87,17 @@ from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
 
-# GEDI instrument constants
+# Default constants — tuned for GEDI; override via simulate_waveform() parameters
 _FOOTPRINT_RADIUS: float = 12.5  # m  (25 m diameter)
 _Z_STEP: float = 0.15  # m  native vertical resolution
-_SIGMA_FULL: float = 0.64  # m  full-power beam pulse σ
-_SIGMA_COV: float = 0.93  # m  coverage beam pulse σ
+_SIGMA_FULL: float = 0.64  # m  GEDI full-power beam pulse σ
+_SIGMA_COV: float = 0.93  # m  GEDI coverage beam pulse σ
 _MIN_POINTS: int = 25
 _RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0  # m  above ground
 
-# Mean TX pulse shapes derived from real GEDI L1B data (Hancock et al. gediSimulator).
+# Empirical TX pulse kernels derived from GEDI L1B data (Hancock et al. gediSimulator).
+# Used when beam_id is supplied; other sensors fall back to a Gaussian kernel (sigma=).
 # Full-power beams: 0000, 0001, 0010, 0011, 1000, 1011
 # Coverage beams:  0101, 0110
 _BEAM_IDS: frozenset[str] = frozenset(
