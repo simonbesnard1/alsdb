@@ -62,6 +62,8 @@ def _flat_metrics(ny=10, nx=10, h95_val=15.0, cc_val=0.7):
         "hmean": np.full((ny, nx), 11.0, dtype=np.float32),
         "cc": np.full((ny, nx), cc_val, dtype=np.float32),
         "density": np.full((ny, nx), 5.0, dtype=np.float32),
+        "fhd": np.full((ny, nx), 1.2, dtype=np.float32),
+        "vci": np.full((ny, nx), 0.5, dtype=np.float32),
     }
 
 
