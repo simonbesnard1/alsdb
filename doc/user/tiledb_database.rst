@@ -237,14 +237,14 @@ Any scikit-learn-compatible estimator can be used. ``wrap_sklearn_model`` handle
         model_fn=wrap_sklearn_model(rf, features=["h95", "cc", "density"]),
     )
 
-GEDI waveform simulation
--------------------------
+Large-footprint waveform simulation
+-------------------------------------
 
 .. code-block:: python
 
     from alsdb.processing.waveform import simulate_waveform, simulate_batch
 
-    # Single footprint (25 m diameter, GEDI-like)
+    # Single footprint (25 m diameter, GEDI default)
     result = simulate_waveform(
         provider=reader,
         center_x=308_500.0,

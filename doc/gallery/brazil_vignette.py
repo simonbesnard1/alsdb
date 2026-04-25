@@ -8,7 +8,7 @@ forest tile from Brazil (2014 survey).  The notebook covers:
 * raw point cloud visualisation
 * 1 m Canopy Height Model (CHM) and Digital Terrain Model (DTM)
 * Aboveground Biomass (AGB) at 10 m and 100 m resolution
-* GEDI-like full-waveform simulation and RH-metric extraction
+* large-footprint waveform simulation and RH-metric extraction (GEDI defaults)
 """
 
 # %%

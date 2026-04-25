@@ -16,7 +16,7 @@ alsDB Documentation
    Discussions <https://github.com/simonbesnard1/alsdb/discussions>
    Development <user/contributing>
 
-**alsDB** is an open-source Python package for processing Airborne Laser Scanning (ALS) point clouds at scale. It reads LAZ/LAS files via `PDAL <https://pdal.io>`_, stores them in a `TileDB <https://tiledb.com>`_ sparse array (locally or on S3), and provides a full pipeline for forest structure products: Canopy Height Model, DTM, DSM, gap fraction, LAI, LiDAR structural metrics, aboveground biomass, and GEDI-style waveform simulation. All gridded outputs are written directly to a `Zarr <https://zarr.dev>`_ v3 store.
+**alsDB** is an open-source Python package for processing Airborne Laser Scanning (ALS) point clouds at scale. It reads LAZ/LAS files via `PDAL <https://pdal.io>`_, stores them in a `TileDB <https://tiledb.com>`_ sparse array (locally or on S3), and provides a full pipeline for forest structure products: Canopy Height Model, DTM, DSM, gap fraction, LAI, LiDAR structural metrics, aboveground biomass, and large-footprint waveform simulation. All gridded outputs are written directly to a `Zarr <https://zarr.dev>`_ v3 store.
 
 .. grid:: 1 1 2 2
     :gutter: 2 3 4 4

@@ -120,8 +120,8 @@ Compute biomass and structural metrics
     ds10 = store.to_dataset(resolution=10.0)
     agb = ds10["biomass"].sel(time=2021)
 
-Simulate GEDI waveforms
-------------------------
+Simulate large-footprint waveforms
+-----------------------------------
 
 .. code-block:: python
 

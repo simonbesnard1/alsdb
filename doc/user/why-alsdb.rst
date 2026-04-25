@@ -30,7 +30,7 @@ What alsDB enables
 - **Direct-to-Zarr processing**: CHM, DTM, DSM, gap fraction, LAI, structural metrics, and biomass are written tile-by-tile directly to the output store: no GeoTIFF intermediates, no mosaic step.
 - **Dataset-agnostic ingestion**: CRS, bounding box, and acquisition year are read from the LAZ header automatically. Any national or global ALS dataset works without a custom parser.
 - **Scalable tiling**: Large areas are split into sub-tiles with configurable size and buffer. Processing is parallel via a ``ThreadPoolExecutor`` with ``n_workers``.
-- **GEDI waveform simulation**: Full-waveform simulation at GEDI footprint scale for direct comparison with space-borne LiDAR.
+- **Large-footprint waveform simulation**: Sensor-agnostic full-waveform simulation (GEDI, LVIS, GLAS) at configurable footprint scale for direct comparison with space-borne LiDAR.
 
 Pipeline output: a 1 km² tropical forest tile
 ------------------------------------------------
@@ -79,7 +79,7 @@ Core components of alsDB
    - ``alsdb.processing.chm``: Canopy Height Model, DTM, DSM
    - ``alsdb.processing.gap``: gap fraction, effective LAI
    - ``alsdb.processing.biomass``: structural metrics, aboveground biomass
-   - ``alsdb.processing.waveform``: GEDI-style waveform simulation
+   - ``alsdb.processing.waveform``: large-footprint waveform simulation (GEDI by default)
 
 Goals and aspirations
 ---------------------
