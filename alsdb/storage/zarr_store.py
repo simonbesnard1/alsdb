@@ -112,7 +112,11 @@ class ALSZarrStore:
 
         self.path = path  # keep as-is so S3 URIs survive repr
         self._storage_options = storage_options or {}
-        self._root = zarr.open_group(str(path), mode=mode, storage_options=self._storage_options)
+        _path_str = str(path)
+        if self._storage_options and _path_str.startswith("s3://"):
+            self._root = zarr.open_group(_path_str, mode=mode, storage_options=self._storage_options)
+        else:
+            self._root = zarr.open_group(_path_str, mode=mode)
         self._lock = threading.Lock()  # protects time-axis resize + group init
 
     # ------------------------------------------------------------------
