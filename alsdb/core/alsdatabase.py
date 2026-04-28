@@ -224,7 +224,7 @@ class ALSDatabase(TileDBProvider):
             }
         )
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
-        n_frags = len(tiledb.array_fragments(self.array_uri).uri)
+        n_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
         logger.info(
             "Consolidating %d fragments (fragment_size=%.0f MB, memory_budget=%.0f MB)…",
             n_frags,
