@@ -98,6 +98,8 @@ class TileDBProvider:
             "vfs.s3.region": region,
             "vfs.s3.scheme": "https",
             "vfs.s3.use_virtual_addressing": "false",
+            # Ceph compatibility: disable chunked payload signing (XAmzContentSHA256Mismatch)
+            "vfs.s3.aws_payload_signing": "false",
             # Multipart upload — required for large LAZ files
             "vfs.s3.use_multipart_upload": "true",
             "vfs.s3.multipart_part_size": "52428800",  # 50 MB
