@@ -738,9 +738,9 @@ packages:
 - pypi: ./
   name: alsdb
   version: 0.1.0
-  sha256: c283854fc21072ac99a2fdae9a5ada75b7ebe34cba49cb9da94158048be45ffe
+  sha256: 88cad552a6b4e8c0af46b5f7861bbb9bb756e16d52856823339abce5737bdbaa
   requires_dist:
-  - tiledb>=0.28
+  - tiledb>=0.35.2
   - zarr>=3.0
   - numpy>=1.26
   - pandas>=2.0

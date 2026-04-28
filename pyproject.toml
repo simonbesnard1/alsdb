@@ -25,7 +25,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "tiledb>=0.28",
+    "tiledb>=0.35.2",
     "zarr>=3.0",
     "numpy>=1.26",
     "pandas>=2.0",
@@ -67,7 +67,7 @@ platforms = ["linux-64", "osx-arm64"]
 python = ">=3.11"
 pdal = ">=2.7"
 python-pdal = ">=3.4"
-tiledb = ">=0.28"
+tiledb = ">=0.35.2"
 zarr = ">=3.0"
 numpy = ">=1.26"
 pyarrow = ">=14.0"
