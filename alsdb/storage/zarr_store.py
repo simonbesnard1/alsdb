@@ -92,17 +92,27 @@ class ALSZarrStore:
     Parameters
     ----------
     path:
-        Directory path for the Zarr store (local filesystem or S3 URI).
+        Directory path for the Zarr store.  Local path or an ``s3://`` URI.
     mode:
         ``"a"`` (default) opens existing store or creates a new empty one.
         ``"r"`` opens read-only.
+    storage_options:
+        Keyword arguments forwarded to the fsspec/s3fs backend when *path*
+        is an S3 URI.  Typical keys: ``key``, ``secret``, ``endpoint_url``,
+        ``client_kwargs``.  Ignored for local paths.
     """
 
-    def __init__(self, path: str | Path, mode: str = "a") -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        mode: str = "a",
+        storage_options: dict | None = None,
+    ) -> None:
         import zarr
 
-        self.path = Path(path)
-        self._root = zarr.open_group(str(path), mode=mode)
+        self.path = path  # keep as-is so S3 URIs survive repr
+        self._storage_options = storage_options or {}
+        self._root = zarr.open_group(str(path), mode=mode, storage_options=self._storage_options)
         self._lock = threading.Lock()  # protects time-axis resize + group init
 
     # ------------------------------------------------------------------
@@ -117,6 +127,7 @@ class ALSZarrStore:
         crs_wkt: str,
         variables: dict[str, list[str]],
         tile_size: float = 500.0,
+        storage_options: dict | None = None,
     ) -> "ALSZarrStore":
         """
         Create a new Zarr store pre-allocated for *bbox* and *variables*.
@@ -137,13 +148,13 @@ class ALSZarrStore:
             during processing so chunk boundaries align with tile boundaries.
         """
 
-        store = cls(path, mode="w")
+        store = cls(path, mode="w", storage_options=storage_options)
         store._root.attrs.update({"bbox": list(bbox), "crs_wkt": crs_wkt})
 
         for res_key, var_names in variables.items():
             store._init_group(res_key, bbox, crs_wkt, var_names, tile_size, root=store._root)
 
-        return cls(path, mode="a")
+        return cls(path, mode="a", storage_options=storage_options)
 
     # ------------------------------------------------------------------
     # Group initialisation (internal)
