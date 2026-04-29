@@ -188,49 +188,54 @@ class ALSDatabase(TileDBProvider):
 
     def consolidate(
         self,
-        fragment_size: int = 2_000_000_000,
-        memory_budget: int = 1_000_000_000,
-        step_size_ratio: float = 0.0,
+        mode: str = "fragments",
+        fragment_size: int = 100_000_000,
+        memory_budget: int = 256_000_000,
+        step_max_frags: int = 10,
+        step_size_ratio: float = 0.5,
     ) -> None:
         """
         Consolidate and vacuum the TileDB array.
 
-        TileDB's consolidation is size-tiered: it merges fragments whose sizes
-        fall within *step_size_ratio* of each other, up to *fragment_size*.
-        Setting ``step_size_ratio=0.0`` ignores size differences and merges
-        all fragments regardless of size — effectively a full compaction.
-
         Parameters
         ----------
+        mode:
+            TileDB consolidation mode.  Use ``"commits"`` or
+            ``"fragment_meta"`` for lightweight metadata-only passes (fast,
+            negligible memory).  Use ``"fragments"`` for full data compaction.
         fragment_size:
-            Target consolidated fragment size in bytes (default 2 GB).
-            Fragments smaller than this are candidates for merging.
+            Per-fragment read buffer (bytes).  Keep small to avoid OOM on
+            large arrays — 100 MB is safe even with thousands of fragments.
         memory_budget:
-            Total memory budget for the consolidation pass (bytes).
-            Should be set to available RAM for large arrays.
+            Total memory across all buffers in one consolidation pass.
+        step_max_frags:
+            Maximum fragments merged in a single pass.  Lower = less memory
+            per pass, more passes needed.
         step_size_ratio:
-            Size ratio window for fragment eligibility (0.0 = merge all,
-            1.0 = only merge identically-sized fragments).
+            Size ratio window (0.0 = merge all regardless of size;
+            0.5 = merge fragments within 50 % of each other in size).
         """
+        if mode != "fragments":
+            cfg = tiledb.Config({"sm.consolidation.mode": mode})
+            tiledb.consolidate(self.array_uri, config=cfg, ctx=self.ctx)
+            vac_cfg = tiledb.Config({"sm.vacuum.mode": mode})
+            tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
+            return
+
         cfg = tiledb.Config(
             {
                 "sm.consolidation.mode": "fragments",
                 "sm.consolidation.buffer_size": str(fragment_size),
                 "sm.consolidation.total_buffer_size": str(memory_budget),
                 "sm.consolidation.step_min_frags": "2",
-                "sm.consolidation.step_max_frags": "50",
+                "sm.consolidation.step_max_frags": str(step_max_frags),
                 "sm.consolidation.step_size_ratio": str(step_size_ratio),
-                "sm.consolidation.amplification": "1.0",
+                "sm.consolidation.amplification": "1.5",
             }
         )
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
         n_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
-        logger.info(
-            "Consolidating %d fragments (fragment_size=%.0f MB, memory_budget=%.0f MB)…",
-            n_frags,
-            fragment_size / 1e6,
-            memory_budget / 1e6,
-        )
+        logger.info("Consolidating %d fragments (step_max=%d)…", n_frags, step_max_frags)
         tiledb.consolidate(self.array_uri, config=cfg, ctx=self.ctx)
         tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
         logger.info("Consolidation done.")
@@ -641,12 +646,15 @@ class ALSDatabase(TileDBProvider):
                     # Save manifest after every tile so progress survives crashes
                     self._save_manifest(manifest)
 
-            # All workers in this batch are done — safe to consolidate.
-            # Size-tiered config keeps fragment count manageable during ingest
-            # without over-merging (small fragments won't be merged into the
-            # large consolidated ones from previous batches until the final pass).
+            # All workers in this batch are done.
+            # Consolidate only metadata — fast, near-zero memory.
+            # Fragment data consolidation is deferred to the end.
             if newly_written > 0:
-                self.consolidate()
+                for meta_mode in ("commits", "fragment_meta"):
+                    try:
+                        self.consolidate(mode=meta_mode)
+                    except Exception as exc:
+                        logger.debug("Metadata consolidation (%s) skipped: %s", meta_mode, exc)
 
         elapsed_total = time.monotonic() - _t0
         n_failed = sum(1 for v in manifest.values() if v.get("status") == "failed")
@@ -660,11 +668,26 @@ class ALSDatabase(TileDBProvider):
             f"  |  {n_failed} FAILED" if n_failed else "",
         )
 
-        # Final full compaction: step_size_ratio=0.0 ignores size differences
-        # and merges ALL remaining fragments into one regardless of size.
-        n_batches = max(1, n_pending // consolidate_every)
-        if newly_written > 0 and n_batches > 1:
-            logger.info("Final compaction — merging all batch fragments…")
-            self.consolidate(step_size_ratio=0.0)
+        # Iterative fragment compaction: merge in small steps until stable.
+        # Each pass merges at most step_max_frags fragments; multiple passes
+        # converge the fragment count without exhausting memory.
+        if newly_written > 0:
+            logger.info("Starting iterative fragment compaction…")
+            prev = None
+            for pass_num in range(1, 201):
+                n_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
+                if n_frags <= 1 or (prev is not None and n_frags >= prev):
+                    break
+                prev = n_frags
+                logger.info("  Compaction pass %d: %d fragments remaining", pass_num, n_frags)
+                self.consolidate(
+                    mode="fragments",
+                    fragment_size=100_000_000,
+                    memory_budget=256_000_000,
+                    step_max_frags=10,
+                    step_size_ratio=0.5,
+                )
+            final_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
+            logger.info("Compaction complete: %d fragment(s) remaining", final_frags)
 
         return results
