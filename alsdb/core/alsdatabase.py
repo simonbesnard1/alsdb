@@ -326,43 +326,58 @@ class ALSDatabase(TileDBProvider):
                 "Use a separate array or reproject the tile."
             )
 
-        # Open TileDB once for the whole tile so all chunks land in a single
-        # fragment.  Calling write() per chunk opened/closed the array each
-        # time, producing ~30 fragments per tile → 300+ total → OOM on consolidate.
+        # Accumulate all chunks in memory and write once → exactly 1 fragment per file.
+        # Multiple writes within a single open("w") context still create separate
+        # S3 objects in TileDB's sparse array model; only a single write avoids this.
         if not self.array_exists():
             self.create(crs=crs)
-        total = 0
-        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as tdb_arr:
-            schema_attrs = {
-                tdb_arr.schema.attr(i).name: tdb_arr.schema.attr(i)
-                for i in range(tdb_arr.schema.nattr)
+
+        xs, ys, attr_chunks = [], [], []
+        for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
+            xs.append(x)
+            ys.append(y)
+            attr_chunks.append(attrs)
+
+        if not xs:
+            return 0, {
+                "year": year,
+                "crs": crs,
+                "bbox": list(tile_name.bbox_native),
+                "n_points": 0,
+                "status": "ok",
+                "ts": datetime.now(timezone.utc).isoformat(),
             }
-            for x, y, attrs in tile.iter_chunks(chunk_size=chunk_size):
-                year_arr = np.full(len(x), year, dtype=np.int16)
-                n = len(x)
-                for name, a in schema_attrs.items():
-                    if name not in attrs:
-                        attrs[name] = np.zeros(n, dtype=a.dtype)
-                tdb_arr[x, y, year_arr] = attrs
-                total += len(x)
-                logger.debug(
-                    "Wrote %d pts from %s (year=%d, crs=%s) → %s  (running total: %d)",
-                    n,
-                    filename,
-                    year,
-                    _short_crs(crs),
-                    self.array_uri,
-                    total,
-                )
+
+        x_all = np.concatenate(xs)
+        y_all = np.concatenate(ys)
+        total = len(x_all)
+        year_arr = np.full(total, year, dtype=np.int16)
+
+        # Merge per-chunk attribute dicts and fill any missing attributes with zeros.
+        with tiledb.open(self.array_uri, mode="r", ctx=self.ctx) as rdr:
+            schema_attrs = {
+                rdr.schema.attr(i).name: rdr.schema.attr(i) for i in range(rdr.schema.nattr)
+            }
+        attrs_all: Dict[str, np.ndarray] = {}
+        for name, a in schema_attrs.items():
+            parts = [
+                ch.get(name, np.zeros(len(xs[i]), dtype=a.dtype))
+                for i, ch in enumerate(attr_chunks)
+            ]
+            attrs_all[name] = np.concatenate(parts)
+
+        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as tdb_arr:
+            tdb_arr[x_all, y_all, year_arr] = attrs_all
 
         logger.debug(
-            "Done: %d points from %s (year=%d, crs=%s) → %s",
+            "Wrote %d pts from %s (year=%d, crs=%s) → %s",
             total,
             filename,
             year,
             _short_crs(crs),
             self.array_uri,
         )
+
         entry = {
             "year": year,
             "crs": crs,
@@ -683,8 +698,8 @@ class ALSDatabase(TileDBProvider):
                 self.consolidate(
                     mode="fragments",
                     fragment_size=100_000_000,
-                    memory_budget=256_000_000,
-                    step_max_frags=10,
+                    memory_budget=1_000_000_000,
+                    step_max_frags=50,
                     step_size_ratio=0.5,
                 )
             final_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
