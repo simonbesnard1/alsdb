@@ -190,8 +190,8 @@ class ALSDatabase(TileDBProvider):
         self,
         mode: str = "fragments",
         fragment_size: int = 100_000_000,
-        memory_budget: int = 256_000_000,
-        step_max_frags: int = 10,
+        memory_budget: int = 8_000_000_000,
+        step_max_frags: int = 50,
         step_size_ratio: float = 0.5,
     ) -> None:
         """
@@ -222,6 +222,10 @@ class ALSDatabase(TileDBProvider):
             tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
             return
 
+        # sm.memory_budget governs the tile-offset read budget inside the
+        # SparseGlobalOrderReader used during consolidation.  With many thousands
+        # of fragments the default (512 MB) is divided too thinly; set it to the
+        # available RAM so tile-offset loads always succeed.
         cfg = tiledb.Config(
             {
                 "sm.consolidation.mode": "fragments",
@@ -231,6 +235,8 @@ class ALSDatabase(TileDBProvider):
                 "sm.consolidation.step_max_frags": str(step_max_frags),
                 "sm.consolidation.step_size_ratio": str(step_size_ratio),
                 "sm.consolidation.amplification": "1.5",
+                "sm.memory_budget": str(memory_budget),
+                "sm.memory_budget_var": str(memory_budget // 2),
             }
         )
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
@@ -698,7 +704,7 @@ class ALSDatabase(TileDBProvider):
                 self.consolidate(
                     mode="fragments",
                     fragment_size=100_000_000,
-                    memory_budget=1_000_000_000,
+                    memory_budget=8_000_000_000,
                     step_max_frags=50,
                     step_size_ratio=0.5,
                 )
