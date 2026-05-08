@@ -503,7 +503,7 @@ class ALSDatabase(TileDBProvider):
         chunk_size: Optional[int] = None,
         classification_filter: Optional[list[int]] = None,
         consolidate_every: int = 50,
-        max_workers: int = 1,
+        n_workers: int = 1,
         overwrite: bool = False,
         reclassify: bool = False,
         ground_classifier: str = "csf",
@@ -526,7 +526,7 @@ class ALSDatabase(TileDBProvider):
             Optional LAS classification filter applied to every tile.
         consolidate_every:
             Consolidate + vacuum after this many newly ingested tiles.
-        max_workers:
+        n_workers:
             Number of parallel worker threads.  ``1`` (default) runs
             sequentially.  Values > 1 use a :class:`ThreadPoolExecutor` —
             each worker reads a different LAZ file and appends its own TileDB
@@ -590,7 +590,7 @@ class ALSDatabase(TileDBProvider):
             "Ingesting %d file(s) → %s  [workers=%d, consolidate_every=%d]",
             n_pending,
             self.array_uri,
-            max_workers,
+            n_workers,
             consolidate_every,
         )
 
@@ -620,7 +620,7 @@ class ALSDatabase(TileDBProvider):
         for batch_start in range(0, n_pending, consolidate_every):
             batch = pending[batch_start : batch_start + consolidate_every]
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with ThreadPoolExecutor(n_workers=n_workers) as executor:
                 future_to_path = {executor.submit(_worker, p): p for p in batch}
                 for future in as_completed(future_to_path):
                     path = future_to_path[future]
