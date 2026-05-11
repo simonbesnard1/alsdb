@@ -188,7 +188,7 @@ class ALSDatabase(TileDBProvider):
 
     def fragment_count(self) -> int:
         """Return the current number of fragments in the array."""
-        return self.fragment_count()
+        return len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
 
     def consolidate(
         self,
