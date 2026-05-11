@@ -186,6 +186,10 @@ class ALSDatabase(TileDBProvider):
     # Consolidation
     # ------------------------------------------------------------------
 
+    def fragment_count(self) -> int:
+        """Return the current number of fragments in the array."""
+        return self.fragment_count()
+
     def consolidate(
         self,
         mode: str = "fragments",
@@ -240,7 +244,7 @@ class ALSDatabase(TileDBProvider):
             }
         )
         vac_cfg = tiledb.Config({"sm.vacuum.mode": "fragments"})
-        n_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
+        n_frags = self.fragment_count()
         logger.info("Consolidating %d fragments (step_max=%d)…", n_frags, step_max_frags)
         tiledb.consolidate(self.array_uri, config=cfg, ctx=self.ctx)
         tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
@@ -696,7 +700,7 @@ class ALSDatabase(TileDBProvider):
             logger.info("Starting iterative fragment compaction…")
             prev = None
             for pass_num in range(1, 201):
-                n_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
+                n_frags = self.fragment_count()
                 if n_frags <= 1 or (prev is not None and n_frags >= prev):
                     break
                 prev = n_frags
@@ -708,7 +712,7 @@ class ALSDatabase(TileDBProvider):
                     step_max_frags=50,
                     step_size_ratio=0.5,
                 )
-            final_frags = len(tiledb.array_fragments(self.array_uri, ctx=self.ctx).uri)
+            final_frags = self.fragment_count()
             logger.info("Compaction complete: %d fragment(s) remaining", final_frags)
 
         return results
