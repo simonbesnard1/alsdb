@@ -74,7 +74,7 @@ _TREE_ID_STRIDE = 100_000
 def _hag_stages(min_height: float, voxel_size: Optional[float]) -> list[dict]:
     """HAG + pre-filter stages shared by all code paths (run before litree)."""
     stages: list[dict] = [
-        {"type": "filters.hag_delaunay"},
+        {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",

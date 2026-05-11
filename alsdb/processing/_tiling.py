@@ -220,17 +220,17 @@ def check_bbox_overlap(
 
 def attach_hag(arr: np.ndarray) -> np.ndarray:
     """
-    Run ``filters.hag_delaunay`` on *arr* and return the HAG-annotated array.
+    Run ``filters.hag_nn`` on *arr* and return the HAG-annotated array.
 
-    Builds a Delaunay TIN from Class-2 ground points and attaches
-    ``HeightAboveGround`` to every point.  Negative HAG values (artefacts
-    from the TIN interpolation at tile edges) are clamped to zero.
+    Uses k-nearest ground points (kd-tree, non-recursive) to interpolate
+    height above ground for every point.  Negative HAG values (artefacts
+    at tile edges) are clamped to zero.
 
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
     stages = [
-        {"type": "filters.hag_delaunay"},
+        {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -285,7 +285,7 @@ def tile_bboxes(
     Returns a list of ``(query_bbox, crop_bbox)`` pairs:
 
     * ``query_bbox`` — inflated by *buffer* on all sides; used for the
-      TileDB query so ``filters.hag_delaunay`` has enough ground points at
+      TileDB query so ``filters.hag_nn`` has enough ground points at
       tile edges.
     * ``crop_bbox``  — the actual non-overlapping tile extent; used to
       restrict output to avoid duplicate pixels in the mosaic.

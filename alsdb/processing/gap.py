@@ -270,7 +270,7 @@ def compute_gap_fraction(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+        Overlap buffer for ``filters.hag_nn`` accuracy (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
