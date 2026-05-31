@@ -8,6 +8,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+from alsdb.processing._tiling import array_crs
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.utils.constants import PNOA_TILE_SIZE_M
 from alsdb.utils.schema import LAS_ATTRIBUTES
@@ -206,7 +207,7 @@ class ALSProvider(TileDBProvider):
         ds = xr.Dataset.from_dataframe(df)
         ds.attrs.update(
             {
-                "crs": "EPSG:25830",
+                "crs": array_crs(self),
                 "bbox": [min_x, min_y, max_x, max_y],
                 "year": year,
             }
