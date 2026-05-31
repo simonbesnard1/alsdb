@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 _GROUND_CLASS = 2
 _VEG_CLASSES = (3, 4, 5)
 _LAI_K_DEFAULT = 0.5
-_LAI_MAX = 10.0  # physical ceiling — avoids ln(0) → -inf artefacts
+_LAI_MAX = 15.0  # physical ceiling — raised from 10 to cover dense tropical canopies
 
 
 # ---------------------------------------------------------------------------
