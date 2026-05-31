@@ -29,10 +29,20 @@ _UNRESOLVED = object()  # sentinel for lazy CRS resolution
 
 def _crs_is_feet(crs_str: str) -> bool:
     """Return True if any axis of *crs_str* uses feet as its linear unit."""
-    # Fast path: check common feet keywords in the CRS string itself
-    # (catches WKT strings even when pyproj can't fully parse them).
     lower = crs_str.lower()
-    if any(kw in lower for kw in ("ftus", "survey foot", "survey feet", "us foot")):
+    # US survey foot (EPSG:9003) and international foot (EPSG:9002)
+    if any(
+        kw in lower
+        for kw in (
+            "ftus",
+            "survey foot",
+            "survey feet",
+            "us foot",
+            "international foot",
+            '"foot"',
+            '"feet"',
+        )
+    ):
         return True
     return False
 
@@ -115,6 +125,9 @@ class ALSTile:
         ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: Optional[str] = None,
+        hag_low: float = _HAG_LOW,
+        hag_med: float = _HAG_MED,
+        hag_high: float = _HAG_HIGH,
     ) -> None:
         if ground_classifier not in ("csf", "pmf"):
             raise ValueError(f"ground_classifier must be 'csf' or 'pmf', got {ground_classifier!r}")
@@ -124,6 +137,9 @@ class ALSTile:
         self._ground_classifier = ground_classifier
         self._denoise = denoise
         self._reproject_to = reproject_to
+        self._hag_low = hag_low
+        self._hag_med = hag_med
+        self._hag_high = hag_high
         self._resolved_crs = _UNRESOLVED  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
@@ -149,9 +165,16 @@ class ALSTile:
     # ------------------------------------------------------------------
 
     def _get_z_scale(self) -> Optional[float]:
-        """Return foot→metre scale factor when reprojecting a feet-based 2-D CRS, else None."""
-        if self._get_out_crs() is not None and _crs_is_feet(self.name.crs):
-            return 0.3048006096  # US survey foot
+        """Return foot→metre scale factor when reprojecting a feet-based CRS, else None."""
+        if self._get_out_crs() is None:
+            return None
+        lower = self.name.crs.lower()
+        # US survey foot (EPSG:9003): 0.30480060960121924 m/ft
+        if any(kw in lower for kw in ("ftus", "us_survey_foot", "survey foot", "survey feet", "us foot")):
+            return 0.3048006096
+        # International foot (EPSG:9002): exactly 0.3048 m/ft
+        if any(kw in lower for kw in ("international foot", '"foot"', '"feet"')):
+            return 0.3048
         return None
 
     def _get_out_crs(self) -> Optional[str]:
@@ -240,7 +263,7 @@ class ALSTile:
             }
         stages = [
             ground_stage,
-            {"type": "filters.hag_delaunay"},
+            {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
             {
                 "type": "filters.assign",
                 "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -249,23 +272,23 @@ class ALSTile:
                 "type": "filters.assign",
                 "value": (
                     f"Classification = 3 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {_HAG_LOW}"
-                    f" && HeightAboveGround < {_HAG_MED}"
+                    f" && HeightAboveGround >= {self._hag_low}"
+                    f" && HeightAboveGround < {self._hag_med}"
                 ),
             },
             {
                 "type": "filters.assign",
                 "value": (
                     f"Classification = 4 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {_HAG_MED}"
-                    f" && HeightAboveGround < {_HAG_HIGH}"
+                    f" && HeightAboveGround >= {self._hag_med}"
+                    f" && HeightAboveGround < {self._hag_high}"
                 ),
             },
             {
                 "type": "filters.assign",
                 "value": (
                     f"Classification = 5 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {_HAG_HIGH}"
+                    f" && HeightAboveGround >= {self._hag_high}"
                 ),
             },
         ]
