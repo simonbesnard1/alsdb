@@ -119,7 +119,21 @@ class ALSZarrStore:
             )
         else:
             self._root = zarr.open_group(_path_str, mode=mode)
-        self._lock = threading.Lock()  # protects time-axis resize + group init
+        # Per-resolution-group locks so different variables can be written
+        # concurrently (e.g. CHM and DTM in parallel) without blocking each other.
+        self._group_locks: dict[str, threading.Lock] = {}
+        self._group_locks_create = threading.Lock()  # protects the dict itself
+
+    # ------------------------------------------------------------------
+    # Internal lock management
+    # ------------------------------------------------------------------
+
+    def _group_lock(self, res_key: str) -> threading.Lock:
+        """Return the lock for resolution group *res_key*, creating it if needed."""
+        with self._group_locks_create:
+            if res_key not in self._group_locks:
+                self._group_locks[res_key] = threading.Lock()
+            return self._group_locks[res_key]
 
     # ------------------------------------------------------------------
     # Factory
@@ -261,7 +275,7 @@ class ALSZarrStore:
             Chunk size in CRS units.
         """
         res_key = _res_str(resolution)
-        with self._lock:
+        with self._group_lock(res_key):
             if res_key not in self._root:
                 self._init_group(res_key, bbox, crs_wkt, [variable], tile_size)
             elif variable not in self._root[res_key]:
@@ -337,7 +351,8 @@ class ALSZarrStore:
             logger.debug("write_tile: empty slice for %s, skipping", variable)
             return
 
-        t_idx = self._upsert_year(grp, year)
+        with self._group_lock(res_key):
+            t_idx = self._upsert_year(grp, year)
 
         tile_ny = row1 - row0
         tile_nx = col1 - col0
@@ -346,35 +361,36 @@ class ALSZarrStore:
     def _upsert_year(self, grp, year: int) -> int:
         """Return the time index for *year*, appending a new slice if needed.
 
+        Caller must hold the per-group lock for *grp* before calling this method.
+
         Also ensures every data variable in the group is at least (t+1) deep —
         this handles variables added after the time axis was already populated.
         """
-        with self._lock:
-            time_arr = grp["time"]
-            existing = time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
-            match = np.where(existing == year)[0]
+        time_arr = grp["time"]
+        existing = time_arr[:] if time_arr.shape[0] > 0 else np.array([], dtype=np.int32)
+        match = np.where(existing == year)[0]
 
-            if len(match):
-                t = int(match[0])
-            else:
-                # New year: grow time coordinate and all existing data arrays
-                t = int(time_arr.shape[0])
-                time_arr.resize((t + 1,))
-                time_arr[t] = year
-                logger.debug("ALSZarrStore: appended year %d at t=%d", year, t)
+        if len(match):
+            t = int(match[0])
+        else:
+            # New year: grow time coordinate and all existing data arrays
+            t = int(time_arr.shape[0])
+            time_arr.resize((t + 1,))
+            time_arr[t] = year
+            logger.debug("ALSZarrStore: appended year %d at t=%d", year, t)
 
-            # Resize any variable whose time axis is too short (covers both
-            # newly appended years and variables added after the time axis grew)
-            ny = int(grp.attrs["ny"])
-            nx = int(grp.attrs["nx"])
-            for name in grp.array_keys():
-                if name in _COORD_ARRAYS:
-                    continue
-                arr = grp[name]
-                if arr.shape[0] <= t:
-                    arr.resize((t + 1, ny, nx))
+        # Resize any variable whose time axis is too short (covers both
+        # newly appended years and variables added after the time axis grew)
+        ny = int(grp.attrs["ny"])
+        nx = int(grp.attrs["nx"])
+        for name in grp.array_keys():
+            if name in _COORD_ARRAYS:
+                continue
+            arr = grp[name]
+            if arr.shape[0] <= t:
+                arr.resize((t + 1, ny, nx))
 
-            return t
+        return t
 
     # ------------------------------------------------------------------
     # Reading
