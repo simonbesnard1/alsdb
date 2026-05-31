@@ -89,7 +89,7 @@ _METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density", "fhd", "vci"]
 # Normalisation uses the total number of bins (not occupied bins) so VCI is
 # comparable across cells and scenes regardless of local canopy height range.
 _FHD_BIN_SIZE: float = 1.0
-_FHD_MAX_H: float = 60.0
+_FHD_MAX_H: float = 80.0  # raised from 60 m to cover tall tropical/boreal forests
 _FHD_BINS = np.arange(0.0, _FHD_MAX_H + _FHD_BIN_SIZE, _FHD_BIN_SIZE)
 _FHD_N_BINS: int = len(_FHD_BINS) - 1  # number of 1 m bands
 _VCI_MAX_ENTROPY: float = np.log(_FHD_N_BINS)
@@ -221,6 +221,80 @@ def naesset_model(
             a * np.power(np.where(h95 > 0, h95, 0), b) * np.power(cc, c),
         )
     return agb.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Model calibration
+# ---------------------------------------------------------------------------
+
+
+def calibrate_naesset(
+    h95: np.ndarray,
+    cc: np.ndarray,
+    agb_field: np.ndarray,
+    p0: tuple[float, float, float] = (0.8, 1.8, 0.5),
+) -> tuple[float, float, float]:
+    """
+    Fit Næsset power-law AGB coefficients (a, b, c) to field-plot data.
+
+    Solves ``AGB = a × h95^b × cc^c`` via nonlinear least-squares
+    (``scipy.optimize.curve_fit``).
+
+    Parameters
+    ----------
+    h95:
+        P95 canopy height from ALS (m), one value per field plot.
+    cc:
+        Canopy cover fraction (0–1), one value per field plot.
+    agb_field:
+        Measured AGB from field inventory (Mg ha⁻¹), one value per field plot.
+    p0:
+        Initial parameter guess ``(a, b, c)``.  Defaults to the generic priors.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        Fitted ``(a, b, c)`` coefficients for use in :func:`naesset_model`.
+
+    Raises
+    ------
+    ValueError
+        If fewer than 4 valid (non-NaN, non-zero) field plots are provided.
+
+    Example
+    -------
+    ::
+
+        a, b, c = calibrate_naesset(h95_plots, cc_plots, agb_plots)
+        compute_biomass(provider, store, resolution=10.0, year=2021,
+                        model_fn=lambda m: naesset_model(m, a=a, b=b, c=c))
+    """
+    from scipy.optimize import curve_fit
+
+    h95 = np.asarray(h95, dtype=np.float64)
+    cc = np.asarray(cc, dtype=np.float64)
+    agb_field = np.asarray(agb_field, dtype=np.float64)
+
+    valid = ~(np.isnan(h95) | np.isnan(cc) | np.isnan(agb_field) | (cc <= 0) | (h95 <= 0))
+    if valid.sum() < 4:
+        raise ValueError(
+            f"Need at least 4 valid field plots; got {int(valid.sum())} "
+            "(after removing NaN / non-positive values)."
+        )
+
+    def _model(X, a, b, c):
+        h, cv = X
+        return a * np.power(h, b) * np.power(cv, c)
+
+    popt, _ = curve_fit(
+        _model,
+        (h95[valid], cc[valid]),
+        agb_field[valid],
+        p0=list(p0),
+        bounds=([0.0, 0.0, 0.0], [np.inf, np.inf, np.inf]),
+        maxfev=10_000,
+    )
+    return float(popt[0]), float(popt[1]), float(popt[2])
 
 
 # ---------------------------------------------------------------------------
