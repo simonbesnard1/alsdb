@@ -201,6 +201,14 @@ def _process_tile(
     if points.size == 0:
         return None
 
+    # Guard against TreeID collision: litree IDs must fit within the stride window
+    raw_max_id = int(points["TreeID"].max()) if points.size > 0 else 0
+    if raw_max_id >= _TREE_ID_STRIDE:
+        raise RuntimeError(
+            f"Tile {tile_index}: filters.litree produced TreeID {raw_max_id}, which equals or "
+            f"exceeds _TREE_ID_STRIDE={_TREE_ID_STRIDE}. Increase _TREE_ID_STRIDE or reduce tile_size."
+        )
+
     # Offset TreeIDs so they are unique across tiles
     valid = points["TreeID"] > 0
     points["TreeID"][valid] += tile_index * _TREE_ID_STRIDE
