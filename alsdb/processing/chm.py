@@ -147,7 +147,7 @@ def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
         if adjacent.any():
             safe = np.where(nan_mask, 0.0, out)
             local_med = median_filter(safe, size=window)
-            out = np.where(adjacent & (local_med > 0), local_med, out)
+            out = np.where(adjacent & np.isfinite(local_med), local_med, out)
 
     # Pass 2 — remove spikes via Laplacian thresholding
     safe = np.where(np.isnan(out), 0.0, out)
