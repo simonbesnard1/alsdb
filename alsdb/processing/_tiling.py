@@ -75,7 +75,10 @@ def query_to_array(
     dtype = [(name, PDAL_DTYPES[name]) for name in PDAL_DTYPES]
     out = np.empty(n, dtype=dtype)
     for name in PDAL_DTYPES:
-        out[name] = data[name].astype(PDAL_DTYPES[name])
+        if name in data:
+            out[name] = data[name].astype(PDAL_DTYPES[name])
+        else:
+            out[name] = np.zeros(n, dtype=PDAL_DTYPES[name])
     return out
 
 
