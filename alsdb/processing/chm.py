@@ -276,7 +276,7 @@ def _process_tile_dtm(
         points["Z"],
         crop_bbox,
         resolution,
-        statistic="max",
+        statistic="min",  # min ground return is least biased by misclassified vegetation
     )
     store.write_tile("dtm", resolution, year, grid, crop_bbox)
     logger.debug("DTM tile %d written", tile_index)
@@ -363,7 +363,7 @@ def _process_tile_all(
 
     cx0, cy0, cx1, cy1 = crop_bbox
 
-    # --- DTM (ground points, max Z) —— no HAG needed --------------------
+    # --- DTM (ground points, min Z) —— no HAG needed --------------------
     if need_dtm:
         stages = [
             {
@@ -379,7 +379,7 @@ def _process_tile_all(
                     "dtm",
                     resolution,
                     year,
-                    _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "max"),
+                    _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "min"),
                     crop_bbox,
                 )
         except RuntimeError as exc:
