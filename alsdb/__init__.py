@@ -5,6 +5,7 @@
 import logging
 
 from alsdb.core.alsdatabase import ALSDatabase
+from alsdb.processing.change import compute_change
 from alsdb.core.alsprovider import ALSProvider
 from alsdb.core.alstile import ALSTile
 from alsdb.providers.tiledb_provider import TileDBProvider
@@ -27,6 +28,8 @@ def setup_logging(level: int = logging.INFO) -> None:
 __all__ = [
     # Core
     "ALSDatabase",
+    # Processing
+    "compute_change",
     "ALSProvider",
     "ALSTile",
     # Provider base
