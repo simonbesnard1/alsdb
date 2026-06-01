@@ -119,6 +119,38 @@ def _rasterise(
 # ---------------------------------------------------------------------------
 
 
+def _nn_fill(
+    grid: np.ndarray,
+    gnd: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+) -> np.ndarray:
+    """
+    Fill NaN cells in *grid* using nearest-neighbour interpolation from
+    ground points *gnd*.  Used as a fallback for cells outside the TIN
+    convex hull (tile edges, data voids).
+    """
+    from scipy.spatial import cKDTree
+
+    nan_mask = np.isnan(grid)
+    if not nan_mask.any() or len(gnd) == 0:
+        return grid
+
+    cx0, _, _, cy1 = crop_bbox
+    ny, nx = grid.shape
+    row_idx, col_idx = np.where(nan_mask)
+    # north-up: row 0 = top → actual Y = cy1 - (row + 0.5) * resolution
+    qx = cx0 + (col_idx + 0.5) * resolution
+    qy = cy1 - (row_idx + 0.5) * resolution
+
+    xy = np.column_stack([gnd["X"].astype(np.float64), gnd["Y"].astype(np.float64)])
+    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
+
+    out = grid.copy()
+    out[row_idx, col_idx] = gnd["Z"][idxs].astype(np.float32)
+    return out
+
+
 def _dtm_tin(
     arr: np.ndarray,
     crop_bbox: tuple[float, float, float, float],
@@ -127,10 +159,11 @@ def _dtm_tin(
     """
     TIN interpolation via PDAL ``filters.delaunay`` + ``filters.faceraster``.
 
-    Mathematically equivalent to scipy LinearNDInterpolator but runs in C++
-    so it is significantly faster on dense tiles.  ``filters.faceraster``
-    outputs a point-per-pixel view; we reconstruct the (ny, nx) north-up grid
-    from the cell-centre X/Y coordinates in that view.
+    The full buffered point array *arr* is passed to ``filters.delaunay``
+    without pre-cropping so that buffer ground points contribute to edge
+    triangles, then ``filters.faceraster`` restricts output to *crop_bbox*.
+    Any cells that remain NaN after triangulation (outside the convex hull)
+    are filled by nearest-neighbour from the ground points.
     """
     cx0, cy0, cx1, cy1 = crop_bbox
     nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
@@ -141,7 +174,8 @@ def _dtm_tin(
             "type": "filters.range",
             "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
         },
-        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        # No crop before delaunay — keep buffered points so edge triangles
+        # are built from context beyond crop_bbox, then faceraster clips output.
         {"type": "filters.delaunay"},
         {
             "type": "filters.faceraster",
@@ -153,16 +187,23 @@ def _dtm_tin(
         },
     ]
     raster_pts = _run(stages, arr)
-    if len(raster_pts) == 0:
-        return np.full((ny, nx), np.nan, dtype=np.float32)
 
-    # Cell centres: X = cx0 + (col + 0.5) * res, Y = cy0 + (row + 0.5) * res
-    col = np.round((raster_pts["X"] - cx0) / resolution - 0.5).astype(int)
-    row = np.round((raster_pts["Y"] - cy0) / resolution - 0.5).astype(int)
     grid = np.full((ny, nx), np.nan, dtype=np.float32)
-    valid = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
-    grid[row[valid], col[valid]] = raster_pts["Z"][valid].astype(np.float32)
-    return np.flipud(grid)  # south-up → north-up
+    if len(raster_pts) > 0:
+        # Cell centres: X = cx0 + (col + 0.5)*res, Y = cy0 + (row + 0.5)*res
+        col = np.round((raster_pts["X"] - cx0) / resolution - 0.5).astype(int)
+        row = np.round((raster_pts["Y"] - cy0) / resolution - 0.5).astype(int)
+        valid = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
+        grid[row[valid], col[valid]] = raster_pts["Z"][valid].astype(np.float32)
+    grid = np.flipud(grid)  # south-up → north-up
+
+    # Fill cells outside the convex hull (tile edges, isolated voids)
+    gnd_mask = arr["Classification"] == _GROUND_CLASS
+    gnd = arr[gnd_mask]
+    if len(gnd) > 0:
+        grid = _nn_fill(grid, gnd, crop_bbox, resolution)
+
+    return grid
 
 
 def _dtm_idw(
@@ -171,6 +212,7 @@ def _dtm_idw(
     resolution: float,
     power: float = 2.0,
     k: int = 8,
+    max_distance: Optional[float] = None,
 ) -> np.ndarray:
     """
     IDW interpolation of ground points using scipy kd-tree.
@@ -178,6 +220,14 @@ def _dtm_idw(
     Equivalent to PDAL ``writers.gdal output_type=idw`` but works on an
     in-memory array without writing a temporary file.  Useful as a fallback
     for sparse tiles where ``filters.delaunay`` cannot build a mesh.
+
+    Parameters
+    ----------
+    max_distance:
+        If set, cells whose nearest ground point is farther than this value
+        (metres) are left as NaN instead of being extrapolated.  Prevents
+        spurious fill in genuine data voids (water bodies, survey gaps).
+        Default ``None`` fills all cells.
 
     Returns a ``(ny, nx)`` float32 north-up array.
     """
@@ -200,11 +250,16 @@ def _dtm_idw(
     dists, idxs = tree.query(query, k=k_actual)
 
     if k_actual == 1:
-        values = z[idxs]
+        values = z[idxs].copy()
+        nearest_dist = dists
     else:
         weights = 1.0 / np.maximum(dists, 1e-10) ** power
         weights /= weights.sum(axis=1, keepdims=True)
         values = (weights * z[idxs]).sum(axis=1)
+        nearest_dist = dists[:, 0]
+
+    if max_distance is not None:
+        values[nearest_dist > max_distance] = np.nan
 
     return np.flipud(values.reshape(ny, nx)).astype(np.float32)
 

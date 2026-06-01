@@ -74,10 +74,10 @@ _LAI_MAX = 15.0  # physical ceiling — raised from 10 to cover dense tropical c
 # Extinction coefficient presets for common leaf angle distributions.
 # Pass the appropriate value as `k` to compute_gap_fraction(lai=True, k=...).
 LAI_K_PRESETS: dict[str, float] = {
-    "spherical": 0.5,     # random leaf angles — standard default
-    "planophile": 0.8,    # predominantly horizontal (tropical broadleaf, crops)
+    "spherical": 0.5,  # random leaf angles — standard default
+    "planophile": 0.8,  # predominantly horizontal (tropical broadleaf, crops)
     "erectophile": 0.35,  # predominantly vertical (grasses, some conifers)
-    "conifer": 0.45,      # needle-leaf average across species
+    "conifer": 0.45,  # needle-leaf average across species
 }
 
 
