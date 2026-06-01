@@ -159,10 +159,11 @@ def test_gap_to_lai_nan_passthrough():
 
 
 def test_gap_to_lai_clamped_to_max():
-    """Very small (but positive) gap values must be clamped to LAI_MAX=10."""
+    """Very small (but positive) gap values must be clamped to _LAI_MAX."""
+    from alsdb.processing.gap import _LAI_MAX
     gap = np.array([[1e-10]], dtype=np.float32)
     lai = _gap_to_lai(gap, k=_LAI_K)
-    assert float(lai[0, 0]) == pytest.approx(10.0)
+    assert float(lai[0, 0]) == pytest.approx(_LAI_MAX)
 
 
 def test_gap_to_lai_dtype_float32():
