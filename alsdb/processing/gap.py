@@ -71,6 +71,15 @@ _VEG_CLASSES = (3, 4, 5)
 _LAI_K_DEFAULT = 0.5
 _LAI_MAX = 15.0  # physical ceiling — raised from 10 to cover dense tropical canopies
 
+# Extinction coefficient presets for common leaf angle distributions.
+# Pass the appropriate value as `k` to compute_gap_fraction(lai=True, k=...).
+LAI_K_PRESETS: dict[str, float] = {
+    "spherical": 0.5,     # random leaf angles — standard default
+    "planophile": 0.8,    # predominantly horizontal (tropical broadleaf, crops)
+    "erectophile": 0.35,  # predominantly vertical (grasses, some conifers)
+    "conifer": 0.45,      # needle-leaf average across species
+}
+
 
 # ---------------------------------------------------------------------------
 # Core metric computation
@@ -116,10 +125,20 @@ def _compute_gap_grid(
     return np.flipud(gap.T).astype(np.float32)
 
 
-def _gap_to_lai(gap: np.ndarray, k: float) -> np.ndarray:
-    """Convert gap fraction to effective LAI via Beer-Lambert."""
+def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.ndarray:
+    """
+    Convert gap fraction to effective LAI via Beer-Lambert with optional
+    clumping correction (Jonckheere et al. 2004 / Chen & Black 1992).
+
+    ``L_true = -ln(P_gap) / (k × Ω)``
+
+    where Ω is the element clumping index (0 < Ω ≤ 1).  Random foliage → Ω = 1
+    (no correction).  Clumped canopies have Ω < 1, so L_true > L_e.
+    """
+    if clumping_index <= 0 or clumping_index > 1:
+        raise ValueError(f"clumping_index must be in (0, 1], got {clumping_index}")
     with np.errstate(invalid="ignore", divide="ignore"):
-        lai = -np.log(np.where(gap > 0, gap, np.nan)) / k
+        lai = -np.log(np.where(gap > 0, gap, np.nan)) / (k * clumping_index)
     return np.clip(lai, 0.0, _LAI_MAX).astype(np.float32)
 
 
@@ -190,6 +209,7 @@ def _process_tile(
     year: Optional[int],
     lai: bool,
     k: float,
+    clumping_index: float = 1.0,
     baba_radius: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
@@ -211,7 +231,7 @@ def _process_tile(
     store.write_tile("gap", resolution, year, gap, crop_bbox)
 
     if lai:
-        lai_grid = _gap_to_lai(gap, k)
+        lai_grid = _gap_to_lai(gap, k, clumping_index=clumping_index)
         store.write_tile("lai", resolution, year, lai_grid, crop_bbox)
 
     logger.debug("Gap tile %d written", tile_index)
@@ -231,6 +251,7 @@ def compute_gap_fraction(
     *,
     lai: bool = False,
     k: float = _LAI_K_DEFAULT,
+    clumping_index: float = 1.0,
     baba_radius: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
@@ -243,6 +264,14 @@ def compute_gap_fraction(
     Gap fraction is the MacArthur-Wilson estimator:
 
         P_gap = N_gnd_first / (N_gnd_first + N_veg_first)
+
+    When ``lai=True``, effective LAI is derived via the Beer-Lambert law with
+    an optional clumping correction (Jonckheere et al. 2004):
+
+        L_true = -ln(P_gap) / (k × Ω)
+
+    where *k* is the extinction coefficient and *Ω* is the element clumping
+    index.  For biome-appropriate *k* values see :data:`LAI_K_PRESETS`.
 
     Parameters
     ----------
@@ -258,11 +287,15 @@ def compute_gap_fraction(
     year:
         Survey year filter.  Written as a time slice in the store.
     lai:
-        If ``True``, also compute effective LAI via Beer-Lambert
-        ``L_e = -ln(P_gap) / k``.
+        If ``True``, also compute effective LAI via Beer-Lambert.
     k:
-        Extinction coefficient for the Beer-Lambert LAI estimate
-        (default 0.5, spherical leaf angle distribution).
+        Extinction coefficient (default 0.5, spherical leaf angle
+        distribution).  See :data:`LAI_K_PRESETS` for biome presets.
+        Only used when ``lai=True``.
+    clumping_index:
+        Element clumping index Ω ∈ (0, 1] (default 1.0 = no correction).
+        Values < 1 correct for foliage clumping — typical ranges:
+        0.5–0.7 for conifers, 0.7–0.9 for broadleaf forests.
         Only used when ``lai=True``.
     overwrite:
         If ``False`` (default) and gap (and LAI if requested) already exist
@@ -315,5 +348,6 @@ def compute_gap_fraction(
         year=year,
         lai=lai,
         k=k,
+        clumping_index=clumping_index,
         baba_radius=baba_radius,
     )
