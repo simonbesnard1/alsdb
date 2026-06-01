@@ -115,6 +115,101 @@ def _rasterise(
 
 
 # ---------------------------------------------------------------------------
+# DTM interpolation helpers
+# ---------------------------------------------------------------------------
+
+
+def _dtm_tin(
+    arr: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+) -> np.ndarray:
+    """
+    TIN interpolation via PDAL ``filters.delaunay`` + ``filters.faceraster``.
+
+    Mathematically equivalent to scipy LinearNDInterpolator but runs in C++
+    so it is significantly faster on dense tiles.  ``filters.faceraster``
+    outputs a point-per-pixel view; we reconstruct the (ny, nx) north-up grid
+    from the cell-centre X/Y coordinates in that view.
+    """
+    cx0, cy0, cx1, cy1 = crop_bbox
+    nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
+    ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
+
+    stages = [
+        {
+            "type": "filters.range",
+            "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
+        },
+        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+        {"type": "filters.delaunay"},
+        {
+            "type": "filters.faceraster",
+            "resolution": resolution,
+            "origin_x": cx0,
+            "origin_y": cy0,
+            "width": nx,
+            "height": ny,
+        },
+    ]
+    raster_pts = _run(stages, arr)
+    if len(raster_pts) == 0:
+        return np.full((ny, nx), np.nan, dtype=np.float32)
+
+    # Cell centres: X = cx0 + (col + 0.5) * res, Y = cy0 + (row + 0.5) * res
+    col = np.round((raster_pts["X"] - cx0) / resolution - 0.5).astype(int)
+    row = np.round((raster_pts["Y"] - cy0) / resolution - 0.5).astype(int)
+    grid = np.full((ny, nx), np.nan, dtype=np.float32)
+    valid = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
+    grid[row[valid], col[valid]] = raster_pts["Z"][valid].astype(np.float32)
+    return np.flipud(grid)  # south-up → north-up
+
+
+def _dtm_idw(
+    points: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+    power: float = 2.0,
+    k: int = 8,
+) -> np.ndarray:
+    """
+    IDW interpolation of ground points using scipy kd-tree.
+
+    Equivalent to PDAL ``writers.gdal output_type=idw`` but works on an
+    in-memory array without writing a temporary file.  Useful as a fallback
+    for sparse tiles where ``filters.delaunay`` cannot build a mesh.
+
+    Returns a ``(ny, nx)`` float32 north-up array.
+    """
+    from scipy.spatial import cKDTree
+
+    cx0, cy0, cx1, cy1 = crop_bbox
+    nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
+    ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
+
+    gx = cx0 + (np.arange(nx) + 0.5) * resolution
+    gy = cy0 + (np.arange(ny) + 0.5) * resolution
+    GX, GY = np.meshgrid(gx, gy)
+    query = np.column_stack([GX.ravel(), GY.ravel()])
+
+    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    z = points["Z"].astype(np.float64)
+
+    k_actual = min(k, len(xy))
+    tree = cKDTree(xy)
+    dists, idxs = tree.query(query, k=k_actual)
+
+    if k_actual == 1:
+        values = z[idxs]
+    else:
+        weights = 1.0 / np.maximum(dists, 1e-10) ** power
+        weights /= weights.sum(axis=1, keepdims=True)
+        values = (weights * z[idxs]).sum(axis=1)
+
+    return np.flipud(values.reshape(ny, nx)).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # CHM post-processing
 # ---------------------------------------------------------------------------
 
@@ -245,6 +340,7 @@ def _process_tile_dtm(
     tile_index: int,
     resolution: float,
     year: Optional[int],
+    dtm_method: str = "tin",
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -252,32 +348,39 @@ def _process_tile_dtm(
         return
 
     cx0, cy0, cx1, cy1 = crop_bbox
-    stages = [
-        {
-            "type": "filters.range",
-            "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
-        },
-        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-    ]
+
     try:
-        points = _run(stages, arr)
+        if dtm_method == "tin":
+            grid = _dtm_tin(arr, crop_bbox, resolution)
+        else:
+            # IDW and min both need ground points extracted first
+            stages = [
+                {
+                    "type": "filters.range",
+                    "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
+                },
+                {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+            ]
+            points = _run(stages, arr)
+            if len(points) == 0:
+                logger.debug("DTM tile %d: no ground points, skipping", tile_index)
+                return
+            if dtm_method == "idw":
+                grid = _dtm_idw(points, crop_bbox, resolution)
+            else:
+                grid = _rasterise(
+                    points["X"], points["Y"], points["Z"], crop_bbox, resolution, statistic="min"
+                )
     except RuntimeError as exc:
         if "no points" in str(exc).lower():
             logger.debug("DTM tile %d: no ground points, skipping", tile_index)
             return
         raise
 
-    if len(points) == 0:
+    if np.all(np.isnan(grid)):
+        logger.debug("DTM tile %d: all NaN, skipping", tile_index)
         return
 
-    grid = _rasterise(
-        points["X"],
-        points["Y"],
-        points["Z"],
-        crop_bbox,
-        resolution,
-        statistic="min",  # min ground return is least biased by misclassified vegetation
-    )
     store.write_tile("dtm", resolution, year, grid, crop_bbox)
     logger.debug("DTM tile %d written", tile_index)
 
@@ -343,6 +446,7 @@ def _process_tile_all(
     need_dsm: bool,
     need_chm: bool,
     height_statistic: str = "max",
+    dtm_method: str = "tin",
     pit_fill: bool = True,
 ) -> None:
     """
@@ -363,25 +467,30 @@ def _process_tile_all(
 
     cx0, cy0, cx1, cy1 = crop_bbox
 
-    # --- DTM (ground points, min Z) —— no HAG needed --------------------
+    # --- DTM ---------------------------------------------------------------
     if need_dtm:
-        stages = [
-            {
-                "type": "filters.range",
-                "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
-            },
-            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-        ]
         try:
-            pts = _run(stages, arr)
-            if len(pts):
-                store.write_tile(
-                    "dtm",
-                    resolution,
-                    year,
-                    _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "min"),
-                    crop_bbox,
-                )
+            if dtm_method == "tin":
+                dtm_grid = _dtm_tin(arr, crop_bbox, resolution)
+            else:
+                stages = [
+                    {
+                        "type": "filters.range",
+                        "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
+                    },
+                    {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
+                ]
+                pts = _run(stages, arr)
+                if dtm_method == "idw":
+                    dtm_grid = _dtm_idw(pts, crop_bbox, resolution) if len(pts) else None
+                else:
+                    dtm_grid = (
+                        _rasterise(pts["X"], pts["Y"], pts["Z"], crop_bbox, resolution, "min")
+                        if len(pts)
+                        else None
+                    )
+            if dtm_grid is not None and not np.all(np.isnan(dtm_grid)):
+                store.write_tile("dtm", resolution, year, dtm_grid, crop_bbox)
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():
                 raise
@@ -543,13 +652,14 @@ def compute_dtm(
     bbox: Optional[tuple[float, float, float, float]] = None,
     year: Optional[int] = None,
     *,
+    dtm_method: str = "tin",
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 10.0,
     n_workers: int = 1,
 ) -> None:
     """
-    Rasterize ground points (Class 2) to a DTM and write into *store*.
+    Interpolate ground points (Class 2) to a DTM and write into *store*.
 
     Parameters
     ----------
@@ -563,14 +673,30 @@ def compute_dtm(
         Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
     year:
         Survey year filter.
+    dtm_method:
+        Interpolation method for terrain surface estimation:
+
+        - ``"tin"`` (default) — PDAL ``filters.delaunay`` +
+          ``filters.faceraster``.  Linear interpolation within each
+          Delaunay triangle; the gold-standard terrain model.
+        - ``"idw"`` — Inverse Distance Weighting via scipy kd-tree (power=2,
+          k=8 neighbours).  Smoother than TIN; better behaved on very sparse
+          tiles where Delaunay cannot build a mesh.
+        - ``"min"`` — Minimum-Z binning.  Fast but leaves NaN gaps wherever
+          no ground return falls in a cell.
     overwrite:
         If ``False`` (default) and DTM data for *year* already exists in
         the store, the computation is skipped.
     tile_size:
         Sub-tile width/height in metres (default 500 m).
+    tile_buffer:
+        Query buffer so ground points near tile edges are available for
+        interpolation (default 10 m; increase for very sparse surveys).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
+    if dtm_method not in ("tin", "idw", "min"):
+        raise ValueError(f"dtm_method must be 'tin', 'idw', or 'min'; got {dtm_method!r}")
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
@@ -582,11 +708,12 @@ def compute_dtm(
     store.ensure_group("dtm", resolution, effective_bbox, array_crs(provider), tile_size)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
     logger.info(
-        "Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s)",
+        "Computing DTM  (%.1f m, %d tile(s), %d worker(s), year=%s, method=%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
+        dtm_method,
     )
     run_tiled(
         _process_tile_dtm,
@@ -596,6 +723,7 @@ def compute_dtm(
         n_workers,
         resolution=resolution,
         year=year,
+        dtm_method=dtm_method,
     )
 
 
@@ -678,6 +806,7 @@ def compute_all(
     height_statistic: str = "max",
     pit_fill: bool = True,
     overwrite: bool = False,
+    dtm_method: str = "tin",
 ) -> None:
     """
     Compute DTM, DSM, and CHM in one call, writing all into *store*.
@@ -765,4 +894,5 @@ def compute_all(
         need_chm=need_chm,
         height_statistic=height_statistic,
         pit_fill=pit_fill,
+        dtm_method=dtm_method,
     )
