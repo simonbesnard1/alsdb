@@ -4,6 +4,7 @@
 
 import json
 import logging
+from functools import cached_property
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -36,7 +37,7 @@ class Tile:
     def path(self) -> Path:
         return self._path
 
-    @property
+    @cached_property
     def name(self) -> TileNameBase:
         """Tile metadata (year, bbox, CRS) read from the LAZ file header."""
         return GenericTileName.from_pdal_metadata(self._path, self.metadata)

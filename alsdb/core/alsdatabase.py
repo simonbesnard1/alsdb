@@ -408,13 +408,13 @@ class ALSDatabase(TileDBProvider):
         ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: Optional[str] = None,
-    ) -> int:
+    ) -> None:
         """
         Ingest a single LAZ tile into the TileDB array.
 
         If the file is already recorded as successfully ingested in the
-        manifest, the call is a no-op and returns 0.  Pass ``overwrite=True``
-        to force re-ingestion regardless of manifest state.
+        manifest, the call is a no-op.  Pass ``overwrite=True`` to force
+        re-ingestion regardless of manifest state.
 
         Points are stored under their survey year (read from the LAZ file
         header), so the same spatial tile can be ingested multiple times from
@@ -440,11 +440,6 @@ class ALSDatabase(TileDBProvider):
             CRS and reprojects to the appropriate UTM zone; an explicit
             ``"EPSG:XXXX"`` string reprojects to that CRS; ``None`` (default)
             keeps the native CRS.
-
-        Returns
-        -------
-        int
-            Total number of points written (0 if skipped).
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
@@ -456,7 +451,7 @@ class ALSDatabase(TileDBProvider):
                 "Already ingested %s — skipping (pass overwrite=True to force)",
                 filename,
             )
-            return 0
+            return
 
         # Read tile metadata once up front so the CRS is available before the
         # array is (re)created and is reused in _ingest_tile without a second
@@ -499,7 +494,14 @@ class ALSDatabase(TileDBProvider):
             raise
 
         self._save_manifest(manifest)
-        return total
+        logger.info(
+            "Ingested %s — %s pts  |  year=%d  |  crs=%s  |  bbox=(%.0f, %.0f, %.0f, %.0f)",
+            filename,
+            f"{total:,}",
+            entry["year"],
+            _short_crs(entry["crs"]),
+            *entry["bbox"],
+        )
 
     def ingest_many(
         self,

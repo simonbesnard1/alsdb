@@ -2,12 +2,15 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from alsdb.utils.constants import PNOA_TILE_SIZE_M
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Protocol — the interface every tile-name implementation must satisfy
@@ -206,6 +209,14 @@ class GenericTileName:
 
         # --- CRS ---
         crs_str = _parse_crs(reader_meta.get("srs", {}))
+        if crs_str == "EPSG:0":
+            logger.warning(
+                "%s: no CRS found in the LAZ file header (returned EPSG:0). "
+                "The array will be stored without a valid CRS, which will break "
+                "downstream reprojection and co-registration. "
+                "Call db.create(crs='EPSG:XXXX') before ingesting to set it explicitly.",
+                Path(path).name,
+            )
 
         return GenericTileName(
             year=year,
@@ -219,28 +230,46 @@ def _parse_crs(srs: dict) -> str:
     """
     Extract a CRS string from a PDAL SRS metadata dict.
 
-    Returns an ``"EPSG:XXXX"`` string when possible, falling back to the
-    WKT string or ``"EPSG:0"`` if nothing can be determined.
+    Tries, in order:
+    1. ``wkt`` / ``compoundwkt`` — parsed via pyproj to resolve EPSG code.
+    2. ``prettyprint`` — alternative WKT field some PDAL versions populate.
+    3. ``proj4`` — older LAZ files (e.g. pre-2015 surveys) may only carry a
+       PROJ.4 string; pyproj resolves it to an EPSG code when possible.
+
+    Returns an ``"EPSG:XXXX"`` string when possible, the raw WKT/PROJ.4 string
+    as a fallback, or ``"EPSG:0"`` when no CRS information is present at all.
     """
     if not srs:
         return "EPSG:0"
 
-    wkt = srs.get("wkt") or srs.get("compoundwkt", "")
-    if not wkt:
-        return "EPSG:0"
+    def _resolve_via_pyproj(text: str, from_proj4: bool = False) -> str | None:
+        try:
+            from pyproj import CRS as ProjCRS
 
-    try:
-        from pyproj import CRS as ProjCRS
+            crs_obj = ProjCRS.from_proj4(text) if from_proj4 else ProjCRS.from_wkt(text)
+            epsg = crs_obj.to_epsg()
+            if epsg:
+                return f"EPSG:{epsg}"
+            auth = crs_obj.to_authority()
+            if auth:
+                return f"{auth[0]}:{auth[1]}"
+            return crs_obj.to_wkt() if not from_proj4 else text
+        except (ImportError, AttributeError, ValueError, Exception):
+            return text  # pyproj unavailable or CRS unrecognised — return as-is
 
-        crs_obj = ProjCRS.from_wkt(wkt)
-        epsg = crs_obj.to_epsg()
-        if epsg:
-            return f"EPSG:{epsg}"
-        # Fallback: authority code from the CRS object
-        auth = crs_obj.to_authority()
-        if auth:
-            return f"{auth[0]}:{auth[1]}"
-    except (ImportError, AttributeError, ValueError):
-        pass
+    # 1. WKT fields
+    for key in ("wkt", "compoundwkt", "prettyprint"):
+        wkt = srs.get(key, "")
+        if wkt:
+            result = _resolve_via_pyproj(wkt)
+            if result:
+                return result
 
-    return wkt
+    # 2. PROJ.4 string (common in pre-2015 and some vendor-specific files)
+    proj4 = srs.get("proj4", "")
+    if proj4 and proj4 not in ("+proj=longlat +datum=WGS84 +no_defs", ""):
+        result = _resolve_via_pyproj(proj4, from_proj4=True)
+        if result:
+            return result
+
+    return "EPSG:0"
