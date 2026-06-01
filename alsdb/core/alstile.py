@@ -170,7 +170,10 @@ class ALSTile:
             return None
         lower = self.name.crs.lower()
         # US survey foot (EPSG:9003): 0.30480060960121924 m/ft
-        if any(kw in lower for kw in ("ftus", "us_survey_foot", "survey foot", "survey feet", "us foot")):
+        if any(
+            kw in lower
+            for kw in ("ftus", "us_survey_foot", "survey foot", "survey feet", "us foot")
+        ):
             return 0.3048006096
         # International foot (EPSG:9002): exactly 0.3048 m/ft
         if any(kw in lower for kw in ("international foot", '"foot"', '"feet"')):
