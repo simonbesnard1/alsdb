@@ -193,6 +193,9 @@ def _extract_metrics(
 # ---------------------------------------------------------------------------
 
 
+_NAESSET_DEFAULTS = (0.8, 1.8, 0.5)
+
+
 def naesset_model(
     metrics: dict[str, np.ndarray],
     a: float = 0.8,
@@ -209,9 +212,23 @@ def naesset_model(
     metrics:
         Dict as returned by :func:`_extract_metrics`.
     a, b, c:
-        Model coefficients.  Defaults are approximate generic values —
-        **calibrate against field plots** before production use.
+        Model coefficients.  Defaults are placeholder generic values —
+        **always calibrate against field inventory plots** before using
+        results scientifically.  Use :func:`calibrate_naesset` to fit
+        region-specific coefficients.
     """
+    import warnings
+
+    if (a, b, c) == _NAESSET_DEFAULTS:
+        warnings.warn(
+            "naesset_model is using uncalibrated placeholder coefficients "
+            f"(a={a}, b={b}, c={c}). Results are not scientifically valid "
+            "without calibration. Call calibrate_naesset(h95, cc, agb_field) "
+            "with field inventory data and pass the returned coefficients explicitly.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     h95 = metrics["h95"]
     cc = metrics["cc"]
     with np.errstate(invalid="ignore"):
