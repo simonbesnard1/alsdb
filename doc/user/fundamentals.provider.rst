@@ -147,5 +147,5 @@ Performance notes
 -----------------
 
 - Queries scan only the TileDB fragments that overlap the requested ``X``/``Y``/``Year`` range. Fragment consolidation (see :ref:`fundamentals-processor`) significantly reduces per-query overhead for large arrays.
-- For very large bounding boxes, consider using :ref:`fundamentals-tiledb-processing` (``run_tiled``) rather than a single ``query_bbox`` call.
+- For very large bounding boxes, consider using :ref:`fundamentals-processing` (``run_tiled``) rather than a single ``query_bbox`` call.
 - On S3, query performance depends on network bandwidth and TileDB S3 timeout settings.

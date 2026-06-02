@@ -10,7 +10,7 @@ alsDB Documentation
 
    Installation <user/installing>
    User Guide <user/index>
-   Processing Pipeline <user/tiledb_database>
+   Processing Pipeline <user/fundamentals.processing>
    API Reference <user/api>
    Examples <auto_examples/index>
    Discussions <https://github.com/simonbesnard1/alsdb/discussions>

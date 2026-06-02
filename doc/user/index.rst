@@ -21,7 +21,7 @@ Welcome to the **alsDB User Guide**. This guide covers the complete workflow fro
    :maxdepth: 1
 
    fundamentals
-   tiledb_database
+   fundamentals.processing
 
 .. toctree::
    :caption: Advanced Usage
