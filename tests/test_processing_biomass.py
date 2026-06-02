@@ -10,6 +10,9 @@ import pytest
 
 from alsdb.processing.biomass import (
     _extract_metrics,
+    _fhd_from_hag,
+    _vci_from_hag,
+    calibrate_naesset,
     compute_biomass,
     compute_metrics,
     naesset_model,
@@ -57,23 +60,23 @@ def _make_hag_points(n_gnd=50, n_veg=100, bbox=(0.0, 0.0, 100.0, 100.0), seed=0)
 def _flat_metrics(ny=10, nx=10, h95_val=15.0, cc_val=0.7):
     return {
         # Height percentiles
-        "h50":       np.full((ny, nx), 10.0, dtype=np.float32),
-        "h75":       np.full((ny, nx), 12.0, dtype=np.float32),
-        "h95":       np.full((ny, nx), h95_val, dtype=np.float32),
-        "hmax":      np.full((ny, nx), 20.0, dtype=np.float32),
-        "hmean":     np.full((ny, nx), 11.0, dtype=np.float32),
+        "h50": np.full((ny, nx), 10.0, dtype=np.float32),
+        "h75": np.full((ny, nx), 12.0, dtype=np.float32),
+        "h95": np.full((ny, nx), h95_val, dtype=np.float32),
+        "hmax": np.full((ny, nx), 20.0, dtype=np.float32),
+        "hmean": np.full((ny, nx), 11.0, dtype=np.float32),
         # Canopy structure
-        "cc":        np.full((ny, nx), cc_val, dtype=np.float32),
-        "density":   np.full((ny, nx), 5.0, dtype=np.float32),
-        "fhd":       np.full((ny, nx), 1.2, dtype=np.float32),
-        "vci":       np.full((ny, nx), 0.5, dtype=np.float32),
-        "crr":       np.full((ny, nx), 0.6, dtype=np.float32),
+        "cc": np.full((ny, nx), cc_val, dtype=np.float32),
+        "density": np.full((ny, nx), 5.0, dtype=np.float32),
+        "fhd": np.full((ny, nx), 1.2, dtype=np.float32),
+        "vci": np.full((ny, nx), 0.5, dtype=np.float32),
+        "crr": np.full((ny, nx), 0.6, dtype=np.float32),
         # Height stratum proportions (must sum to 1.0)
-        "pv_0_2":    np.full((ny, nx), 0.10, dtype=np.float32),
-        "pv_2_5":    np.full((ny, nx), 0.15, dtype=np.float32),
-        "pv_5_10":   np.full((ny, nx), 0.20, dtype=np.float32),
-        "pv_10_20":  np.full((ny, nx), 0.30, dtype=np.float32),
-        "pv_20_40":  np.full((ny, nx), 0.20, dtype=np.float32),
+        "pv_0_2": np.full((ny, nx), 0.10, dtype=np.float32),
+        "pv_2_5": np.full((ny, nx), 0.15, dtype=np.float32),
+        "pv_5_10": np.full((ny, nx), 0.20, dtype=np.float32),
+        "pv_10_20": np.full((ny, nx), 0.30, dtype=np.float32),
+        "pv_20_40": np.full((ny, nx), 0.20, dtype=np.float32),
         "pv_above40": np.full((ny, nx), 0.05, dtype=np.float32),
     }
 
@@ -276,3 +279,175 @@ def test_compute_biomass_overwrite_false_skips(provider, store):
 def test_compute_biomass_out_of_year_skips(provider, store):
     compute_biomass(provider, store, resolution=RES, bbox=BBOX, year=1900)
     assert not store.has_data("biomass", RES, 1900)
+
+
+# ---------------------------------------------------------------------------
+# calibrate_naesset
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_plots(n: int, seed: int = 0):
+    """Synthetic field data following AGB = 0.9 * h95^1.7 * cc^0.4."""
+    rng = np.random.default_rng(seed)
+    h95 = rng.uniform(5.0, 30.0, n)
+    cc = rng.uniform(0.3, 0.9, n)
+    agb = 0.9 * h95**1.7 * cc**0.4 + rng.normal(0, 2.0, n)
+    return h95, cc, np.clip(agb, 0.1, None)
+
+
+def test_calibrate_naesset_raises_below_20_plots():
+    h95, cc, agb = _synthetic_plots(15)
+    with pytest.raises(ValueError, match="20"):
+        calibrate_naesset(h95, cc, agb)
+
+
+def test_calibrate_naesset_warns_below_50_plots():
+    h95, cc, agb = _synthetic_plots(25)
+    with pytest.warns(UserWarning, match="50"):
+        calibrate_naesset(h95, cc, agb)
+
+
+def test_calibrate_naesset_fits_reasonable_coefficients():
+    h95, cc, agb = _synthetic_plots(60)
+    a, b, c = calibrate_naesset(h95, cc, agb)
+    # Coefficients should be positive and in a plausible range
+    assert a > 0
+    assert 0.5 < b < 4.0
+    assert 0.0 < c < 2.0
+
+
+def test_calibrate_naesset_return_cov_shape():
+    h95, cc, agb = _synthetic_plots(60)
+    (a, b, c), pcov = calibrate_naesset(h95, cc, agb, return_cov=True)
+    assert pcov.shape == (3, 3)
+
+
+def test_calibrate_naesset_cov_diagonal_positive():
+    h95, cc, agb = _synthetic_plots(60)
+    _, pcov = calibrate_naesset(h95, cc, agb, return_cov=True)
+    assert np.all(np.diag(pcov) > 0)
+
+
+def test_calibrate_naesset_ignores_nan_plots():
+    h95, cc, agb = _synthetic_plots(60)
+    h95[0] = np.nan
+    cc[1] = np.nan
+    agb[2] = np.nan
+    # Should still fit on the remaining 57 valid plots
+    a, b, c = calibrate_naesset(h95, cc, agb)
+    assert a > 0
+
+
+# ---------------------------------------------------------------------------
+# _fhd_from_hag / _vci_from_hag
+# ---------------------------------------------------------------------------
+
+
+def test_fhd_from_hag_empty_returns_nan():
+    assert np.isnan(_fhd_from_hag(np.array([])))
+
+
+def test_fhd_from_hag_single_value_returns_zero():
+    # All points in one bin → entropy = 0
+    result = _fhd_from_hag(np.full(20, 5.0))
+    assert result == pytest.approx(0.0, abs=1e-6)
+
+
+def test_fhd_from_hag_uniform_distribution_positive():
+    hag = np.arange(0.5, 40.5, 1.0)  # one point per 1 m bin
+    result = _fhd_from_hag(hag)
+    assert result > 0.0
+
+
+def test_fhd_from_hag_more_layers_higher_entropy():
+    narrow = np.arange(0.5, 5.5, 1.0)  # 5 bins
+    wide = np.arange(0.5, 20.5, 1.0)  # 20 bins
+    assert _fhd_from_hag(wide) > _fhd_from_hag(narrow)
+
+
+def test_vci_from_hag_empty_returns_nan():
+    assert np.isnan(_vci_from_hag(np.array([])))
+
+
+def test_vci_from_hag_in_unit_interval():
+    hag = np.arange(0.5, 30.5, 1.0)
+    result = _vci_from_hag(hag)
+    assert 0.0 <= result <= 1.0
+
+
+def test_vci_from_hag_single_bin_is_zero():
+    result = _vci_from_hag(np.full(30, 3.0))
+    assert result == pytest.approx(0.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# _extract_metrics — new metrics (hmax, crr, strata)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_metrics_contains_all_new_names():
+    pts = _make_hag_points(n_veg=200, bbox=(0.0, 0.0, 100.0, 100.0))
+    metrics = _extract_metrics(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
+    for name in (
+        "hmax",
+        "crr",
+        "pv_0_2",
+        "pv_2_5",
+        "pv_5_10",
+        "pv_10_20",
+        "pv_20_40",
+        "pv_above40",
+    ):
+        assert name in metrics, f"Missing metric: {name}"
+
+
+def test_extract_metrics_hmax_geq_h95():
+    pts = _make_hag_points(n_veg=200, bbox=(0.0, 0.0, 100.0, 100.0))
+    metrics = _extract_metrics(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
+    valid = ~np.isnan(metrics["hmax"]) & ~np.isnan(metrics["h95"])
+    assert np.all(metrics["hmax"][valid] >= metrics["h95"][valid] - 1e-4)
+
+
+def test_extract_metrics_crr_in_unit_interval():
+    pts = _make_hag_points(n_veg=200, bbox=(0.0, 0.0, 100.0, 100.0))
+    metrics = _extract_metrics(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
+    crr = metrics["crr"]
+    valid = crr[~np.isnan(crr)]
+    if len(valid) > 0:
+        assert np.all(valid >= 0.0)
+        assert np.all(valid <= 1.0)
+
+
+def test_extract_metrics_strata_sum_to_one():
+    pts = _make_hag_points(n_veg=300, bbox=(0.0, 0.0, 100.0, 100.0))
+    metrics = _extract_metrics(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
+    strata_names = ["pv_0_2", "pv_2_5", "pv_5_10", "pv_10_20", "pv_20_40", "pv_above40"]
+    total = np.zeros_like(metrics["pv_0_2"])
+    for name in strata_names:
+        total = np.where(np.isnan(metrics[name]), np.nan, total + metrics[name])
+    valid = total[~np.isnan(total)]
+    if len(valid) > 0:
+        np.testing.assert_allclose(valid, 1.0, atol=1e-5)
+
+
+def test_extract_metrics_min_density_masks_sparse_cells():
+    """With a very high min_density, most cells should become NaN."""
+    pts = _make_hag_points(n_gnd=5, n_veg=5, bbox=(0.0, 0.0, 100.0, 100.0))
+    metrics_no_guard = _extract_metrics(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), min_density=0.0
+    )
+    metrics_with_guard = _extract_metrics(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), min_density=100.0
+    )
+    # With an impossibly high density threshold, all cells should be NaN
+    assert np.all(
+        np.isnan(metrics_with_guard["density"])
+        | (metrics_with_guard["h95"] == np.nan)
+        | np.isnan(metrics_with_guard["h95"])
+    )
+
+
+def test_compute_metrics_writes_new_variables(provider, store):
+    compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
+    for var in ("hmax", "crr", "pv_0_2", "pv_5_10", "pv_above40"):
+        assert store.has_data(var, RES, YEAR), f"Missing new variable: {var}"

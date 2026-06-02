@@ -7,7 +7,13 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.gap import _compute_gap_grid, _gap_to_lai, compute_gap_fraction
+from alsdb.processing.gap import (
+    LAI_K_PRESETS,
+    _compute_gap_grid,
+    _compute_gap_grid_baba,
+    _gap_to_lai,
+    compute_gap_fraction,
+)
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
 RES = 10.0
@@ -208,3 +214,147 @@ def test_compute_gap_fraction_overwrite_false_skips(provider, store):
 def test_compute_gap_fraction_out_of_year_skips(provider, store):
     compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=1900)
     assert not store.has_data("gap", RES, 1900)
+
+
+# ---------------------------------------------------------------------------
+# _compute_gap_grid — min_density guard
+# ---------------------------------------------------------------------------
+
+
+def test_compute_gap_grid_min_density_masks_all_with_extreme_threshold():
+    """An impossibly high min_density should mask all cells to NaN."""
+    pts = _make_points(20, 20, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), min_density=1000.0
+    )
+    assert np.all(np.isnan(grid))
+
+
+def test_compute_gap_grid_min_density_zero_behaves_as_before():
+    """min_density=0 (default) should not mask any cells that have data."""
+    pts = _make_points(100, 100, (0.0, 0.0, 100.0, 100.0))
+    grid_no_guard = _compute_gap_grid(pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0))
+    grid_zero = _compute_gap_grid(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), min_density=0.0
+    )
+    np.testing.assert_array_equal(grid_no_guard, grid_zero)
+
+
+# ---------------------------------------------------------------------------
+# _compute_gap_grid_baba — unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_baba_points(n_gnd: int, n_veg: int, bbox: tuple, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    min_x, min_y, max_x, max_y = bbox
+    dtype = [
+        ("X", np.float64),
+        ("Y", np.float64),
+        ("ReturnNumber", np.uint8),
+        ("Classification", np.uint8),
+        ("HeightAboveGround", np.float32),
+    ]
+    n = n_gnd + n_veg
+    arr = np.zeros(n, dtype=dtype)
+    arr["X"] = rng.uniform(min_x, max_x, n)
+    arr["Y"] = rng.uniform(min_y, max_y, n)
+    arr["ReturnNumber"][:] = 1
+    arr["Classification"][:n_gnd] = 2
+    arr["Classification"][n_gnd:] = 3
+    arr["HeightAboveGround"][n_gnd:] = rng.uniform(5.0, 20.0, n_veg)
+    return arr
+
+
+def test_compute_gap_grid_baba_output_shape():
+    pts = _make_baba_points(50, 50, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=15.0
+    )
+    assert grid.shape == (10, 10)
+
+
+def test_compute_gap_grid_baba_dtype_float32():
+    pts = _make_baba_points(50, 50, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=15.0
+    )
+    assert grid.dtype == np.float32
+
+
+def test_compute_gap_grid_baba_all_ground_gives_one():
+    pts = _make_baba_points(200, 0, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=20.0
+    )
+    valid = grid[~np.isnan(grid)]
+    assert len(valid) > 0
+    np.testing.assert_allclose(valid, 1.0, atol=1e-5)
+
+
+def test_compute_gap_grid_baba_all_veg_gives_zero():
+    pts = _make_baba_points(0, 200, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=20.0
+    )
+    valid = grid[~np.isnan(grid)]
+    assert len(valid) > 0
+    np.testing.assert_allclose(valid, 0.0, atol=1e-5)
+
+
+def test_compute_gap_grid_baba_values_in_unit_interval():
+    pts = _make_baba_points(100, 100, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=15.0
+    )
+    valid = grid[~np.isnan(grid)]
+    assert np.all(valid >= 0.0)
+    assert np.all(valid <= 1.0)
+
+
+def test_compute_gap_grid_baba_no_first_returns_all_nan():
+    pts = _make_baba_points(50, 50, (0.0, 0.0, 100.0, 100.0))
+    pts["ReturnNumber"][:] = 2  # no first returns
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=15.0
+    )
+    assert np.all(np.isnan(grid))
+
+
+def test_compute_gap_grid_baba_min_density_masks_cells():
+    pts = _make_baba_points(5, 5, (0.0, 0.0, 100.0, 100.0))
+    grid = _compute_gap_grid_baba(
+        pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), baba_radius=15.0, min_density=1000.0
+    )
+    assert np.all(np.isnan(grid))
+
+
+# ---------------------------------------------------------------------------
+# LAI_K_PRESETS
+# ---------------------------------------------------------------------------
+
+
+def test_lai_k_presets_contains_spherical():
+    assert "spherical" in LAI_K_PRESETS
+    assert LAI_K_PRESETS["spherical"] == pytest.approx(0.5)
+
+
+def test_lai_k_presets_all_positive():
+    assert all(v > 0 for v in LAI_K_PRESETS.values())
+
+
+def test_lai_k_presets_spherical_is_default():
+    from alsdb.processing.gap import _LAI_K_DEFAULT
+
+    assert _LAI_K_DEFAULT == LAI_K_PRESETS["spherical"]
+
+
+# ---------------------------------------------------------------------------
+# compute_gap_fraction — min_density integration
+# ---------------------------------------------------------------------------
+
+
+def test_compute_gap_fraction_min_density_writes_gap(provider, store):
+    """min_density parameter should not prevent writing valid cells."""
+    compute_gap_fraction(provider, store, resolution=RES, bbox=BBOX, year=YEAR, min_density=0.001)
+    assert store.has_data("gap", RES, YEAR)
