@@ -250,7 +250,8 @@ def calibrate_naesset(
     cc: np.ndarray,
     agb_field: np.ndarray,
     p0: tuple[float, float, float] = (0.8, 1.8, 0.5),
-) -> tuple[float, float, float]:
+    return_cov: bool = False,
+) -> "tuple[float, float, float] | tuple[tuple[float, float, float], np.ndarray]":
     """
     Fit Næsset power-law AGB coefficients (a, b, c) to field-plot data.
 
@@ -267,16 +268,31 @@ def calibrate_naesset(
         Measured AGB from field inventory (Mg ha⁻¹), one value per field plot.
     p0:
         Initial parameter guess ``(a, b, c)``.  Defaults to the generic priors.
+    return_cov:
+        If ``True``, also return the 3×3 parameter covariance matrix from
+        ``curve_fit`` so callers can assess calibration uncertainty.  Diagonal
+        elements are the variance of each coefficient; off-diagonals are
+        cross-covariances.  Infinite values indicate a poorly constrained fit.
 
     Returns
     -------
     tuple[float, float, float]
         Fitted ``(a, b, c)`` coefficients for use in :func:`naesset_model`.
+        When ``return_cov=True``, returns ``((a, b, c), pcov)`` instead.
 
     Raises
     ------
     ValueError
-        If fewer than 4 valid (non-NaN, non-zero) field plots are provided.
+        If fewer than 20 valid (non-NaN, non-zero) field plots are provided.
+        A 3-parameter power-law model fit on fewer plots has nearly zero
+        degrees of freedom and will be severely overfit.
+
+    Warns
+    -----
+    UserWarning
+        If valid plot count is below 50, a calibration-quality warning is
+        emitted.  Reliable coefficient estimation typically requires ≥ 50
+        independent plots (Næsset 2002; Andersen et al. 2011).
 
     Example
     -------
@@ -285,7 +301,14 @@ def calibrate_naesset(
         a, b, c = calibrate_naesset(h95_plots, cc_plots, agb_plots)
         compute_biomass(provider, store, resolution=10.0, year=2021,
                         model_fn=lambda m: naesset_model(m, a=a, b=b, c=c))
+
+        # With uncertainty:
+        (a, b, c), pcov = calibrate_naesset(h95_plots, cc_plots, agb_plots,
+                                             return_cov=True)
+        a_std, b_std, c_std = np.sqrt(np.diag(pcov))
     """
+    import warnings
+
     from scipy.optimize import curve_fit
 
     h95 = np.asarray(h95, dtype=np.float64)
@@ -293,17 +316,28 @@ def calibrate_naesset(
     agb_field = np.asarray(agb_field, dtype=np.float64)
 
     valid = ~(np.isnan(h95) | np.isnan(cc) | np.isnan(agb_field) | (cc <= 0) | (h95 <= 0))
-    if valid.sum() < 4:
+    n_valid = int(valid.sum())
+
+    if n_valid < 20:
         raise ValueError(
-            f"Need at least 4 valid field plots; got {int(valid.sum())} "
-            "(after removing NaN / non-positive values)."
+            f"Need at least 20 valid field plots to fit a 3-parameter model; "
+            f"got {n_valid} (after removing NaN / non-positive values). "
+            "With fewer plots the fit is severely overfit (near-zero degrees of freedom)."
+        )
+    if n_valid < 50:
+        warnings.warn(
+            f"calibrate_naesset: only {n_valid} valid field plots. "
+            "Reliable coefficient estimation typically requires ≥ 50 independent plots "
+            "(Næsset 2002; Andersen et al. 2011). Treat results with caution.",
+            UserWarning,
+            stacklevel=2,
         )
 
     def _model(X, a, b, c):
         h, cv = X
         return a * np.power(h, b) * np.power(cv, c)
 
-    popt, _ = curve_fit(
+    popt, pcov = curve_fit(
         _model,
         (h95[valid], cc[valid]),
         agb_field[valid],
@@ -311,7 +345,10 @@ def calibrate_naesset(
         bounds=([0.0, 0.0, 0.0], [np.inf, np.inf, np.inf]),
         maxfev=10_000,
     )
-    return float(popt[0]), float(popt[1]), float(popt[2])
+    coeffs = (float(popt[0]), float(popt[1]), float(popt[2]))
+    if return_cov:
+        return coeffs, pcov
+    return coeffs
 
 
 # ---------------------------------------------------------------------------
@@ -339,9 +376,11 @@ def wrap_sklearn_model(
         ``GradientBoostingRegressor``, ``Pipeline``, …).
     features:
         Ordered list of metric names to use as model features.
-        Defaults to all six standard metrics:
-        ``["h50", "h75", "h95", "hmean", "cc", "density"]``.
+        Defaults to all eight standard metrics:
+        ``["h50", "h75", "h95", "hmean", "cc", "density", "fhd", "vci"]``.
         The order must match the feature order used during training.
+        Pass an explicit list (e.g. ``["h50", "h95", "cc"]``) when the
+        model was trained on a subset.
 
     Returns
     -------
@@ -357,7 +396,7 @@ def wrap_sklearn_model(
         from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
 
         rf = RandomForestRegressor(n_estimators=200)
-        rf.fit(X_train, y_train)          # X columns = h50, h75, h95, hmean, cc, density
+        rf.fit(X_train, y_train)  # X columns = h50, h75, h95, hmean, cc, density, fhd, vci
 
         model_fn = wrap_sklearn_model(rf)
         compute_biomass(provider, store, resolution=10.0, year=2021,

@@ -48,6 +48,7 @@ def compute_change(
     resolution: float,
     *,
     min_delta: float = 0.0,
+    pct_min_abs: float = 0.0,
     overwrite: bool = False,
 ) -> None:
     """
@@ -58,7 +59,8 @@ def compute_change(
     - ``{variable}_delta``       : absolute change ``year_to − year_from``,
       same units as the source variable.  NaN where either year has no data.
     - ``{variable}_delta_pct``   : relative change in %.  NaN where
-      ``|year_from| < 1e-6`` (avoids division by near-zero).
+      ``|year_from| < pct_min_abs`` (avoids division by near-zero and
+      suppresses meaningless percentages for very small base values).
     - ``{variable}_change_flag`` : +1 gain, −1 loss, 0 no significant change.
       Pixels are flagged only when ``|delta| > min_delta``.
 
@@ -75,6 +77,17 @@ def compute_change(
     min_delta:
         Minimum absolute change flagged as significant (default 0).
         Set to e.g. ``0.5`` m for CHM to suppress sub-pixel noise.
+    pct_min_abs:
+        Minimum absolute value of ``year_from`` required for a valid relative-
+        change estimate.  Pixels where ``|year_from| < pct_min_abs`` receive
+        NaN in ``delta_pct``.  Choose a value appropriate for the variable:
+
+        - CHM (m): ``pct_min_abs=0.5`` suppresses extremes in open areas.
+        - LAI / gap fraction (0–1): ``pct_min_abs=0.05`` avoids blow-up
+          near bare-ground cells.
+        - AGB (Mg ha⁻¹): ``pct_min_abs=1.0`` avoids extreme % in sparse scrub.
+
+        Default ``0.0`` reproduces the legacy behaviour (threshold = 1e-6).
     overwrite:
         Re-compute even if the output variables already exist for *year_to*.
     """
@@ -123,9 +136,13 @@ def compute_change(
 
     delta = data_to - data_from  # NaN propagates from either input
 
+    # Guard against near-zero denominators: use max(pct_min_abs, 1e-9) so
+    # the default (pct_min_abs=0) still avoids 0/0 while user-supplied values
+    # control which low-valued pixels are masked.
+    _pct_threshold = max(float(pct_min_abs), 1e-9)
     with np.errstate(invalid="ignore", divide="ignore"):
         delta_pct = np.where(
-            np.abs(data_from) > 1e-6,
+            np.abs(data_from) >= _pct_threshold,
             100.0 * delta / data_from,
             np.nan,
         ).astype(np.float32)

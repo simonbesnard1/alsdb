@@ -113,14 +113,16 @@ def _compute_gap_grid(
 
     gnd = (cls_fr == _GROUND_CLASS).astype(np.float32)
     veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float32)
-    ones = np.ones(fr.sum(), dtype=np.float32)
 
     n_gnd = binned_statistic_2d(x_fr, y_fr, gnd, statistic="sum", bins=bins).statistic
     n_veg = binned_statistic_2d(x_fr, y_fr, veg, statistic="sum", bins=bins).statistic
-    n_tot = binned_statistic_2d(x_fr, y_fr, ones, statistic="count", bins=bins).statistic
+    # The denominator uses n_gnd + n_veg (classified returns only) so that
+    # unclassified/building/noise returns don't dilute the gap estimate.
+    # Cells with no classified returns → NaN.
+    n_classified = n_gnd + n_veg
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        gap = np.where(n_tot > 0, n_gnd / (n_gnd + n_veg), np.nan)
+        gap = np.where(n_classified > 0, n_gnd / n_classified, np.nan)
 
     return np.flipud(gap.T).astype(np.float32)
 

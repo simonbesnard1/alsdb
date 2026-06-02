@@ -361,6 +361,7 @@ def simulate_waveform(
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
+    rng: Optional[np.random.Generator] = None,
 ) -> Optional[WaveformResult]:
     """
     Simulate a GEDI large-footprint waveform at a given UTM location.
@@ -416,6 +417,10 @@ def simulate_waveform(
     rh_levels : tuple of int
         RH percentile levels to compute.  Default: RH0–RH100 (GEDI L2A).
         Result ``rh`` dict has integer keys, e.g. ``result.rh[50]`` → RH50.
+    rng : np.random.Generator, optional
+        Random number generator used for additive noise when ``noise_std > 0``.
+        Pass ``np.random.default_rng(seed)`` for reproducible results.
+        ``None`` (default) uses a fresh unseeded generator each call.
 
     Returns
     -------
@@ -485,7 +490,8 @@ def simulate_waveform(
 
     # 3. Add noise
     if noise_std > 0.0:
-        waveform = np.maximum(0.0, waveform + np.random.normal(0.0, noise_std, len(waveform)))
+        _rng = rng if rng is not None else np.random.default_rng()
+        waveform = np.maximum(0.0, waveform + _rng.normal(0.0, noise_std, len(waveform)))
 
     # 4. Normalise to unit energy
     total = waveform.sum()
@@ -519,6 +525,7 @@ def simulate_batch(
     year: Optional[int] = None,
     n_workers: int = 1,
     output_path: Optional[str] = None,
+    rng: Optional[np.random.Generator] = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -546,6 +553,11 @@ def simulate_batch(
         If provided, the result DataFrame is written to this path as a
         Parquet file (``pyarrow`` engine).  The file is created or
         overwritten.  The DataFrame is still returned as usual.
+    rng : np.random.Generator, optional
+        Random number generator forwarded to each :func:`simulate_waveform`
+        call for reproducible noise.  Pass ``np.random.default_rng(seed)``.
+        Note: when ``n_workers > 1``, shots are processed concurrently and
+        the per-shot draw order is non-deterministic even with a fixed seed.
     **kwargs
         Forwarded to :func:`simulate_waveform`.
 
@@ -567,6 +579,7 @@ def simulate_batch(
             center_x=float(row[x_col]),
             center_y=float(row[y_col]),
             year=year,
+            rng=rng,
             **row_kwargs,
         )
 

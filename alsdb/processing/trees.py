@@ -105,8 +105,23 @@ def _compute_adaptive_radius(points: np.ndarray) -> float:
     return 0.07 * p75 + 0.6
 
 
-def _tree_metrics(points: np.ndarray) -> list[dict]:
-    """Compute per-tree metrics from a point array that already has TreeID."""
+def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]:
+    """
+    Compute per-tree metrics from a point array that already has TreeID.
+
+    Crown area and radius are estimated from the 2-D convex hull of the
+    *upper* crown only — points above ``crown_fraction × tree_height``.
+    Restricting to the upper crown avoids including wide understory returns
+    that inflate the projected area estimate.
+
+    Parameters
+    ----------
+    points:
+        Structured array with ``TreeID`` and ``HeightAboveGround`` fields.
+    crown_fraction:
+        Fraction of tree height used as lower bound for crown points
+        (default 0.5 = upper half of the tree).
+    """
     if "TreeID" not in points.dtype.names:
         return []
     tree_ids = np.unique(points["TreeID"])
@@ -119,11 +134,17 @@ def _tree_metrics(points: np.ndarray) -> list[dict]:
         y = pts["Y"].astype(np.float64)
         hag = pts["HeightAboveGround"].astype(np.float64)
 
+        tree_height = float(hag.max())
+
         crown_area = crown_radius = np.nan
-        if len(pts) >= _MIN_HULL_POINTS:
+        # Use only points in the upper crown to avoid understory inflation.
+        crown_mask = hag >= crown_fraction * tree_height
+        x_crown = x[crown_mask]
+        y_crown = y[crown_mask]
+        if len(x_crown) >= _MIN_HULL_POINTS:
             try:
-                hull = ConvexHull(np.column_stack([x, y]))
-                crown_area = float(hull.volume)
+                hull = ConvexHull(np.column_stack([x_crown, y_crown]))
+                crown_area = float(hull.volume)  # scipy: volume = area in 2-D
                 crown_radius = float(np.sqrt(crown_area / np.pi))
             except Exception:
                 pass
@@ -133,7 +154,7 @@ def _tree_metrics(points: np.ndarray) -> list[dict]:
                 "tree_id": int(tid),
                 "centroid_x": float(x.mean()),
                 "centroid_y": float(y.mean()),
-                "height": float(hag.max()),
+                "height": tree_height,
                 "base_height": float(hag.min()),
                 "crown_area": crown_area,
                 "crown_radius": crown_radius,
@@ -154,6 +175,7 @@ def _process_tile(
     radius: float,
     voxel_size: Optional[float],
     adaptive_radius: bool = False,
+    crown_fraction: float = 0.5,
 ) -> Optional[tuple[np.ndarray, pd.DataFrame]]:
     """
     Segment trees within one sub-tile.
@@ -215,7 +237,7 @@ def _process_tile(
 
     # Compute metrics and filter to trees whose centroid is inside crop_bbox
     records = []
-    for rec in _tree_metrics(points):
+    for rec in _tree_metrics(points, crown_fraction=crown_fraction):
         if cx0 <= rec["centroid_x"] <= cx1 and cy0 <= rec["centroid_y"] <= cy1:
             records.append(rec)
         else:
@@ -245,6 +267,7 @@ def segment_trees(
     tile_size: Optional[float] = None,
     tile_buffer: float = 30.0,
     n_workers: int = 1,
+    crown_fraction: float = 0.5,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """
     Segment individual trees using ``filters.litree``.
@@ -282,6 +305,13 @@ def segment_trees(
         fully captured.  Default 30 m.
     n_workers:
         Thread pool size.  Effective only when ``tile_size`` is set.
+    crown_fraction:
+        Fraction of tree height used as the lower bound for crown-area
+        computation (default 0.5 = upper half of each tree).  Only points
+        at or above ``crown_fraction × height`` contribute to the convex
+        hull used for ``crown_area`` and ``crown_radius``.  Reducing this
+        value includes more understory returns and will increase the area
+        estimate; increasing it focuses on the uppermost crown.
 
     Returns
     -------
@@ -322,7 +352,7 @@ def segment_trees(
         p2.execute()
         points = p2.arrays[0] if p2.arrays else hag_points[:0]
 
-        records = _tree_metrics(points)
+        records = _tree_metrics(points, crown_fraction=crown_fraction)
         if not records:
             logger.warning("segment_trees: no trees found (try lowering min_points or min_height)")
             return points, pd.DataFrame()
@@ -367,6 +397,7 @@ def segment_trees(
             radius,
             voxel_size,
             adaptive_radius=adaptive_radius,
+            crown_fraction=crown_fraction,
         )
         n = len(result[1]) if result is not None else 0
         logger.debug("  tile %d/%d: %d trees", idx + 1, n_tiles, n)

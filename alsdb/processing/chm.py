@@ -277,7 +277,8 @@ def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
     1. Fill NaN pits adjacent to valid canopy with local median.
     2. Detect spikes via Laplacian (sharp local maxima) and replace them with
        the local median.  The Laplacian threshold is adaptive (99th percentile
-       of all non-zero Laplacian values), so mild canopy curvature is kept.
+       of all non-zero Laplacian values over *interior* valid pixels only),
+       so mild canopy curvature is kept and boundary artefacts are avoided.
 
     Parameters
     ----------
@@ -286,28 +287,40 @@ def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
     window:
         Neighbourhood window size for median filter (default 3 = 3×3 pixels).
     """
-    from scipy.ndimage import binary_dilation, laplace, median_filter
+    from scipy.ndimage import binary_dilation, binary_erosion, laplace, median_filter
 
     out = grid.copy()
     nan_mask = np.isnan(out)
+    valid_mask = ~nan_mask
 
     # Pass 1 — fill NaN pits that are directly adjacent to valid canopy
     if nan_mask.any():
-        adjacent = nan_mask & binary_dilation(~nan_mask, iterations=1)
+        adjacent = nan_mask & binary_dilation(valid_mask, iterations=1)
         if adjacent.any():
-            safe = np.where(nan_mask, 0.0, out)
-            local_med = median_filter(safe, size=window)
-            out = np.where(adjacent & np.isfinite(local_med), local_med, out)
+            # Fill only the NaN pits with local median of valid neighbours;
+            # use reflect mode so the median filter itself doesn't need zero-padding.
+            local_med = median_filter(np.where(nan_mask, np.nanmedian(out), out), size=window)
+            out = np.where(adjacent, local_med.astype(np.float32), out)
+            valid_mask = ~np.isnan(out)
 
-    # Pass 2 — remove spikes via Laplacian thresholding
-    safe = np.where(np.isnan(out), 0.0, out)
-    lap = np.abs(laplace(safe))
-    lap_vals = lap[lap > 0]
-    if lap_vals.size > 0:
-        threshold = float(np.percentile(lap_vals, 99))
-        spike_mask = ~np.isnan(out) & (lap > threshold)
+    # Pass 2 — Laplacian spike detection restricted to *interior* valid pixels.
+    # Interior = valid pixels that are not adjacent to any NaN region.  Excluding
+    # boundary pixels prevents the large Laplacian values caused by the canopy→NaN
+    # step from being counted in the threshold or triggering false detections.
+    interior_mask = valid_mask & binary_erosion(valid_mask, iterations=1)
+
+    # Compute Laplacian only on valid data; fill NaN with the local median so
+    # no artificial discontinuities are introduced at data boundaries.
+    filled = np.where(nan_mask, np.nanmedian(out) if valid_mask.any() else 0.0, out)
+    lap = np.abs(laplace(filled.astype(np.float64)))
+
+    lap_interior = lap[interior_mask]
+    lap_interior_nonzero = lap_interior[lap_interior > 0]
+    if lap_interior_nonzero.size > 0:
+        threshold = float(np.percentile(lap_interior_nonzero, 99))
+        spike_mask = interior_mask & (lap > threshold)
         if spike_mask.any():
-            local_med = median_filter(safe, size=window)
+            local_med = median_filter(filled, size=window)
             out = np.where(spike_mask, local_med.astype(np.float32), out)
 
     return out.astype(np.float32)
