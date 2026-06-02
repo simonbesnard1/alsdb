@@ -56,14 +56,25 @@ def _make_hag_points(n_gnd=50, n_veg=100, bbox=(0.0, 0.0, 100.0, 100.0), seed=0)
 
 def _flat_metrics(ny=10, nx=10, h95_val=15.0, cc_val=0.7):
     return {
-        "h50": np.full((ny, nx), 10.0, dtype=np.float32),
-        "h75": np.full((ny, nx), 12.0, dtype=np.float32),
-        "h95": np.full((ny, nx), h95_val, dtype=np.float32),
-        "hmean": np.full((ny, nx), 11.0, dtype=np.float32),
-        "cc": np.full((ny, nx), cc_val, dtype=np.float32),
-        "density": np.full((ny, nx), 5.0, dtype=np.float32),
-        "fhd": np.full((ny, nx), 1.2, dtype=np.float32),
-        "vci": np.full((ny, nx), 0.5, dtype=np.float32),
+        # Height percentiles
+        "h50":       np.full((ny, nx), 10.0, dtype=np.float32),
+        "h75":       np.full((ny, nx), 12.0, dtype=np.float32),
+        "h95":       np.full((ny, nx), h95_val, dtype=np.float32),
+        "hmax":      np.full((ny, nx), 20.0, dtype=np.float32),
+        "hmean":     np.full((ny, nx), 11.0, dtype=np.float32),
+        # Canopy structure
+        "cc":        np.full((ny, nx), cc_val, dtype=np.float32),
+        "density":   np.full((ny, nx), 5.0, dtype=np.float32),
+        "fhd":       np.full((ny, nx), 1.2, dtype=np.float32),
+        "vci":       np.full((ny, nx), 0.5, dtype=np.float32),
+        "crr":       np.full((ny, nx), 0.6, dtype=np.float32),
+        # Height stratum proportions (must sum to 1.0)
+        "pv_0_2":    np.full((ny, nx), 0.10, dtype=np.float32),
+        "pv_2_5":    np.full((ny, nx), 0.15, dtype=np.float32),
+        "pv_5_10":   np.full((ny, nx), 0.20, dtype=np.float32),
+        "pv_10_20":  np.full((ny, nx), 0.30, dtype=np.float32),
+        "pv_20_40":  np.full((ny, nx), 0.20, dtype=np.float32),
+        "pv_above40": np.full((ny, nx), 0.05, dtype=np.float32),
     }
 
 
