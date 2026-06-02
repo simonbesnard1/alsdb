@@ -483,14 +483,16 @@ def plot_metrics(
     resolution: float = 10.0,
     year: Optional[int] = None,
     variables: Optional[list[str]] = None,
-    figsize: tuple[float, float] = (20, 10),
+    figsize: tuple[float, float] = (24, 16),
     title: Optional[str] = None,
 ):
     """
     Multi-panel overview of LiDAR structural metrics.
 
-    Plots up to six panels: ``h50``, ``h75``, ``h95``, ``hmean``, ``cc``,
-    ``density``.  Variables missing from the store are silently skipped.
+    Plots all 16 standard metrics by default: height percentiles (h50, h75,
+    h95, hmax, hmean), canopy structure (cc, density, fhd, vci, crr), and
+    height-stratum proportions (pv_0_2 … pv_above40).  Variables missing from
+    the store are silently skipped.
 
     Parameters
     ----------
@@ -501,9 +503,9 @@ def plot_metrics(
     year:
         Survey year.
     variables:
-        Subset of metric names to plot.  Defaults to all six standard metrics.
+        Subset of metric names to plot.  Defaults to all 16 standard metrics.
     figsize:
-        Figure size in inches.
+        Figure size in inches (default ``(20, 10)`` — increase for 16 panels).
     title:
         Optional suptitle.
 
@@ -513,22 +515,59 @@ def plot_metrics(
     """
     import matplotlib.pyplot as plt
 
-    _default_metrics = ["h50", "h75", "h95", "hmean", "cc", "density"]
+    _default_metrics = [
+        "h50",
+        "h75",
+        "h95",
+        "hmax",
+        "hmean",
+        "cc",
+        "density",
+        "fhd",
+        "vci",
+        "crr",
+        "pv_0_2",
+        "pv_2_5",
+        "pv_5_10",
+        "pv_10_20",
+        "pv_20_40",
+        "pv_above40",
+    ]
     _cmaps = {
         "h50": "viridis",
         "h75": "viridis",
         "h95": "viridis",
+        "hmax": "viridis",
         "hmean": "viridis",
         "cc": "YlGn",
         "density": "plasma",
+        "fhd": "magma",
+        "vci": "magma",
+        "crr": "RdYlGn",
+        "pv_0_2": "Blues",
+        "pv_2_5": "Blues",
+        "pv_5_10": "Blues",
+        "pv_10_20": "Blues",
+        "pv_20_40": "Blues",
+        "pv_above40": "Blues",
     }
     _labels = {
         "h50": "h50 (m)",
         "h75": "h75 (m)",
         "h95": "h95 (m)",
+        "hmax": "hmax (m)",
         "hmean": "Mean height (m)",
         "cc": "Canopy cover",
         "density": "Density (pts m⁻²)",
+        "fhd": "FHD (nats)",
+        "vci": "VCI [0–1]",
+        "crr": "CRR [0–1]",
+        "pv_0_2": "pv 0–2 m",
+        "pv_2_5": "pv 2–5 m",
+        "pv_5_10": "pv 5–10 m",
+        "pv_10_20": "pv 10–20 m",
+        "pv_20_40": "pv 20–40 m",
+        "pv_above40": "pv >40 m",
     }
 
     vars_to_plot = variables or _default_metrics
@@ -541,7 +580,7 @@ def plot_metrics(
             f"Available: {available}"
         )
 
-    ncols = min(3, len(vars_to_plot))
+    ncols = min(4, len(vars_to_plot))
     nrows = (len(vars_to_plot) + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
 

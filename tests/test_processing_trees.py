@@ -178,7 +178,7 @@ def test_tree_metrics_required_keys():
         "centroid_x",
         "centroid_y",
         "height",
-        "base_height",
+        "min_point_height",
         "crown_area",
         "crown_radius",
         "n_points",

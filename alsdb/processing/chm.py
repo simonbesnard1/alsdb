@@ -567,12 +567,12 @@ def _process_tile_all(
             if "no points" not in str(exc).lower():
                 raise
 
-    # --- DSM (first returns, max Z) —— no HAG needed --------------------
+    # --- DSM (max Z, optionally first returns only) — no HAG needed -----
     if need_dsm:
-        stages = [
-            {"type": "filters.range", "limits": "ReturnNumber[1:1]"},
-            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
-        ]
+        stages = []
+        if first_returns_only:
+            stages.append({"type": "filters.range", "limits": "ReturnNumber[1:1]"})
+        stages.append({"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
         try:
             pts = _run(stages, arr)
             if len(pts):

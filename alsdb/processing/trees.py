@@ -14,7 +14,8 @@ After segmentation, per-tree metrics are summarised into a :class:`pandas.DataFr
 * ``tree_id``       — unique integer identifier
 * ``centroid_x/y`` — crown centroid (UTM metres)
 * ``height``        — maximum height above ground (m)
-* ``base_height``   — minimum height above ground within the crown (m)
+* ``min_point_height`` — minimum HAG of any point assigned to the tree (m);
+  lower-bounded by ``min_height / 2`` due to the pre-filter in :func:`_hag_stages`
 * ``crown_area``    — 2-D convex hull area (m²)
 * ``crown_radius``  — equivalent circular radius = sqrt(area / π) (m)
 * ``n_points``      — number of ALS points in the tree
@@ -161,7 +162,7 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
                 "centroid_x": float(x.mean()),
                 "centroid_y": float(y.mean()),
                 "height": tree_height,
-                "base_height": float(hag.min()),
+                "min_point_height": float(hag.min()),
                 "crown_area": crown_area,
                 "crown_radius": crown_radius,
                 "n_points": int(mask.sum()),

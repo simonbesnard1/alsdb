@@ -236,7 +236,9 @@ def _process_tile(
         logger.debug("Gap tile %d: no points, skipping", tile_index)
         return
 
-    points = attach_hag(arr)
+    # attach_hag is only needed when lai=True (Beer-Lambert uses HeightAboveGround).
+    # Gap fraction itself works on Classification and ReturnNumber alone.
+    points = attach_hag(arr) if lai else arr
 
     if baba_radius > 0:
         gap = _compute_gap_grid_baba(
