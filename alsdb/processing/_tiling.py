@@ -221,19 +221,53 @@ def check_bbox_overlap(
     return True
 
 
+_HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
+
+
+def _hag_stage(arr: np.ndarray) -> dict:
+    """
+    Return the most accurate available PDAL HAG stage for *arr*.
+
+    Prefers ``filters.hag_delaunay`` (TIN-based, gold-standard, consistent
+    with the DTM pipeline) when the tile contains at least
+    ``_HAG_DELAUNAY_MIN_GND`` ground-classified points.  Falls back to
+    ``filters.hag_nn`` when the ground point count is too low to build a
+    valid triangulation (sparse surveys, dense-canopy void tiles).
+
+    Parameters
+    ----------
+    arr:
+        Point array as returned by :func:`query_to_array`.  Must contain
+        a ``Classification`` field.
+
+    Returns
+    -------
+    dict
+        A single PDAL stage descriptor ready for inclusion in a pipeline list.
+    """
+    n_gnd = int((arr["Classification"] == 2).sum())
+    if n_gnd >= _HAG_DELAUNAY_MIN_GND:
+        return {"type": "filters.hag_delaunay"}
+    logger.debug("_hag_stage: only %d ground points — falling back to filters.hag_nn", n_gnd)
+    return {"type": "filters.hag_nn", "count": max(1, n_gnd), "allow_extrapolation": True}
+
+
 def attach_hag(arr: np.ndarray) -> np.ndarray:
     """
-    Run ``filters.hag_nn`` on *arr* and return the HAG-annotated array.
+    Attach ``HeightAboveGround`` to every point in *arr* and return the result.
 
-    Uses k-nearest ground points (kd-tree, non-recursive) to interpolate
-    height above ground for every point.  Negative HAG values (artefacts
-    at tile edges) are clamped to zero.
+    Uses ``filters.hag_delaunay`` (Delaunay TIN, barycentric interpolation)
+    when enough ground points are available — the same triangulation method
+    as the DTM pipeline, ensuring CHM = DSM − DTM is self-consistent.
+    Falls back to ``filters.hag_nn`` for tiles with fewer than
+    ``_HAG_DELAUNAY_MIN_GND`` ground points.  Negative HAG values (edge
+    artefacts outside the convex hull) are clamped to zero.
 
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
     stages = [
-        {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
+        _hag_stage(arr),
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -288,8 +322,8 @@ def tile_bboxes(
     Returns a list of ``(query_bbox, crop_bbox)`` pairs:
 
     * ``query_bbox`` — inflated by *buffer* on all sides; used for the
-      TileDB query so ``filters.hag_nn`` has enough ground points at
-      tile edges.
+      TileDB query so ``filters.hag_delaunay`` has enough ground points
+      at tile edges to form complete edge triangles.
     * ``crop_bbox``  — the actual non-overlapping tile extent; used to
       restrict output to avoid duplicate pixels in the mosaic.
 

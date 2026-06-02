@@ -16,8 +16,10 @@ into an :class:`~alsdb.storage.ALSZarrStore` without any intermediate files.
 Pipeline (CHM)
 --------------
 numpy array input
-    → ``filters.hag_nn``  builds a TIN from Class-2 ground points,
-                                 attaches ``HeightAboveGround`` to every point
+    → ``filters.hag_delaunay``  builds a Delaunay TIN from Class-2 ground
+                                 points and attaches ``HeightAboveGround``
+                                 (falls back to ``filters.hag_nn`` for tiles
+                                 with fewer than 3 ground points)
     → ``filters.assign``        clamps negative HAG values to 0
     → ``filters.range``         keeps vegetation points only (Class 3–5)
     → ``filters.crop``          clips to the non-buffered tile extent
@@ -47,6 +49,7 @@ import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
+    _hag_stage,
     array_crs,
     array_data_bbox,
     check_bbox_overlap,
@@ -367,7 +370,7 @@ def _process_tile_chm(
     if first_returns_only:
         veg_limits += ",ReturnNumber[1:1]"
     stages = [
-        {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
+        _hag_stage(arr),
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -520,7 +523,7 @@ def _process_tile_all(
     """
     Single-pass tile worker for :func:`compute_all`.
 
-    Performs one TileDB query and at most one ``filters.hag_nn`` call
+    Performs one TileDB query and at most one HAG normalisation call
     to produce DTM, DSM, and CHM simultaneously.  Products already present
     in the store for *year* are skipped via the ``need_*`` flags.
     """
@@ -583,13 +586,13 @@ def _process_tile_all(
             if "no points" not in str(exc).lower():
                 raise
 
-    # --- CHM (hag_delaunay + veg first returns) -------------------------
+    # --- CHM (hag_delaunay/hag_nn + veg first returns) ------------------
     if need_chm:
         veg_limits = f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"
         if first_returns_only:
             veg_limits += ",ReturnNumber[1:1]"
         stages = [
-            {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
+            _hag_stage(arr),
             {
                 "type": "filters.assign",
                 "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -672,7 +675,7 @@ def compute_chm(
     tile_size:
         Sub-tile width/height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_nn`` accuracy (default 50 m).
+        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
@@ -879,7 +882,7 @@ def compute_all(
     """
     Compute DTM, DSM, and CHM in one call, writing all into *store*.
 
-    Uses a single TileDB query and a single ``filters.hag_nn`` per
+    Uses a single TileDB query and a single HAG normalisation per
     tile, shared across all three products — avoiding the redundant work
     of calling each function separately.  Products already present in the
     store for *year* are skipped unless ``overwrite=True``.
@@ -899,7 +902,7 @@ def compute_all(
     tile_size / n_workers:
         Tiling parameters.
     tile_buffer:
-        Overlap buffer for ``filters.hag_nn`` (CHM only).
+        Overlap buffer for ``filters.hag_delaunay`` (CHM only).
     first_returns_only:
         Use only first returns for CHM (and DSM).  See :func:`compute_chm`.
     overwrite:

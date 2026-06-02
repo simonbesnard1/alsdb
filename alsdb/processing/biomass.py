@@ -8,7 +8,8 @@ Above-Ground Biomass (AGB) estimation from TileDB ALS point clouds.
 Pipeline
 --------
 1. Query TileDB → numpy structured array.
-2. Run ``filters.hag_nn`` via PDAL to attach ``HeightAboveGround``.
+2. Run ``filters.hag_delaunay`` (or ``filters.hag_nn`` fallback) via PDAL
+   to attach ``HeightAboveGround``.
 3. Compute per-cell LiDAR metrics in Python/scipy:
 
    ========  ===============================================================
@@ -623,7 +624,7 @@ def compute_metrics(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_nn`` accuracy (default 50 m).
+        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
@@ -707,7 +708,7 @@ def compute_biomass(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_nn`` accuracy (default 50 m).
+        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """

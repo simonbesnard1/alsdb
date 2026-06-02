@@ -55,7 +55,7 @@ import pandas as pd
 import pdal
 from scipy.spatial import ConvexHull
 
-from alsdb.processing._tiling import array_data_bbox, query_to_array, tile_bboxes
+from alsdb.processing._tiling import _hag_stage, array_data_bbox, query_to_array, tile_bboxes
 from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
@@ -71,10 +71,10 @@ _TREE_ID_STRIDE = 100_000
 # ---------------------------------------------------------------------------
 
 
-def _hag_stages(min_height: float, voxel_size: Optional[float]) -> list[dict]:
+def _hag_stages(arr: np.ndarray, min_height: float, voxel_size: Optional[float]) -> list[dict]:
     """HAG + pre-filter stages shared by all code paths (run before litree)."""
     stages: list[dict] = [
-        {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
+        _hag_stage(arr),
         {
             "type": "filters.assign",
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
@@ -190,7 +190,7 @@ def _process_tile(
         return None
 
     try:
-        p = pdal.Pipeline(json.dumps(_hag_stages(min_height, voxel_size)), arrays=[arr])
+        p = pdal.Pipeline(json.dumps(_hag_stages(arr, min_height, voxel_size)), arrays=[arr])
         p.execute()
         hag_points = p.arrays[0] if p.arrays else arr[:0]
     except RuntimeError as exc:
@@ -342,7 +342,7 @@ def segment_trees(
             return arr, pd.DataFrame()
 
         logger.info("  %d points queried — running filters.litree…", arr.size)
-        p = pdal.Pipeline(json.dumps(_hag_stages(min_height, voxel_size)), arrays=[arr])
+        p = pdal.Pipeline(json.dumps(_hag_stages(arr, min_height, voxel_size)), arrays=[arr])
         p.execute()
         hag_points = p.arrays[0] if p.arrays else arr[:0]
         r = _compute_adaptive_radius(hag_points) if adaptive_radius else radius
