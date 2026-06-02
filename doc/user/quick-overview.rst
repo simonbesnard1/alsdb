@@ -110,15 +110,39 @@ Compute biomass and structural metrics
 
     from alsdb.processing.biomass import compute_biomass, compute_metrics
 
-    # LiDAR structural metrics at 10 m (h50, h75, h95, hmean, cc, density)
-    compute_metrics(provider=reader, store=store, resolution=10.0, year=2021)
+    # 16 LiDAR structural metrics at 10 m:
+    # height percentiles (h50, h75, h95, hmax, hmean), canopy cover (cc),
+    # point density, FHD, VCI, CRR, and 6 height-stratum proportions (pv_*)
+    compute_metrics(
+        provider=reader, store=store, resolution=10.0, year=2021,
+        min_density=1.0,   # mask cells below 1 pt m⁻² (optional guard)
+    )
 
     # Aboveground biomass using the Næsset (2002) model
+    # Always calibrate coefficients against field plots before scientific use
     compute_biomass(provider=reader, store=store, resolution=10.0, year=2021)
 
     # Read results
     ds10 = store.to_dataset(resolution=10.0)
     agb = ds10["biomass"].sel(time=2021)
+
+Multi-temporal change detection
+---------------------------------
+
+:py:func:`alsdb.processing.change.compute_change` computes pixel-wise absolute change,
+relative change, and a gain/loss flag between two survey years:
+
+.. code-block:: python
+
+    from alsdb.processing.change import compute_change
+
+    # Compute CHM change 2017 → 2021, ignoring sub-0.5 m differences
+    compute_change(store, "chm", year_from=2017, year_to=2021,
+                   resolution=1.0, min_delta=0.5, pct_min_abs=0.5)
+
+    # Three products are written: chm_delta, chm_delta_pct, chm_change_flag
+    ds = store.to_dataset(resolution=1.0)
+    gain_loss = ds["chm_change_flag"].sel(time=2021)  # +1 gain, −1 loss, 0 stable
 
 Simulate large-footprint waveforms
 -----------------------------------

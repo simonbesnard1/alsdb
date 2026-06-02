@@ -70,6 +70,8 @@ xs, ys = np.meshgrid(
 shots = pd.DataFrame({"center_x": xs.ravel(), "center_y": ys.ravel()})
 print(f"Simulating {len(shots)} footprints...")
 
+import numpy as np  # noqa: E402 (already imported above)
+
 results = simulate_batch(
     provider=reader,
     shots=shots,
@@ -77,6 +79,7 @@ results = simulate_batch(
     n_workers=4,
     footprint_radius=12.5,
     output_path="shots_2021.parquet",  # optional; omit for in-memory only
+    # rng=np.random.default_rng(42),  # pass for reproducible noise when noise_std > 0
 )
 
 print(results[["center_x", "center_y", "rh50", "rh98", "cover"]].head())

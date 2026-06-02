@@ -94,7 +94,7 @@ This is a HAG artefact. The Delaunay TIN built from ground points becomes unreli
 How do I use a scikit-learn biomass model?
 -------------------------------------------
 
-Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature order is ``["h50", "h75", "h95", "hmean", "cc", "density"]`` matching ``compute_metrics()``:
+Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
 
 .. code-block:: python
 
@@ -102,11 +102,61 @@ Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-c
     from sklearn.ensemble import GradientBoostingRegressor
 
     model = GradientBoostingRegressor()
-    model.fit(X_train, y_agb)
+    model.fit(X_train, y_agb)   # X columns must match _METRIC_NAMES order
 
     compute_biomass(
         provider=reader, store=store, resolution=10.0, year=2021,
         model_fn=wrap_sklearn_model(model),
+    )
+
+    # If the model was trained on a subset, declare the feature order explicitly:
+    model_subset = GradientBoostingRegressor()
+    model_subset.fit(X_train[["h95", "cc", "density"]], y_agb)
+    compute_biomass(
+        provider=reader, store=store, resolution=10.0, year=2021,
+        model_fn=wrap_sklearn_model(model_subset, features=["h95", "cc", "density"]),
+    )
+
+How do I detect forest change between two surveys?
+----------------------------------------------------
+
+Use :py:func:`alsdb.processing.change.compute_change` after computing the same variable for both years.  Three derived products are written: absolute change, relative change (%), and a gain/loss flag:
+
+.. code-block:: python
+
+    from alsdb.processing.change import compute_change
+
+    # CHM must already be present for both years in the store
+    compute_change(
+        store, "chm",
+        year_from=2017, year_to=2021,
+        resolution=1.0,
+        min_delta=0.5,    # suppress sub-0.5 m noise in the flag layer
+        pct_min_abs=0.5,  # avoid extreme % changes where base value < 0.5 m
+    )
+
+    ds = store.to_dataset(resolution=1.0)
+    flag = ds["chm_change_flag"].sel(time=2021)   # +1 gain, −1 loss, 0 stable
+
+How do I calibrate the Næsset biomass model?
+----------------------------------------------
+
+Use :py:func:`alsdb.processing.biomass.calibrate_naesset` with co-located field inventory plots.  At least 20 valid plots are required; fewer than 50 emits a quality warning:
+
+.. code-block:: python
+
+    from alsdb.processing.biomass import calibrate_naesset, naesset_model
+
+    # h95_plots, cc_plots, agb_plots — 1-D arrays, one value per field plot
+    (a, b, c), pcov = calibrate_naesset(
+        h95_plots, cc_plots, agb_plots, return_cov=True
+    )
+    import numpy as np
+    print(f"a={a:.3f} ± {np.sqrt(pcov[0,0]):.3f}")
+
+    compute_biomass(
+        provider=reader, store=store, resolution=10.0, year=2021,
+        model_fn=lambda m: naesset_model(m, a=a, b=b, c=c),
     )
 
 Can I store the Zarr output on S3?

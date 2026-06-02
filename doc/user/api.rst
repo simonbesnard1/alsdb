@@ -83,7 +83,26 @@ Structural metrics and biomass
    alsdb.processing.biomass.compute_metrics
    alsdb.processing.biomass.compute_biomass
    alsdb.processing.biomass.naesset_model
+   alsdb.processing.biomass.calibrate_naesset
    alsdb.processing.biomass.wrap_sklearn_model
+
+Multi-temporal change detection
+--------------------------------
+
+.. autosummary::
+   :toctree: generated/
+   :recursive:
+
+   alsdb.processing.change.compute_change
+
+Individual tree segmentation
+-----------------------------
+
+.. autosummary::
+   :toctree: generated/
+   :recursive:
+
+   alsdb.processing.trees.segment_trees
 
 Waveform simulation
 --------------------
