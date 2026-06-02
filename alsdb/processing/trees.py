@@ -55,7 +55,13 @@ import pandas as pd
 import pdal
 from scipy.spatial import ConvexHull
 
-from alsdb.processing._tiling import _hag_stage, array_data_bbox, query_to_array, tile_bboxes
+from alsdb.processing._tiling import (
+    _filter_ground_outliers,
+    _hag_stage,
+    array_data_bbox,
+    query_to_array,
+    tile_bboxes,
+)
 from alsdb.providers.tiledb_provider import TileDBProvider
 
 logger = logging.getLogger(__name__)
@@ -185,7 +191,7 @@ def _process_tile(
     * offsets TreeIDs by ``tile_index × _TREE_ID_STRIDE`` for global uniqueness,
     * discards trees whose centroid falls outside *crop_bbox*.
     """
-    arr = query_to_array(provider, query_bbox, year=year)
+    arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
         return None
 
@@ -336,7 +342,7 @@ def segment_trees(
             "adaptive" if adaptive_radius else f"{radius:.1f} m",
             f"{voxel_size} m" if voxel_size else "none",
         )
-        arr = query_to_array(provider, effective_bbox, year=year)
+        arr = _filter_ground_outliers(query_to_array(provider, effective_bbox, year=year))
         if arr.size == 0:
             logger.warning("segment_trees: no points in bbox %s", effective_bbox)
             return arr, pd.DataFrame()

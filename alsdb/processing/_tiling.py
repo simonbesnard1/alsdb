@@ -223,6 +223,100 @@ def check_bbox_overlap(
 
 _HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
 
+# filters.outlier statistical parameters for ground-point cleaning
+_OUTLIER_MEAN_K: int = 12  # k nearest neighbours for mean-distance computation
+_OUTLIER_MULTIPLIER: float = 2.2  # std-dev multiplier; tighter than default (2.0) for ground
+
+
+def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
+    """
+    Reclassify ground-point outliers using PDAL ``filters.elm`` + ``filters.outlier``.
+
+    Applied **only to Class-2 (ground) points** so vegetation and other
+    classifications are untouched.  Ground outliers are reclassified to
+    Class 1 (unclassified) in the returned copy so that ``filters.hag_delaunay``
+    and ``filters.delaunay`` ignore them when building the terrain TIN.
+
+    Two complementary strategies are applied in sequence on the ground subset:
+
+    ``filters.elm`` (Extended Local Minimum)
+        Detects *below-ground* outliers — water-surface multipath returns,
+        systematic scan-line artefacts, and misclassified points that sit
+        anomalously low relative to neighbouring ground returns.  These are
+        the most damaging for TIN interpolation because they pull triangles
+        downward and generate large positive HAG errors for nearby vegetation.
+
+    ``filters.outlier`` (statistical mode)
+        Detects *above-ground* spikes — misclassified vegetation or building
+        returns in Class 2 — by comparing each point's mean distance to its
+        k nearest ground neighbours against the neighbourhood mean ± multiplier
+        × std.  More spatially aware than a global elevation fence, so it
+        remains effective on steep slopes where the tile elevation range is large.
+
+    Both PDAL filters work in-place: they reclassify outliers to Class 7
+    (noise) without reordering or removing points, so the index correspondence
+    between the ground subset and the original array is preserved.
+
+    Parameters
+    ----------
+    arr:
+        Point array as returned by :func:`query_to_array`.  Operates on a
+        copy; the original array is never modified.
+
+    Returns
+    -------
+    np.ndarray
+        Copy of *arr* with outlier ground points reclassified to Class 1.
+        Returns *arr* unchanged if no outliers are found or if the PDAL
+        pipeline raises an error (logged at DEBUG level).
+    """
+    gnd_mask = arr["Classification"] == 2
+    n_gnd = int(gnd_mask.sum())
+    if n_gnd < 4:
+        return arr
+
+    gnd_arr = arr[gnd_mask].copy()
+
+    # Cap mean_k so it never exceeds the available number of neighbours
+    mean_k = min(_OUTLIER_MEAN_K, n_gnd - 1)
+    stages = [
+        {"type": "filters.elm"},
+        {
+            "type": "filters.outlier",
+            "method": "statistical",
+            "mean_k": mean_k,
+            "multiplier": _OUTLIER_MULTIPLIER,
+        },
+    ]
+
+    try:
+        p = pdal.Pipeline(json.dumps(stages), arrays=[gnd_arr])
+        p.execute()
+        filtered_gnd = p.arrays[0] if p.arrays else gnd_arr
+    except RuntimeError as exc:
+        logger.debug(
+            "_filter_ground_outliers: PDAL pipeline failed (%s) — skipping outlier removal", exc
+        )
+        return arr
+
+    # Points reclassified away from Class 2 (→ Class 7 noise) are outliers.
+    # PDAL preserves point order for in-place filters, so index correspondence holds.
+    outlier_in_gnd = filtered_gnd["Classification"] != 2
+    n_out = int(outlier_in_gnd.sum())
+
+    if n_out == 0:
+        return arr
+
+    out = arr.copy()
+    gnd_indices = np.where(gnd_mask)[0]
+    out["Classification"][gnd_indices[outlier_in_gnd]] = 1  # → unclassified
+    logger.debug(
+        "_filter_ground_outliers: reclassified %d/%d ground outliers (ELM + statistical)",
+        n_out,
+        n_gnd,
+    )
+    return out
+
 
 def _hag_stage(arr: np.ndarray) -> dict:
     """
@@ -266,6 +360,7 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
+    arr = _filter_ground_outliers(arr)
     stages = [
         _hag_stage(arr),
         {

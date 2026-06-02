@@ -49,6 +49,7 @@ import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
+    _filter_ground_outliers,
     _hag_stage,
     array_crs,
     array_data_bbox,
@@ -358,7 +359,7 @@ def _process_tile_chm(
     height_statistic: str = "max",
     pit_fill: bool = True,
 ) -> None:
-    arr = query_to_array(provider, query_bbox, year=year)
+    arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
         logger.debug("CHM tile %d: no points, skipping", tile_index)
         return
@@ -413,7 +414,7 @@ def _process_tile_dtm(
     year: Optional[int],
     dtm_method: str = "tin",
 ) -> None:
-    arr = query_to_array(provider, query_bbox, year=year)
+    arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
         logger.debug("DTM tile %d: no points, skipping", tile_index)
         return
@@ -531,7 +532,7 @@ def _process_tile_all(
         logger.debug("All tile %d: all products already present, skipping", tile_index)
         return
 
-    arr = query_to_array(provider, query_bbox, year=year)
+    arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
         logger.debug("All tile %d: no points, skipping", tile_index)
         return

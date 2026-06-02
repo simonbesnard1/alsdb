@@ -90,6 +90,7 @@ def _compute_gap_grid(
     points: np.ndarray,
     resolution: float,
     bbox: tuple[float, float, float, float],
+    min_density: float = 0.0,
 ) -> np.ndarray:
     """
     Compute per-cell gap fraction from a HAG-annotated point array.
@@ -113,16 +114,24 @@ def _compute_gap_grid(
 
     gnd = (cls_fr == _GROUND_CLASS).astype(np.float32)
     veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float32)
+    ones = np.ones(int(fr.sum()), dtype=np.float32)
 
     n_gnd = binned_statistic_2d(x_fr, y_fr, gnd, statistic="sum", bins=bins).statistic
     n_veg = binned_statistic_2d(x_fr, y_fr, veg, statistic="sum", bins=bins).statistic
-    # The denominator uses n_gnd + n_veg (classified returns only) so that
-    # unclassified/building/noise returns don't dilute the gap estimate.
-    # Cells with no classified returns → NaN.
+    n_fr = binned_statistic_2d(x_fr, y_fr, ones, statistic="count", bins=bins).statistic
+
+    # Denominator: classified returns only, so unclassified/building/noise
+    # returns don't dilute the gap estimate.  Cells with none → NaN.
     n_classified = n_gnd + n_veg
 
     with np.errstate(invalid="ignore", divide="ignore"):
         gap = np.where(n_classified > 0, n_gnd / n_classified, np.nan)
+
+    # Mask cells below minimum first-return density threshold
+    if min_density > 0.0:
+        cell_area = resolution**2
+        sparse = (n_fr / cell_area) < min_density
+        gap = np.where(sparse, np.nan, gap)
 
     return np.flipud(gap.T).astype(np.float32)
 
@@ -154,6 +163,7 @@ def _compute_gap_grid_baba(
     resolution: float,
     bbox: tuple[float, float, float, float],
     baba_radius: float,
+    min_density: float = 0.0,
 ) -> np.ndarray:
     """
     Compute per-cell gap fraction using a circular neighbourhood of radius
@@ -182,10 +192,16 @@ def _compute_gap_grid_baba(
     cls_fr = fr_pts["Classification"]
     gap = np.full((ny, nx), np.nan, dtype=np.float32)
 
+    neighbourhood_area = np.pi * baba_radius**2
+
     for k, idxs in enumerate(indices_list):
         if not idxs:
             continue
         row, col = divmod(k, nx)
+
+        if min_density > 0.0 and (len(idxs) / neighbourhood_area) < min_density:
+            continue  # leave gap[row, col] as NaN
+
         cls_k = cls_fr[idxs]
         n_gnd = int((cls_k == _GROUND_CLASS).sum())
         n_veg = int(np.isin(cls_k, _VEG_CLASSES).sum())
@@ -213,6 +229,7 @@ def _process_tile(
     k: float,
     clumping_index: float = 1.0,
     baba_radius: float = 0.0,
+    min_density: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -222,9 +239,11 @@ def _process_tile(
     points = attach_hag(arr)
 
     if baba_radius > 0:
-        gap = _compute_gap_grid_baba(points, resolution, crop_bbox, baba_radius)
+        gap = _compute_gap_grid_baba(
+            points, resolution, crop_bbox, baba_radius, min_density=min_density
+        )
     else:
-        gap = _compute_gap_grid(points, resolution, crop_bbox)
+        gap = _compute_gap_grid(points, resolution, crop_bbox, min_density=min_density)
 
     if np.all(np.isnan(gap)):
         logger.debug("Gap tile %d: all NaN, skipping", tile_index)
@@ -255,6 +274,7 @@ def compute_gap_fraction(
     k: float = _LAI_K_DEFAULT,
     clumping_index: float = 1.0,
     baba_radius: float = 0.0,
+    min_density: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -299,6 +319,10 @@ def compute_gap_fraction(
         Values < 1 correct for foliage clumping — typical ranges:
         0.5–0.7 for conifers, 0.7–0.9 for broadleaf forests.
         Only used when ``lai=True``.
+    min_density:
+        Minimum first-return density (returns m⁻²) for a cell to receive
+        a gap fraction estimate.  Cells below this threshold are set to
+        ``np.nan``.  Default ``0.0`` disables the guard.
     overwrite:
         If ``False`` (default) and gap (and LAI if requested) already exist
         for *year* in the store, the computation is skipped.
@@ -352,4 +376,5 @@ def compute_gap_fraction(
         k=k,
         clumping_index=clumping_index,
         baba_radius=baba_radius,
+        min_density=min_density,
     )

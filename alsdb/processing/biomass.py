@@ -84,7 +84,46 @@ logger = logging.getLogger(__name__)
 _VEG_CLASSES = (3, 4, 5)
 _DEFAULT_CC_THRESHOLD = 2.0  # m — first returns above this count as "canopy"
 
-_METRIC_NAMES = ["h50", "h75", "h95", "hmean", "cc", "density", "fhd", "vci"]
+_METRIC_NAMES = [
+    # Height percentiles
+    "h50",
+    "h75",
+    "h95",
+    "hmax",
+    "hmean",
+    # Canopy structure
+    "cc",
+    "density",
+    "fhd",
+    "vci",
+    "crr",
+    # Height stratum proportions (fraction of veg returns per layer)
+    "pv_0_2",
+    "pv_2_5",
+    "pv_5_10",
+    "pv_10_20",
+    "pv_20_40",
+    "pv_above40",
+]
+
+# Height strata for pv_* metrics: (lower, upper) bounds in metres.
+# The last stratum is open-ended (upper = ∞).
+_HEIGHT_STRATA: tuple[tuple[float, float], ...] = (
+    (0.0, 2.0),
+    (2.0, 5.0),
+    (5.0, 10.0),
+    (10.0, 20.0),
+    (20.0, 40.0),
+    (40.0, np.inf),
+)
+_HEIGHT_STRATA_NAMES: tuple[str, ...] = (
+    "pv_0_2",
+    "pv_2_5",
+    "pv_5_10",
+    "pv_10_20",
+    "pv_20_40",
+    "pv_above40",
+)
 
 # FHD/VCI vertical binning: 1 m bands up to _FHD_MAX_H.
 # Normalisation uses the total number of bins (not occupied bins) so VCI is
@@ -126,12 +165,20 @@ def _extract_metrics(
     resolution: float,
     bbox: tuple[float, float, float, float],
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
+    min_density: float = 0.0,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR structural metrics over *bbox*.
 
     Returns a dict ``{name: (ny, nx) float32 array}`` in north-up
     orientation.  Empty cells are ``np.nan``.
+
+    Parameters
+    ----------
+    min_density:
+        Minimum total point density (pts m⁻²) required for a cell to receive
+        metric values.  Cells below this threshold are set to ``np.nan`` for
+        all metrics.  Default ``0.0`` disables the guard.
     """
     from scipy.stats import binned_statistic_2d
 
@@ -160,6 +207,7 @@ def _extract_metrics(
 
     cell_area = resolution**2
     n_all = binned_statistic_2d(x, y, hag, statistic="count", bins=bins).statistic
+    density_grid = _flip(n_all / cell_area)
 
     fr = points["ReturnNumber"] == 1
     x_fr, y_fr, hag_fr = x[fr], y[fr], hag[fr]
@@ -168,24 +216,56 @@ def _extract_metrics(
         x_fr, y_fr, np.ones(fr.sum()), statistic="count", bins=bins
     ).statistic
     n_above = binned_statistic_2d(x_fr, y_fr, above, statistic="sum", bins=bins).statistic
-
     with np.errstate(invalid="ignore", divide="ignore"):
         cc = _flip(np.where(n_fr > 0, n_above / n_fr, np.nan))
+
+    # --- height percentiles and structure ---
+    hmean_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic
+    hmin_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="min", bins=bins).statistic
+    hmax_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="max", bins=bins).statistic
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        denom = hmax_raw - hmin_raw
+        crr_raw = np.where(denom > 0, (hmean_raw - hmin_raw) / denom, np.nan)
+
+    # --- height stratum proportions ---
+    # Count veg returns per cell once, then compute per-stratum fractions.
+    n_veg_cell = binned_statistic_2d(
+        x_v, y_v, np.ones(len(hag_v)), statistic="count", bins=bins
+    ).statistic
+
+    strata_grids: dict[str, np.ndarray] = {}
+    for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
+        indicator = ((hag_v > lo) & (hag_v <= hi)).astype(np.float32)
+        n_strata = binned_statistic_2d(x_v, y_v, indicator, statistic="sum", bins=bins).statistic
+        with np.errstate(invalid="ignore", divide="ignore"):
+            prop = np.where(n_veg_cell > 0, n_strata / n_veg_cell, np.nan)
+        strata_grids[name] = _flip(prop)
 
     metrics: dict[str, np.ndarray] = {
         "h50": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(50), bins=bins).statistic),
         "h75": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(75), bins=bins).statistic),
         "h95": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(95), bins=bins).statistic),
-        "hmean": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic),
+        "hmax": _flip(hmax_raw),
+        "hmean": _flip(hmean_raw),
         "cc": cc,
-        "density": _flip(n_all / cell_area),
+        "density": density_grid,
         "fhd": _flip(
             binned_statistic_2d(x_v, y_v, hag_v, statistic=_fhd_from_hag, bins=bins).statistic
         ),
         "vci": _flip(
             binned_statistic_2d(x_v, y_v, hag_v, statistic=_vci_from_hag, bins=bins).statistic
         ),
+        "crr": _flip(crr_raw),
+        **strata_grids,
     }
+
+    # Mask all metrics in cells below the minimum density threshold
+    if min_density > 0.0:
+        sparse = density_grid < min_density
+        for key in metrics:
+            metrics[key] = np.where(sparse, np.nan, metrics[key]).astype(np.float32)
+
     return metrics
 
 
@@ -377,11 +457,11 @@ def wrap_sklearn_model(
         ``GradientBoostingRegressor``, ``Pipeline``, …).
     features:
         Ordered list of metric names to use as model features.
-        Defaults to all eight standard metrics:
-        ``["h50", "h75", "h95", "hmean", "cc", "density", "fhd", "vci"]``.
-        The order must match the feature order used during training.
-        Pass an explicit list (e.g. ``["h50", "h95", "cc"]``) when the
-        model was trained on a subset.
+        Defaults to all sixteen standard metrics (``_METRIC_NAMES``):
+        height percentiles, canopy cover, density, FHD, VCI, CRR, and the
+        six height-stratum proportions.  The order must match the feature
+        order used during training.  Pass an explicit list (e.g.
+        ``["h50", "h95", "cc"]``) when the model was trained on a subset.
 
     Returns
     -------
@@ -397,7 +477,7 @@ def wrap_sklearn_model(
         from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
 
         rf = RandomForestRegressor(n_estimators=200)
-        rf.fit(X_train, y_train)  # X columns = h50, h75, h95, hmean, cc, density, fhd, vci
+        rf.fit(X_train, y_train)  # X columns must match _METRIC_NAMES order
 
         model_fn = wrap_sklearn_model(rf)
         compute_biomass(provider, store, resolution=10.0, year=2021,
@@ -429,6 +509,7 @@ def _extract_metrics_baba(
     bbox: tuple[float, float, float, float],
     baba_radius: float,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
+    min_density: float = 0.0,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR metrics using a circular neighbourhood of radius
@@ -441,6 +522,12 @@ def _extract_metrics_baba(
 
     The caller must ensure the queried point array extends at least *baba_radius*
     beyond *bbox* on all sides (i.e. ``tile_buffer >= baba_radius``).
+
+    Parameters
+    ----------
+    min_density:
+        Minimum point density (pts m⁻²) for a neighbourhood to receive metric
+        values.  Cells below this threshold are set to ``np.nan``.
     """
     from scipy.spatial import cKDTree
 
@@ -448,27 +535,31 @@ def _extract_metrics_baba(
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
     ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
 
-    # Cell centres; row 0 = min_y (flipped to north-up at the end)
     cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
     cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
-    CX, CY = np.meshgrid(cx_arr, cy_arr)  # both (ny, nx)
-    centres = np.column_stack([CX.ravel(), CY.ravel()])  # (ny*nx, 2)
+    CX, CY = np.meshgrid(cx_arr, cy_arr)
+    centres = np.column_stack([CX.ravel(), CY.ravel()])
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
     kd = cKDTree(xy)
     indices_list = kd.query_ball_point(centres, r=baba_radius)
 
     shape = (ny, nx)
+    neighbourhood_area = np.pi * baba_radius**2
+
+    # Pre-allocate all output grids
     h50 = np.full(shape, np.nan, dtype=np.float64)
     h75 = np.full(shape, np.nan, dtype=np.float64)
     h95 = np.full(shape, np.nan, dtype=np.float64)
+    hmax = np.full(shape, np.nan, dtype=np.float64)
     hmean = np.full(shape, np.nan, dtype=np.float64)
     cc = np.full(shape, np.nan, dtype=np.float64)
     density = np.full(shape, np.nan, dtype=np.float64)
     fhd = np.full(shape, np.nan, dtype=np.float64)
     vci = np.full(shape, np.nan, dtype=np.float64)
+    crr = np.full(shape, np.nan, dtype=np.float64)
+    strata = {n: np.full(shape, np.nan, dtype=np.float64) for n in _HEIGHT_STRATA_NAMES}
 
-    neighbourhood_area = np.pi * baba_radius**2
     hag_all = points["HeightAboveGround"]
     cls_all = points["Classification"]
     ret_all = points["ReturnNumber"]
@@ -481,22 +572,35 @@ def _extract_metrics_baba(
         cls_k = cls_all[idxs]
         ret_k = ret_all[idxs]
 
+        cell_density = len(idxs) / neighbourhood_area
+        density[row, col] = cell_density
+        if min_density > 0.0 and cell_density < min_density:
+            continue
+
         veg = np.isin(cls_k, _VEG_CLASSES) & (hag_k > 0)
         hag_v = hag_k[veg]
         if hag_v.size > 0:
             h50[row, col] = np.percentile(hag_v, 50)
             h75[row, col] = np.percentile(hag_v, 75)
             h95[row, col] = np.percentile(hag_v, 95)
+            hmax[row, col] = hag_v.max()
             hmean[row, col] = hag_v.mean()
             fhd[row, col] = _fhd_from_hag(hag_v)
             vci[row, col] = _vci_from_hag(hag_v)
+
+            hmin_k = hag_v.min()
+            denom_k = hag_v.max() - hmin_k
+            if denom_k > 0:
+                crr[row, col] = (hag_v.mean() - hmin_k) / denom_k
+
+            n_v = hag_v.size
+            for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
+                strata[name][row, col] = float(((hag_v > lo) & (hag_v <= hi)).sum()) / n_v
 
         fr = ret_k == 1
         n_fr = int(fr.sum())
         if n_fr > 0:
             cc[row, col] = float((hag_k[fr] > cc_threshold).sum()) / n_fr
-
-        density[row, col] = len(idxs) / neighbourhood_area
 
     def _flip(a: np.ndarray) -> np.ndarray:
         return np.flipud(a).astype(np.float32)
@@ -505,11 +609,14 @@ def _extract_metrics_baba(
         "h50": _flip(h50),
         "h75": _flip(h75),
         "h95": _flip(h95),
+        "hmax": _flip(hmax),
         "hmean": _flip(hmean),
         "cc": _flip(cc),
         "density": _flip(density),
         "fhd": _flip(fhd),
         "vci": _flip(vci),
+        "crr": _flip(crr),
+        **{n: _flip(strata[n]) for n in _HEIGHT_STRATA_NAMES},
     }
 
 
@@ -528,6 +635,7 @@ def _process_tile_metrics(
     year: Optional[int],
     cc_threshold: float,
     baba_radius: float = 0.0,
+    min_density: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -537,10 +645,21 @@ def _process_tile_metrics(
     points = attach_hag(arr)
     if baba_radius > 0:
         metrics = _extract_metrics_baba(
-            points, resolution, bbox=crop_bbox, baba_radius=baba_radius, cc_threshold=cc_threshold
+            points,
+            resolution,
+            bbox=crop_bbox,
+            baba_radius=baba_radius,
+            cc_threshold=cc_threshold,
+            min_density=min_density,
         )
     else:
-        metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
+        metrics = _extract_metrics(
+            points,
+            resolution,
+            bbox=crop_bbox,
+            cc_threshold=cc_threshold,
+            min_density=min_density,
+        )
 
     for name, grid in metrics.items():
         store.write_tile(name, resolution, year, grid, crop_bbox)
@@ -559,6 +678,7 @@ def _process_tile_biomass(
     cc_threshold: float,
     model_fn: Callable,
     baba_radius: float = 0.0,
+    min_density: float = 0.0,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -568,10 +688,21 @@ def _process_tile_biomass(
     points = attach_hag(arr)
     if baba_radius > 0:
         metrics = _extract_metrics_baba(
-            points, resolution, bbox=crop_bbox, baba_radius=baba_radius, cc_threshold=cc_threshold
+            points,
+            resolution,
+            bbox=crop_bbox,
+            baba_radius=baba_radius,
+            cc_threshold=cc_threshold,
+            min_density=min_density,
         )
     else:
-        metrics = _extract_metrics(points, resolution, bbox=crop_bbox, cc_threshold=cc_threshold)
+        metrics = _extract_metrics(
+            points,
+            resolution,
+            bbox=crop_bbox,
+            cc_threshold=cc_threshold,
+            min_density=min_density,
+        )
     agb = model_fn(metrics)
 
     if np.all(np.isnan(agb)):
@@ -596,6 +727,7 @@ def compute_metrics(
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
     baba_radius: float = 0.0,
+    min_density: float = 0.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -604,8 +736,10 @@ def compute_metrics(
     """
     Compute LiDAR structural metrics and write them into *store*.
 
-    Metrics written: ``h50``, ``h75``, ``h95``, ``hmean``, ``cc``,
-    ``density`` — each as a separate variable at *resolution*.
+    Metrics written: ``h50``, ``h75``, ``h95``, ``hmax``, ``hmean``, ``cc``,
+    ``density``, ``fhd``, ``vci``, ``crr``, ``pv_0_2``, ``pv_2_5``,
+    ``pv_5_10``, ``pv_10_20``, ``pv_20_40``, ``pv_above40`` — each as a
+    separate variable at *resolution*.
 
     Parameters
     ----------
@@ -621,6 +755,11 @@ def compute_metrics(
         Survey year filter.
     cc_threshold:
         HAG threshold (m) used to define "canopy" for the cover metric.
+    min_density:
+        Minimum total point density (pts m⁻²) for a cell to receive metric
+        values.  Cells below this threshold are set to ``np.nan`` for all
+        metrics.  Typical values: 0.5 (sparse survey), 1.0 (moderate),
+        4.0 (dense modern ALS).  Default ``0.0`` disables the guard.
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
@@ -647,12 +786,13 @@ def compute_metrics(
     effective_buffer = max(tile_buffer, baba_radius)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
     logger.info(
-        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
+        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
         f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
+        f", min_density={min_density:.1f}" if min_density > 0 else "",
     )
     run_tiled(
         _process_tile_metrics,
@@ -664,6 +804,7 @@ def compute_metrics(
         year=year,
         cc_threshold=cc_threshold,
         baba_radius=baba_radius,
+        min_density=min_density,
     )
 
 
@@ -681,6 +822,7 @@ def compute_biomass(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    min_density: float = 0.0,
 ) -> None:
     """
     Estimate Above-Ground Biomass (AGB) and write into *store*.
@@ -702,6 +844,9 @@ def compute_biomass(
         Survey year filter.
     cc_threshold:
         HAG threshold (m) for the canopy cover metric.
+    min_density:
+        Minimum total point density (pts m⁻²) required before AGB is
+        estimated for a cell.  See :func:`compute_metrics` for guidance.
     overwrite:
         If ``False`` (default) and biomass data for *year* already exists
         in the store, the computation is skipped.
@@ -725,12 +870,13 @@ def compute_biomass(
     effective_buffer = max(tile_buffer, baba_radius)
     tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
     logger.info(
-        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s%s)",
+        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
         resolution,
         len(tiles),
         n_workers,
         year,
         f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
+        f", min_density={min_density:.1f}" if min_density > 0 else "",
     )
     run_tiled(
         _process_tile_biomass,
@@ -743,4 +889,5 @@ def compute_biomass(
         cc_threshold=cc_threshold,
         model_fn=model_fn,
         baba_radius=baba_radius,
+        min_density=min_density,
     )
