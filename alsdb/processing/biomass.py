@@ -243,20 +243,39 @@ def _extract_metrics(
             prop = np.where(n_veg_cell > 0, n_strata / n_veg_cell, np.nan)
         strata_grids[name] = _flip(prop)
 
-    # FHD computed once; VCI derived from the same grid to avoid a second
-    # binned_statistic_2d pass with _fhd_from_hag per cell.
-    fhd_grid = _flip(
-        binned_statistic_2d(x_v, y_v, hag_v, statistic=_fhd_from_hag, bins=bins).statistic
+    # Bin vegetation points once — xi_v/yi_v reused for both FHD and percentiles.
+    xi_v = np.clip(np.digitize(x_v, x_edges) - 1, 0, nx - 1)
+    yi_v = np.clip(np.digitize(y_v, y_edges) - 1, 0, ny - 1)
+
+    # FHD via 3D histogram (x_cell × y_cell × hag_band): fully vectorised,
+    # no Python callback per bin.  Points above _FHD_MAX_H are excluded to
+    # match the original np.histogram(bins=_FHD_BINS) behaviour.
+    fhd_mask = hag_v <= _FHD_MAX_H
+    hag_bin_v = np.minimum(
+        np.floor(hag_v[fhd_mask] / _FHD_BIN_SIZE).astype(np.intp), _FHD_N_BINS - 1
     )
+    flat_fhd = np.ravel_multi_index(
+        (xi_v[fhd_mask], yi_v[fhd_mask], hag_bin_v), (nx, ny, _FHD_N_BINS)
+    )
+    counts_3d = (
+        np.bincount(flat_fhd, minlength=nx * ny * _FHD_N_BINS)
+        .reshape(nx, ny, _FHD_N_BINS)
+        .astype(np.float64)
+    )
+    cell_totals = counts_3d.sum(axis=2, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = np.where(cell_totals > 0, counts_3d / cell_totals, 0.0)
+        log_p = np.where(p > 0, np.log(p), 0.0)
+    fhd_raw = -(p * log_p).sum(axis=2)  # (nx, ny)
+    fhd_raw[cell_totals.squeeze(axis=2) == 0] = np.nan
+    fhd_grid = _flip(fhd_raw)
     with np.errstate(invalid="ignore", divide="ignore"):
         vci_grid = np.where(_VCI_MAX_ENTROPY > 0, fhd_grid / _VCI_MAX_ENTROPY, np.nan).astype(
             np.float32
         )
 
-    # h50/h75/h95 in one grouped pass: bin veg points once, sort, then compute
-    # all three percentiles per cell together instead of three separate scans.
-    xi_v = np.clip(np.digitize(x_v, x_edges) - 1, 0, nx - 1)
-    yi_v = np.clip(np.digitize(y_v, y_edges) - 1, 0, ny - 1)
+    # h50/h75/h95 in one grouped pass: sort by cell, then compute all three
+    # percentiles per cell together instead of three separate scans.
     cell_v = xi_v * ny + yi_v
     order = np.argsort(cell_v, kind="stable")
     sorted_cells_v = cell_v[order]
@@ -606,18 +625,27 @@ def _extract_metrics_baba(
         veg = np.isin(cls_k, _VEG_CLASSES) & (hag_k > 0)
         hag_v = hag_k[veg]
         if hag_v.size > 0:
-            h50[row, col] = np.percentile(hag_v, 50)
-            h75[row, col] = np.percentile(hag_v, 75)
-            h95[row, col] = np.percentile(hag_v, 95)
-            hmax[row, col] = hag_v.max()
-            hmean[row, col] = hag_v.mean()
-            fhd[row, col] = _fhd_from_hag(hag_v)
-            vci[row, col] = _vci_from_hag(hag_v)
-
-            hmin_k = hag_v.min()
-            denom_k = hag_v.max() - hmin_k
+            # Single sort for all three percentiles; cache min/max/mean to
+            # avoid redundant passes when computing crr.
+            h50[row, col], h75[row, col], h95[row, col] = np.percentile(hag_v, [50, 75, 95])
+            hmin_k = float(hag_v.min())
+            hmax_k = float(hag_v.max())
+            hmean_k = float(hag_v.mean())
+            hmax[row, col] = hmax_k
+            hmean[row, col] = hmean_k
+            denom_k = hmax_k - hmin_k
             if denom_k > 0:
-                crr[row, col] = (hag_v.mean() - hmin_k) / denom_k
+                crr[row, col] = (hmean_k - hmin_k) / denom_k
+
+            # Compute FHD once; derive VCI from it to avoid a second
+            # _fhd_from_hag call inside _vci_from_hag.
+            fhd_k = _fhd_from_hag(hag_v)
+            fhd[row, col] = fhd_k
+            vci[row, col] = (
+                float(fhd_k / _VCI_MAX_ENTROPY)
+                if not np.isnan(fhd_k) and _VCI_MAX_ENTROPY > 0
+                else np.nan
+            )
 
             n_v = hag_v.size
             for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
