@@ -11,9 +11,7 @@ Welcome to the **alsDB User Guide**. This guide covers the complete workflow fro
    :maxdepth: 1
 
    why-alsdb
-   installing
    quick-overview
-   api
    faq
 
 .. toctree::
@@ -21,14 +19,12 @@ Welcome to the **alsDB User Guide**. This guide covers the complete workflow fro
    :maxdepth: 1
 
    fundamentals
-   fundamentals.processing
 
 .. toctree::
    :caption: Advanced Usage
    :maxdepth: 1
 
    database
-   contributing
 
 .. toctree::
    :caption: Community
