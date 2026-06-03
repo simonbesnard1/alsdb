@@ -243,29 +243,54 @@ def _extract_metrics(
             prop = np.where(n_veg_cell > 0, n_strata / n_veg_cell, np.nan)
         strata_grids[name] = _flip(prop)
 
+    # FHD computed once; VCI derived from the same grid to avoid a second
+    # binned_statistic_2d pass with _fhd_from_hag per cell.
+    fhd_grid = _flip(
+        binned_statistic_2d(x_v, y_v, hag_v, statistic=_fhd_from_hag, bins=bins).statistic
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        vci_grid = np.where(_VCI_MAX_ENTROPY > 0, fhd_grid / _VCI_MAX_ENTROPY, np.nan).astype(
+            np.float32
+        )
+
+    # h50/h75/h95 in one grouped pass: bin veg points once, sort, then compute
+    # all three percentiles per cell together instead of three separate scans.
+    xi_v = np.clip(np.digitize(x_v, x_edges) - 1, 0, nx - 1)
+    yi_v = np.clip(np.digitize(y_v, y_edges) - 1, 0, ny - 1)
+    cell_v = xi_v * ny + yi_v
+    order = np.argsort(cell_v, kind="stable")
+    sorted_cells_v = cell_v[order]
+    sorted_hag_v = hag_v[order]
+    unique_cells_v, first_idx_v = np.unique(sorted_cells_v, return_index=True)
+    ends_v = np.append(first_idx_v[1:], len(sorted_hag_v))
+
+    h50_flat = np.full(nx * ny, np.nan, dtype=np.float32)
+    h75_flat = np.full(nx * ny, np.nan, dtype=np.float32)
+    h95_flat = np.full(nx * ny, np.nan, dtype=np.float32)
+    for _i, _cell in enumerate(unique_cells_v):
+        _h = sorted_hag_v[first_idx_v[_i] : ends_v[_i]]
+        h50_flat[_cell], h75_flat[_cell], h95_flat[_cell] = np.percentile(_h, [50, 75, 95])
+
     metrics: dict[str, np.ndarray] = {
-        "h50": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(50), bins=bins).statistic),
-        "h75": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(75), bins=bins).statistic),
-        "h95": _flip(binned_statistic_2d(x_v, y_v, hag_v, statistic=_pct(95), bins=bins).statistic),
+        "h50": _flip(h50_flat.reshape(nx, ny)),
+        "h75": _flip(h75_flat.reshape(nx, ny)),
+        "h95": _flip(h95_flat.reshape(nx, ny)),
         "hmax": _flip(hmax_raw),
         "hmean": _flip(hmean_raw),
         "cc": cc,
         "density": density_grid,
-        "fhd": _flip(
-            binned_statistic_2d(x_v, y_v, hag_v, statistic=_fhd_from_hag, bins=bins).statistic
-        ),
-        "vci": _flip(
-            binned_statistic_2d(x_v, y_v, hag_v, statistic=_vci_from_hag, bins=bins).statistic
-        ),
+        "fhd": fhd_grid,
+        "vci": vci_grid,
         "crr": _flip(crr_raw),
         **strata_grids,
     }
 
-    # Mask all metrics in cells below the minimum density threshold
+    # Mask all metrics in cells below the minimum density threshold (in-place
+    # to avoid 16 separate np.where copies).
     if min_density > 0.0:
         sparse = density_grid < min_density
-        for key in metrics:
-            metrics[key] = np.where(sparse, np.nan, metrics[key]).astype(np.float32)
+        for arr in metrics.values():
+            arr[sparse] = np.nan
 
     return metrics
 
@@ -315,9 +340,9 @@ def naesset_model(
     cc = metrics["cc"]
     with np.errstate(invalid="ignore"):
         agb = np.where(
-            np.isnan(h95) | np.isnan(cc) | (cc == 0),
+            np.isnan(h95) | np.isnan(cc) | (h95 <= 0) | (cc == 0),
             np.nan,
-            a * np.power(np.where(h95 > 0, h95, 0), b) * np.power(cc, c),
+            a * np.power(h95, b) * np.power(cc, c),
         )
     return agb.astype(np.float32)
 

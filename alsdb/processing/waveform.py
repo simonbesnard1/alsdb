@@ -323,6 +323,11 @@ def _rh_metrics(
     for level in levels:
         idx = int(np.searchsorted(cumulative, level / 100.0))
         rh[level] = float(z_above[min(idx, len(z_above) - 1)])
+    # RH0 is defined as 0 m by construction (ground return height).
+    # searchsorted may return a non-zero z_above[0] if the ground bin is
+    # slightly offset, so we force it to the correct value.
+    if 0 in levels:
+        rh[0] = 0.0
     return rh
 
 

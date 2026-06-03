@@ -99,27 +99,28 @@ def _compute_gap_grid(
     Returns a ``(ny, nx)`` float32 north-up array; cells with no first
     returns are ``np.nan``.
     """
-    from scipy.stats import binned_statistic_2d
-
     min_x, min_y, max_x, max_y = bbox
     nx = max(1, int(np.ceil((max_x - min_x) / resolution)))
     ny = max(1, int(np.ceil((max_y - min_y) / resolution)))
     x_edges = np.linspace(min_x, max_x, nx + 1)
     y_edges = np.linspace(min_y, max_y, ny + 1)
-    bins = [x_edges, y_edges]
 
     fr = points["ReturnNumber"] == 1
     x_fr = points["X"][fr]
     y_fr = points["Y"][fr]
     cls_fr = points["Classification"][fr]
 
-    gnd = (cls_fr == _GROUND_CLASS).astype(np.float32)
-    veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float32)
-    ones = np.ones(int(fr.sum()), dtype=np.float32)
+    gnd = (cls_fr == _GROUND_CLASS).astype(np.float64)
+    veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float64)
 
-    n_gnd = binned_statistic_2d(x_fr, y_fr, gnd, statistic="sum", bins=bins).statistic
-    n_veg = binned_statistic_2d(x_fr, y_fr, veg, statistic="sum", bins=bins).statistic
-    n_fr = binned_statistic_2d(x_fr, y_fr, ones, statistic="count", bins=bins).statistic
+    # Bin all first-return points once with np.bincount — one C-level pass
+    # instead of three separate binned_statistic_2d scans.
+    xi_fr = np.clip(np.digitize(x_fr, x_edges) - 1, 0, nx - 1)
+    yi_fr = np.clip(np.digitize(y_fr, y_edges) - 1, 0, ny - 1)
+    cell_fr = xi_fr * ny + yi_fr
+    n_gnd = np.bincount(cell_fr, weights=gnd, minlength=nx * ny).reshape(nx, ny)
+    n_veg = np.bincount(cell_fr, weights=veg, minlength=nx * ny).reshape(nx, ny)
+    n_fr = np.bincount(cell_fr, minlength=nx * ny).reshape(nx, ny).astype(np.float64)
 
     # Denominator: classified returns only, so unclassified/building/noise
     # returns don't dilute the gap estimate.  Cells with none → NaN.
@@ -169,6 +170,10 @@ def _compute_gap_grid_baba(
     """
     Compute per-cell gap fraction using a circular neighbourhood of radius
     *baba_radius* around each cell centre (Buffered Area-Based Approach).
+
+    The denominator is ``N_gnd + N_veg`` (classified first returns only),
+    consistent with the standard grid estimator.  Unclassified, noise, and
+    building returns are excluded so they do not dilute the gap estimate.
     """
     from scipy.spatial import cKDTree
 

@@ -429,11 +429,15 @@ def segment_trees(
     all_points = np.concatenate([r[0] for r in valid])
     all_trees = pd.concat([r[1] for r in valid], ignore_index=True)
 
-    # Re-number TreeIDs 1…N globally (tile offsets served their purpose)
+    # Re-number TreeIDs 1…N globally (tile offsets served their purpose).
+    # Use a lookup array for O(n_points) remapping instead of O(n_ids × n_points).
     id_map = {old: new for new, old in enumerate(all_trees["tree_id"].values, start=1)}
     all_trees["tree_id"] = all_trees["tree_id"].map(id_map)
+    max_id = int(all_points["TreeID"].max())
+    lookup = np.zeros(max_id + 1, dtype=all_points["TreeID"].dtype)
     for old_id, new_id in id_map.items():
-        all_points["TreeID"][all_points["TreeID"] == old_id] = new_id
+        lookup[old_id] = new_id
+    all_points["TreeID"] = lookup[all_points["TreeID"]]
 
     all_trees = all_trees.sort_values("height", ascending=False).reset_index(drop=True)
     logger.info(
