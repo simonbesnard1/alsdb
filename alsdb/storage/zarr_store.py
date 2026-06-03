@@ -327,6 +327,11 @@ class ALSZarrStore:
             ``(min_x, min_y, max_x, max_y)`` of the tile's non-buffered
             extent.  Used to compute pixel offsets into the global grid.
         """
+        if year is None:
+            raise ValueError(
+                "write_tile() requires an integer survey year (e.g. year=2021), not None. "
+                "All processing functions that write to a store must receive an explicit year."
+            )
         res_key = _res_str(resolution)
         grp = self._root[res_key]
         attrs = dict(grp.attrs)

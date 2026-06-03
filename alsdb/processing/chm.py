@@ -51,6 +51,7 @@ import pdal
 from alsdb.processing._tiling import (
     _filter_ground_outliers,
     _hag_stage,
+    _require_year,
     array_crs,
     array_data_bbox,
     check_bbox_overlap,
@@ -680,12 +681,13 @@ def compute_chm(
     n_workers:
         Parallel workers (default 1 = sequential).
     """
+    _require_year(year)
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
-    if year is not None and not check_year_exists(year, provider):
+    if not check_year_exists(year, provider):
         return
-    if not overwrite and year is not None and store.has_data("chm", resolution, year):
+    if not overwrite and store.has_data("chm", resolution, year):
         logger.info(
             "CHM already present for year %d at %.1f m — skipping "
             "(pass overwrite=True to recompute)",
@@ -767,14 +769,15 @@ def compute_dtm(
     n_workers:
         Parallel workers (default 1 = sequential).
     """
+    _require_year(year)
     if dtm_method not in ("tin", "idw", "min"):
         raise ValueError(f"dtm_method must be 'tin', 'idw', or 'min'; got {dtm_method!r}")
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
-    if year is not None and not check_year_exists(year, provider):
+    if not check_year_exists(year, provider):
         return
-    if not overwrite and year is not None and store.has_data("dtm", resolution, year):
+    if not overwrite and store.has_data("dtm", resolution, year):
         logger.info("DTM already present for year %d at %.1f m — skipping", year, resolution)
         return
     store.ensure_group("dtm", resolution, effective_bbox, array_crs(provider), tile_size)
@@ -836,12 +839,13 @@ def compute_dsm(
     n_workers:
         Parallel workers (default 1 = sequential).
     """
+    _require_year(year)
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
-    if year is not None and not check_year_exists(year, provider):
+    if not check_year_exists(year, provider):
         return
-    if not overwrite and year is not None and store.has_data("dsm", resolution, year):
+    if not overwrite and store.has_data("dsm", resolution, year):
         logger.info("DSM already present for year %d at %.1f m — skipping", year, resolution)
         return
     store.ensure_group("dsm", resolution, effective_bbox, array_crs(provider), tile_size)
@@ -910,10 +914,11 @@ def compute_all(
         If ``False`` (default), skip products already present for *year*.
         If ``True``, recompute everything regardless.
     """
+    _require_year(year)
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
-    if year is not None and not check_year_exists(year, provider):
+    if not check_year_exists(year, provider):
         return
 
     # Determine which products still need computing

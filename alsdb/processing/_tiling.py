@@ -149,6 +149,15 @@ def array_data_bbox(provider) -> tuple[float, float, float, float]:
     )
 
 
+def _require_year(year) -> None:
+    """Raise a clear ValueError when *year* is None in a processing function."""
+    if year is None:
+        raise ValueError(
+            "year must be an integer survey year (e.g. year=2021), not None. "
+            "Call provider.available_years() to see what years are stored."
+        )
+
+
 def check_year_exists(year: int, provider) -> bool:
     """
     Return ``True`` if *year* falls within the ingested year range.

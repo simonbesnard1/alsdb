@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from alsdb.processing._tiling import (
+    _require_year,
     array_crs,
     array_data_bbox,
     attach_hag,
@@ -335,12 +336,13 @@ def compute_gap_fraction(
     n_workers:
         Parallel workers (default 1 = sequential).
     """
+    _require_year(year)
     effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
     if bbox is not None and not check_bbox_overlap(bbox, provider):
         return
-    if year is not None and not check_year_exists(year, provider):
+    if not check_year_exists(year, provider):
         return
-    if not overwrite and year is not None:
+    if not overwrite:
         gap_done = store.has_data("gap", resolution, year)
         lai_done = (not lai) or store.has_data("lai", resolution, year)
         if gap_done and lai_done:
