@@ -181,75 +181,92 @@ def _extract_metrics(
         metric values.  Cells below this threshold are set to ``np.nan`` for
         all metrics.  Default ``0.0`` disables the guard.
     """
-    from scipy.stats import binned_statistic_2d
-
     x_min, y_min, x_max, y_max = bbox
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
     ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
     x_edges = np.linspace(x_min, x_max, nx + 1)
     y_edges = np.linspace(y_min, y_max, ny + 1)
-    bins = [x_edges, y_edges]
+    n_cells = nx * ny
 
     x = points["X"]
     y = points["Y"]
     hag = points["HeightAboveGround"]
+    fr = points["ReturnNumber"] == 1
+    hag_fr = hag[fr]
 
     veg = np.isin(points["Classification"], _VEG_CLASSES) & (hag > 0)
-    x_v, y_v, hag_v = x[veg], y[veg], hag[veg]
+    hag_v = hag[veg]
 
-    def _pct(p):
-        def stat(v):
-            return float(np.percentile(v, p)) if len(v) else np.nan
+    def _bin(px: np.ndarray, py: np.ndarray) -> np.ndarray:
+        xi = np.clip(np.digitize(px, x_edges) - 1, 0, nx - 1)
+        yi = np.clip(np.digitize(py, y_edges) - 1, 0, ny - 1)
+        return xi * ny + yi
 
-        return stat
+    def _flip(g: np.ndarray) -> np.ndarray:
+        return np.flipud(g.T).astype(np.float32)
 
-    def _flip(g):
-        return np.flipud(np.where(np.isnan(g), np.nan, g).T).astype(np.float32)
+    # Bin all three point groups once — shared by every downstream metric.
+    cell_all = _bin(x, y)
+    cell_fr = _bin(x[fr], y[fr])
+    cell_v = _bin(x[veg], y[veg])
 
+    # --- Density ---
     cell_area = resolution**2
-    n_all = binned_statistic_2d(x, y, hag, statistic="count", bins=bins).statistic
-    density_grid = _flip(n_all / cell_area)
+    density_grid = _flip(
+        (np.bincount(cell_all, minlength=n_cells).astype(np.float64) / cell_area).reshape(nx, ny)
+    )
 
-    fr = points["ReturnNumber"] == 1
-    x_fr, y_fr, hag_fr = x[fr], y[fr], hag[fr]
-    above = (hag_fr > cc_threshold).astype(np.float32)
-    n_fr = binned_statistic_2d(
-        x_fr, y_fr, np.ones(fr.sum()), statistic="count", bins=bins
-    ).statistic
-    n_above = binned_statistic_2d(x_fr, y_fr, above, statistic="sum", bins=bins).statistic
+    # --- Canopy cover ---
+    n_fr_flat = np.bincount(cell_fr, minlength=n_cells).astype(np.float64)
+    n_above_flat = np.bincount(
+        cell_fr, weights=(hag_fr > cc_threshold).astype(np.float64), minlength=n_cells
+    )
     with np.errstate(invalid="ignore", divide="ignore"):
-        cc = _flip(np.where(n_fr > 0, n_above / n_fr, np.nan))
+        cc = _flip(np.where(n_fr_flat > 0, n_above_flat / n_fr_flat, np.nan).reshape(nx, ny))
 
-    # --- height percentiles and structure ---
-    hmean_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="mean", bins=bins).statistic
-    hmin_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="min", bins=bins).statistic
-    hmax_raw = binned_statistic_2d(x_v, y_v, hag_v, statistic="max", bins=bins).statistic
+    # --- Veg-point count (shared by hmean denominator and strata) ---
+    n_veg_flat = np.bincount(cell_v, minlength=n_cells).astype(np.float64)
 
+    # --- hmean via weighted bincount (pure C, one pass) ---
+    hag_sum_flat = np.bincount(cell_v, weights=hag_v.astype(np.float64), minlength=n_cells)
     with np.errstate(invalid="ignore", divide="ignore"):
-        denom = hmax_raw - hmin_raw
-        crr_raw = np.where(denom > 0, (hmean_raw - hmin_raw) / denom, np.nan)
+        hmean_flat = np.where(n_veg_flat > 0, hag_sum_flat / n_veg_flat, np.nan)
 
-    # --- height stratum proportions ---
-    # Count veg returns per cell once, then compute per-stratum fractions.
-    n_veg_cell = binned_statistic_2d(
-        x_v, y_v, np.ones(len(hag_v)), statistic="count", bins=bins
-    ).statistic
-
+    # --- Height strata proportions (six bincount calls, no Python per-bin work) ---
     strata_grids: dict[str, np.ndarray] = {}
     for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
-        indicator = ((hag_v > lo) & (hag_v <= hi)).astype(np.float32)
-        n_strata = binned_statistic_2d(x_v, y_v, indicator, statistic="sum", bins=bins).statistic
+        indicator = ((hag_v > lo) & (hag_v <= hi)).astype(np.float64)
+        n_strata = np.bincount(cell_v, weights=indicator, minlength=n_cells)
         with np.errstate(invalid="ignore", divide="ignore"):
-            prop = np.where(n_veg_cell > 0, n_strata / n_veg_cell, np.nan)
-        strata_grids[name] = _flip(prop)
+            prop = np.where(n_veg_flat > 0, n_strata / n_veg_flat, np.nan)
+        strata_grids[name] = _flip(prop.reshape(nx, ny))
 
-    # Bin vegetation points once — xi_v/yi_v reused for both FHD and percentiles.
-    xi_v = np.clip(np.digitize(x_v, x_edges) - 1, 0, nx - 1)
-    yi_v = np.clip(np.digitize(y_v, y_edges) - 1, 0, ny - 1)
+    # --- h50/h75/h95 + hmin + hmax in one grouped sort ---
+    # Sorting veg points by cell groups them; min/max come free from the same pass.
+    order = np.argsort(cell_v, kind="stable")
+    sorted_cells_v = cell_v[order]
+    sorted_hag_v = hag_v[order]
+    unique_cells_v, first_idx_v = np.unique(sorted_cells_v, return_index=True)
+    ends_v = np.append(first_idx_v[1:], len(sorted_hag_v))
 
-    # FHD via 3D histogram (x_cell × y_cell × hag_band): fully vectorised,
-    # no Python callback per bin.  Points above _FHD_MAX_H are excluded to
-    # match the original np.histogram(bins=_FHD_BINS) behaviour.
+    h50_flat = np.full(n_cells, np.nan, dtype=np.float64)
+    h75_flat = np.full(n_cells, np.nan, dtype=np.float64)
+    h95_flat = np.full(n_cells, np.nan, dtype=np.float64)
+    hmin_flat = np.full(n_cells, np.nan, dtype=np.float64)
+    hmax_flat = np.full(n_cells, np.nan, dtype=np.float64)
+    for _i, _cell in enumerate(unique_cells_v):
+        _h = sorted_hag_v[first_idx_v[_i] : ends_v[_i]]
+        h50_flat[_cell], h75_flat[_cell], h95_flat[_cell] = np.percentile(_h, [50, 75, 95])
+        hmin_flat[_cell] = _h.min()
+        hmax_flat[_cell] = _h.max()
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        denom_flat = hmax_flat - hmin_flat
+        crr_flat = np.where(denom_flat > 0, (hmean_flat - hmin_flat) / denom_flat, np.nan)
+
+    # --- FHD via 3D histogram (x_cell × y_cell × hag_band): fully vectorised ---
+    xi_v = cell_v // ny
+    yi_v = cell_v % ny
     fhd_mask = hag_v <= _FHD_MAX_H
     hag_bin_v = np.minimum(
         np.floor(hag_v[fhd_mask] / _FHD_BIN_SIZE).astype(np.intp), _FHD_N_BINS - 1
@@ -258,7 +275,7 @@ def _extract_metrics(
         (xi_v[fhd_mask], yi_v[fhd_mask], hag_bin_v), (nx, ny, _FHD_N_BINS)
     )
     counts_3d = (
-        np.bincount(flat_fhd, minlength=nx * ny * _FHD_N_BINS)
+        np.bincount(flat_fhd, minlength=n_cells * _FHD_N_BINS)
         .reshape(nx, ny, _FHD_N_BINS)
         .astype(np.float64)
     )
@@ -274,33 +291,17 @@ def _extract_metrics(
             np.float32
         )
 
-    # h50/h75/h95 in one grouped pass: sort by cell, then compute all three
-    # percentiles per cell together instead of three separate scans.
-    cell_v = xi_v * ny + yi_v
-    order = np.argsort(cell_v, kind="stable")
-    sorted_cells_v = cell_v[order]
-    sorted_hag_v = hag_v[order]
-    unique_cells_v, first_idx_v = np.unique(sorted_cells_v, return_index=True)
-    ends_v = np.append(first_idx_v[1:], len(sorted_hag_v))
-
-    h50_flat = np.full(nx * ny, np.nan, dtype=np.float32)
-    h75_flat = np.full(nx * ny, np.nan, dtype=np.float32)
-    h95_flat = np.full(nx * ny, np.nan, dtype=np.float32)
-    for _i, _cell in enumerate(unique_cells_v):
-        _h = sorted_hag_v[first_idx_v[_i] : ends_v[_i]]
-        h50_flat[_cell], h75_flat[_cell], h95_flat[_cell] = np.percentile(_h, [50, 75, 95])
-
     metrics: dict[str, np.ndarray] = {
         "h50": _flip(h50_flat.reshape(nx, ny)),
         "h75": _flip(h75_flat.reshape(nx, ny)),
         "h95": _flip(h95_flat.reshape(nx, ny)),
-        "hmax": _flip(hmax_raw),
-        "hmean": _flip(hmean_raw),
+        "hmax": _flip(hmax_flat.reshape(nx, ny)),
+        "hmean": _flip(hmean_flat.reshape(nx, ny)),
         "cc": cc,
         "density": density_grid,
         "fhd": fhd_grid,
         "vci": vci_grid,
-        "crr": _flip(crr_raw),
+        "crr": _flip(crr_flat.reshape(nx, ny)),
         **strata_grids,
     }
 
