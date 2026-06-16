@@ -54,8 +54,10 @@ from alsdb.processing._tiling import (
     array_crs,
     array_data_bbox,
     attach_hag,
+    baba_neighbourhoods,
     check_bbox_overlap,
     check_year_exists,
+    flip_to_north_up,
     query_to_array,
     run_tiled,
     tile_bboxes,
@@ -135,7 +137,7 @@ def _compute_gap_grid(
         sparse = (n_fr / cell_area) < min_density
         gap = np.where(sparse, np.nan, gap)
 
-    return np.flipud(gap.T).astype(np.float32)
+    return flip_to_north_up(gap, transpose=True)
 
 
 def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.ndarray:
@@ -175,30 +177,19 @@ def _compute_gap_grid_baba(
     consistent with the standard grid estimator.  Unclassified, noise, and
     building returns are excluded so they do not dilute the gap estimate.
     """
-    from scipy.spatial import cKDTree
-
-    x_min, y_min, x_max, y_max = bbox
-    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
-    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
-
-    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
-    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
-    CX, CY = np.meshgrid(cx_arr, cy_arr)
-    centres = np.column_stack([CX.ravel(), CY.ravel()])
-
     fr_mask = points["ReturnNumber"] == 1
     fr_pts = points[fr_mask]
     if len(fr_pts) == 0:
+        x_min, y_min, x_max, y_max = bbox
+        nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
+        ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
         return np.full((ny, nx), np.nan, dtype=np.float32)
 
-    xy_fr = np.column_stack([fr_pts["X"].astype(np.float64), fr_pts["Y"].astype(np.float64)])
-    kd = cKDTree(xy_fr)
-    indices_list = kd.query_ball_point(centres, r=baba_radius)
-
+    nx, ny, indices_list, neighbourhood_area = baba_neighbourhoods(
+        fr_pts, resolution, bbox, baba_radius
+    )
     cls_fr = fr_pts["Classification"]
     gap = np.full((ny, nx), np.nan, dtype=np.float32)
-
-    neighbourhood_area = np.pi * baba_radius**2
 
     for k, idxs in enumerate(indices_list):
         if not idxs:
@@ -215,7 +206,7 @@ def _compute_gap_grid_baba(
         if total > 0:
             gap[row, col] = n_gnd / total
 
-    return np.flipud(gap).astype(np.float32)
+    return flip_to_north_up(gap)
 
 
 # ---------------------------------------------------------------------------

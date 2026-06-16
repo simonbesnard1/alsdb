@@ -69,8 +69,10 @@ from alsdb.processing._tiling import (
     array_crs,
     array_data_bbox,
     attach_hag,
+    baba_neighbourhoods,
     check_bbox_overlap,
     check_year_exists,
+    flip_to_north_up,
     query_to_array,
     run_tiled,
     tile_bboxes,
@@ -203,7 +205,7 @@ def _extract_metrics(
         return xi * ny + yi
 
     def _flip(g: np.ndarray) -> np.ndarray:
-        return np.flipud(g.T).astype(np.float32)
+        return flip_to_north_up(g, transpose=True)
 
     # Bin all three point groups once — shared by every downstream metric.
     cell_all = _bin(x, y)
@@ -575,23 +577,10 @@ def _extract_metrics_baba(
         Minimum point density (pts m⁻²) for a neighbourhood to receive metric
         values.  Cells below this threshold are set to ``np.nan``.
     """
-    from scipy.spatial import cKDTree
-
-    x_min, y_min, x_max, y_max = bbox
-    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
-    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
-
-    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
-    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
-    CX, CY = np.meshgrid(cx_arr, cy_arr)
-    centres = np.column_stack([CX.ravel(), CY.ravel()])
-
-    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    kd = cKDTree(xy)
-    indices_list = kd.query_ball_point(centres, r=baba_radius)
-
+    nx, ny, indices_list, neighbourhood_area = baba_neighbourhoods(
+        points, resolution, bbox, baba_radius
+    )
     shape = (ny, nx)
-    neighbourhood_area = np.pi * baba_radius**2
 
     # Pre-allocate all output grids
     h50 = np.full(shape, np.nan, dtype=np.float64)
@@ -657,8 +646,7 @@ def _extract_metrics_baba(
         if n_fr > 0:
             cc[row, col] = float((hag_k[fr] > cc_threshold).sum()) / n_fr
 
-    def _flip(a: np.ndarray) -> np.ndarray:
-        return np.flipud(a).astype(np.float32)
+    _flip = flip_to_north_up
 
     return {
         "h50": _flip(h50),
@@ -691,10 +679,16 @@ def _process_tile_metrics(
     cc_threshold: float,
     baba_radius: float = 0.0,
     min_density: float = 0.0,
+    model_fn: Optional[Callable] = None,
 ) -> None:
+    """
+    Extract per-cell metrics and either write them all (``model_fn=None``,
+    used by :func:`compute_metrics`) or apply *model_fn* and write the
+    resulting AGB grid (used by :func:`compute_biomass`).
+    """
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
-        logger.debug("Metrics tile %d: no points, skipping", tile_index)
+        logger.debug("Tile %d: no points, skipping", tile_index)
         return
 
     points = attach_hag(arr)
@@ -716,54 +710,16 @@ def _process_tile_metrics(
             min_density=min_density,
         )
 
-    for name, grid in metrics.items():
-        store.write_tile(name, resolution, year, grid, crop_bbox)
-
-    logger.debug("Metrics tile %d written", tile_index)
-
-
-def _process_tile_biomass(
-    provider: "TileDBProvider",
-    query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
-    tile_index: int,
-    resolution: float,
-    year: Optional[int],
-    cc_threshold: float,
-    model_fn: Callable,
-    baba_radius: float = 0.0,
-    min_density: float = 0.0,
-) -> None:
-    arr = query_to_array(provider, query_bbox, year=year)
-    if arr.size == 0:
-        logger.debug("AGB tile %d: no points, skipping", tile_index)
+    if model_fn is None:
+        for name, grid in metrics.items():
+            store.write_tile(name, resolution, year, grid, crop_bbox)
+        logger.debug("Metrics tile %d written", tile_index)
         return
 
-    points = attach_hag(arr)
-    if baba_radius > 0:
-        metrics = _extract_metrics_baba(
-            points,
-            resolution,
-            bbox=crop_bbox,
-            baba_radius=baba_radius,
-            cc_threshold=cc_threshold,
-            min_density=min_density,
-        )
-    else:
-        metrics = _extract_metrics(
-            points,
-            resolution,
-            bbox=crop_bbox,
-            cc_threshold=cc_threshold,
-            min_density=min_density,
-        )
     agb = model_fn(metrics)
-
     if np.all(np.isnan(agb)):
         logger.debug("AGB tile %d: all NaN, skipping", tile_index)
         return
-
     store.write_tile("biomass", resolution, year, agb, crop_bbox)
     logger.debug("AGB tile %d written", tile_index)
 
@@ -936,7 +892,7 @@ def compute_biomass(
         f", min_density={min_density:.1f}" if min_density > 0 else "",
     )
     run_tiled(
-        _process_tile_biomass,
+        _process_tile_metrics,
         provider,
         tiles,
         store,

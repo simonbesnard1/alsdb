@@ -56,6 +56,7 @@ from alsdb.processing._tiling import (
     array_data_bbox,
     check_bbox_overlap,
     check_year_exists,
+    flip_to_north_up,
     query_to_array,
     run_tiled,
     tile_bboxes,
@@ -116,7 +117,7 @@ def _rasterise(
         bins=[x_edges, y_edges],
     ).statistic  # shape (nx, ny)
 
-    return np.flipud(grid.T).astype(np.float32)  # → (ny, nx) north-up
+    return flip_to_north_up(grid, transpose=True)  # → (ny, nx) north-up
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ def _dtm_tin(
         row = np.round((raster_pts["Y"] - cy0) / resolution - 0.5).astype(int)
         valid = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
         grid[row[valid], col[valid]] = raster_pts["Z"][valid].astype(np.float32)
-    grid = np.flipud(grid)  # south-up → north-up
+    grid = flip_to_north_up(grid)  # south-up → north-up
 
     # Fill cells outside the convex hull (tile edges, isolated voids)
     gnd_mask = arr["Classification"] == _GROUND_CLASS
@@ -266,7 +267,7 @@ def _dtm_idw(
     if max_distance is not None:
         values[nearest_dist > max_distance] = np.nan
 
-    return np.flipud(values.reshape(ny, nx)).astype(np.float32)
+    return flip_to_north_up(values.reshape(ny, nx))
 
 
 # ---------------------------------------------------------------------------

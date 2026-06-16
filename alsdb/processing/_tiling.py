@@ -410,6 +410,55 @@ def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int, **kwa
                 future.result()  # re-raise worker exceptions
 
 
+def flip_to_north_up(grid: np.ndarray, transpose: bool = False) -> np.ndarray:
+    """
+    Convert a south-up raster to north-up float32 orientation.
+
+    Set *transpose* when *grid* is shaped ``(nx, ny)`` (e.g. straight out of
+    ``reshape(nx, ny)`` or ``binned_statistic_2d``); leave it ``False`` when
+    *grid* is already ``(ny, nx)``.
+
+    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
+    and :mod:`alsdb.processing.biomass`.
+    """
+    if transpose:
+        grid = grid.T
+    return np.flipud(grid).astype(np.float32)
+
+
+def baba_neighbourhoods(
+    points: np.ndarray,
+    resolution: float,
+    bbox: tuple[float, float, float, float],
+    baba_radius: float,
+) -> tuple[int, int, list, float]:
+    """
+    Build per-cell circular-neighbourhood point indices for the Buffered
+    Area-Based Approach (BABA).
+
+    Returns ``(nx, ny, indices_list, neighbourhood_area)`` where
+    ``indices_list[row * nx + col]`` holds the indices into *points* that
+    fall within *baba_radius* of that cell's centre.
+
+    Shared by :mod:`alsdb.processing.gap` and :mod:`alsdb.processing.biomass`.
+    """
+    from scipy.spatial import cKDTree
+
+    x_min, y_min, x_max, y_max = bbox
+    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
+    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
+
+    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
+    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
+    CX, CY = np.meshgrid(cx_arr, cy_arr)
+    centres = np.column_stack([CX.ravel(), CY.ravel()])
+
+    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    indices_list = cKDTree(xy).query_ball_point(centres, r=baba_radius)
+
+    return nx, ny, indices_list, np.pi * baba_radius**2
+
+
 def tile_bboxes(
     bbox: tuple[float, float, float, float],
     tile_size: float,
