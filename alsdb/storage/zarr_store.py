@@ -72,6 +72,7 @@ import threading
 from pathlib import Path
 
 import numpy as np
+from retry import retry
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,13 @@ class ALSZarrStore:
             ", ".join(var_names),
         )
 
+    @retry(
+        (OSError, ConnectionError),
+        tries=10,
+        delay=5,
+        backoff=3,
+        logger=logger,
+    )
     def ensure_group(
         self,
         variable: str,
@@ -321,6 +329,13 @@ class ALSZarrStore:
     # Writing
     # ------------------------------------------------------------------
 
+    @retry(
+        (OSError, ConnectionError),
+        tries=10,
+        delay=5,
+        backoff=3,
+        logger=logger,
+    )
     def write_tile(
         self,
         variable: str,
@@ -486,6 +501,13 @@ class ALSZarrStore:
     # Introspection
     # ------------------------------------------------------------------
 
+    @retry(
+        (OSError, ConnectionError),
+        tries=10,
+        delay=5,
+        backoff=3,
+        logger=logger,
+    )
     def has_data(self, variable: str, resolution: float, year: int) -> bool:
         """
         Return ``True`` if *variable* already has a time slice for *year*.

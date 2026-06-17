@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import tiledb
+from retry import retry
 
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.utils.schema import TileDBSchemaConfig, create_schema
@@ -167,8 +168,7 @@ class ALSDatabase(TileDBProvider):
     def _save_manifest(self, manifest: Dict[str, dict]) -> None:
         if not self.array_exists():
             return
-        with self.open("w") as arr:
-            arr.meta[_MANIFEST_KEY] = json.dumps(manifest)
+        self._write_metadata(_MANIFEST_KEY, json.dumps(manifest))
 
     def list_ingested(self) -> List[dict]:
         """
@@ -251,6 +251,32 @@ class ALSDatabase(TileDBProvider):
         logger.info("Consolidation done.")
 
     # ------------------------------------------------------------------
+    # Retry-protected TileDB I/O
+    # ------------------------------------------------------------------
+
+    @retry(
+        (tiledb.TileDBError, ConnectionError),
+        tries=10,
+        delay=5,
+        backoff=3,
+        logger=logger,
+    )
+    def _write_to_tiledb(self, coords: tuple, data: Dict[str, np.ndarray]) -> None:
+        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as array:
+            array[coords] = data
+
+    @retry(
+        (tiledb.TileDBError, ConnectionError),
+        tries=10,
+        delay=5,
+        backoff=3,
+        logger=logger,
+    )
+    def _write_metadata(self, key: str, value: str) -> None:
+        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as array:
+            array.meta[key] = value
+
+    # ------------------------------------------------------------------
     # Writing
     # ------------------------------------------------------------------
 
@@ -292,8 +318,7 @@ class ALSDatabase(TileDBProvider):
                 a = _arr.schema.attr(i)
                 if a.name not in attrs:
                     attrs[a.name] = np.zeros(n, dtype=a.dtype)
-        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as arr:
-            arr[x, y, year_arr] = attrs
+        self._write_to_tiledb((x, y, year_arr), attrs)
         logger.debug("Wrote %d points (year=%d) to %s", len(x), year, self.array_uri)
 
     def _ingest_tile(
@@ -376,8 +401,7 @@ class ALSDatabase(TileDBProvider):
             ]
             attrs_all[name] = np.concatenate(parts)
 
-        with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as tdb_arr:
-            tdb_arr[x_all, y_all, year_arr] = attrs_all
+        self._write_to_tiledb((x_all, y_all, year_arr), attrs_all)
 
         logger.debug(
             "Wrote %d pts from %s (year=%d, crs=%s) → %s",

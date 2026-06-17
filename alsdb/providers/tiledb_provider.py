@@ -108,6 +108,7 @@ class TileDBProvider:
             # Timeouts and retries
             "vfs.s3.connect_timeout_ms": "60000",
             "vfs.s3.request_timeout_ms": "600000",
+            "vfs.s3.max_retries": "10",
             "vfs.s3.backoff_scale": "2.0",
             "vfs.s3.backoff_max_ms": "120000",
         }
