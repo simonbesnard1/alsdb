@@ -77,6 +77,28 @@ logger = logging.getLogger(__name__)
 
 _COORD_ARRAYS = {"x", "y", "time"}
 
+_S3_DEFAULT_RETRIES = 10
+
+
+def _apply_s3_retry_defaults(storage_options: dict) -> dict:
+    """Inject sensible retry defaults for S3 backends.
+
+    Configures both s3fs-level retries (covers connection drops, socket
+    timeouts) and botocore adaptive retry mode (covers throttling and
+    transient AWS/S3-compatible endpoint errors).  User-supplied values
+    in *storage_options* are never overwritten.
+    """
+    from botocore.config import Config
+
+    opts = storage_options.copy()
+    opts.setdefault("retries", _S3_DEFAULT_RETRIES)
+    client_kwargs = opts.setdefault("client_kwargs", {})
+    if "config" not in client_kwargs:
+        client_kwargs["config"] = Config(
+            retries={"max_attempts": _S3_DEFAULT_RETRIES, "mode": "adaptive"},
+        )
+    return opts
+
 
 def _res_str(resolution: float) -> str:
     """Format resolution as a group name, e.g. 1.0 → '1m', 0.5 → '0.5m'."""
@@ -114,9 +136,8 @@ class ALSZarrStore:
         self._storage_options = storage_options or {}
         _path_str = str(path)
         if self._storage_options and _path_str.startswith("s3://"):
-            self._root = zarr.open_group(
-                _path_str, mode=mode, storage_options=self._storage_options
-            )
+            s3_opts = _apply_s3_retry_defaults(self._storage_options)
+            self._root = zarr.open_group(_path_str, mode=mode, storage_options=s3_opts)
         else:
             self._root = zarr.open_group(_path_str, mode=mode)
         # Per-resolution-group locks so different variables can be written
