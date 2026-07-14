@@ -299,7 +299,7 @@ from alsdb.utils.viz import plot_waveform, plot_rh_profile  # noqa: E402
 fig_wave = plot_waveform(result, title=f"Brazil 2014 — ({cx:.0f}, {cy:.0f})")
 fig_wave.savefig("brazil_waveform.png", dpi=150, bbox_inches="tight")
 
-fig_rh = plot_rh_profile(result, title=f"Brazil 2014 — RH profile")
+fig_rh = plot_rh_profile(result, title="Brazil 2014 — RH profile")
 fig_rh.savefig("brazil_rh_profile.png", dpi=150, bbox_inches="tight")
 
 plt.show()

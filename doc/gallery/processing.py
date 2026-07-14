@@ -115,9 +115,7 @@ compute_metrics(
 # pass ``return_cov=True`` to also retrieve the parameter covariance matrix.
 
 from alsdb.processing.biomass import (  # noqa: E402
-    calibrate_naesset,
     compute_biomass,
-    naesset_model,
 )
 
 # Example calibration (requires at least 20 field plots):
