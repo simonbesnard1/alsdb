@@ -10,7 +10,7 @@ import pytest
 from alsdb.processing.chm import (
     _dtm_idw,
     _nn_fill,
-    _pit_fill,
+    _fill_pits,
     _rasterise,
     compute_all,
     compute_chm,
@@ -152,7 +152,7 @@ def test_compute_dtm_non_overlapping_bbox_skips(provider, store):
 
 
 # ---------------------------------------------------------------------------
-# _pit_fill — unit tests (pure numpy)
+# _fill_pits — unit tests (pure numpy)
 # ---------------------------------------------------------------------------
 
 
@@ -160,49 +160,50 @@ def _solid_chm(ny: int = 20, nx: int = 20, fill: float = 15.0) -> np.ndarray:
     return np.full((ny, nx), fill, dtype=np.float32)
 
 
-def test_pit_fill_all_valid_unchanged():
+def test_fill_pits_all_valid_unchanged():
     grid = _solid_chm()
-    result = _pit_fill(grid)
+    result = _fill_pits(grid)
     np.testing.assert_allclose(result, grid, atol=1e-4)
 
 
-def test_pit_fill_output_shape_preserved():
+def test_fill_pits_output_shape_preserved():
     grid = _solid_chm(10, 15)
-    assert _pit_fill(grid).shape == (10, 15)
+    assert _fill_pits(grid).shape == (10, 15)
 
 
-def test_pit_fill_output_dtype_float32():
+def test_fill_pits_output_dtype_float32():
     grid = _solid_chm()
-    assert _pit_fill(grid).dtype == np.float32
+    assert _fill_pits(grid).dtype == np.float32
 
 
-def test_pit_fill_fills_interior_nan_pit():
+def test_fill_pits_fills_interior_nan_pit():
     grid = _solid_chm()
     grid[10, 10] = np.nan  # single interior NaN
-    result = _pit_fill(grid)
+    result = _fill_pits(grid)
     assert not np.isnan(result[10, 10]), "Interior NaN pit should be filled"
 
 
-def test_pit_fill_edge_nan_may_remain():
+def test_fill_pits_edge_nan_may_remain():
     """NaN cells at the very edge of the array have no valid neighbours — may stay NaN."""
     grid = np.full((10, 10), 15.0, dtype=np.float32)
     grid[0, :] = np.nan  # entire top edge NaN
-    result = _pit_fill(grid)
+    result = _fill_pits(grid)
     # Interior should be unaffected
     np.testing.assert_allclose(result[5, 5], 15.0, atol=1e-3)
 
 
-def test_pit_fill_spike_removed():
+def test_fill_pits_leaves_isolated_peak_untouched():
+    """A genuine tall, isolated tree crown is a valid (non-NaN) cell and must
+    survive unchanged — only NaN cells are ever filled."""
     grid = _solid_chm(30, 30, fill=10.0)
-    # Plant an isolated spike much higher than neighbours
     grid[15, 15] = 200.0
-    result = _pit_fill(grid)
-    assert result[15, 15] < 100.0, "Spike should be suppressed"
+    result = _fill_pits(grid)
+    assert float(result[15, 15]) == pytest.approx(200.0)
 
 
-def test_pit_fill_all_nan_returns_all_nan():
+def test_fill_pits_all_nan_returns_all_nan():
     grid = np.full((10, 10), np.nan, dtype=np.float32)
-    result = _pit_fill(grid)
+    result = _fill_pits(grid)
     assert np.all(np.isnan(result))
 
 

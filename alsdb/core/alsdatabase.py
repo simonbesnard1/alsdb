@@ -78,6 +78,13 @@ class ALSDatabase(TileDBProvider):
         ``"SessionToken"``).
     s3_config_overrides:
         Raw TileDB ``vfs.s3.*`` overrides.
+    max_reader_threads:
+        Per-query internal TileDB thread count. Size relative to the largest
+        ``n_workers`` you'll pass to ``ingest_many``/``compute_*`` on this
+        instance, e.g. ``max(1, os.cpu_count() // n_workers)`` — otherwise
+        Python-level worker threads multiply with per-query internal threads
+        and can oversubscribe the machine. See
+        :class:`~alsdb.providers.tiledb_provider.TileDBProvider` for details.
     """
 
     def __init__(
@@ -89,6 +96,7 @@ class ALSDatabase(TileDBProvider):
         region: str = "eu-central-1",
         credentials: Optional[Dict[str, str]] = None,
         s3_config_overrides: Optional[Dict[str, str]] = None,
+        max_reader_threads: Optional[int] = None,
     ) -> None:
         super().__init__(
             storage_type=storage_type,
@@ -97,6 +105,7 @@ class ALSDatabase(TileDBProvider):
             region=region,
             credentials=credentials,
             s3_config_overrides=s3_config_overrides,
+            max_reader_threads=max_reader_threads,
         )
         # None means "derive from first tile's CRS at ingest time"
         self._schema_cfg = schema_cfg
@@ -650,7 +659,7 @@ class ALSDatabase(TileDBProvider):
         for batch_start in range(0, n_pending, consolidate_every):
             batch = pending[batch_start : batch_start + consolidate_every]
 
-            with ThreadPoolExecutor(n_workers=n_workers) as executor:
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
                 future_to_path = {executor.submit(_worker, p): p for p in batch}
                 for future in as_completed(future_to_path):
                     path = future_to_path[future]

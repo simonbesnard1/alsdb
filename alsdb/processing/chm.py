@@ -275,31 +275,27 @@ def _dtm_idw(
 # ---------------------------------------------------------------------------
 
 
-def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
+def _fill_pits(grid: np.ndarray, window: int = 3) -> np.ndarray:
     """
-    Remove spurious pits (NaN holes inside the canopy) and spikes from a CHM.
+    Fill NaN pits (small gaps inside the canopy footprint) in a CHM.
 
-    Two-pass approach:
-    1. Fill NaN pits adjacent to valid canopy with local median.
-    2. Detect spikes via Laplacian (sharp local maxima) and replace them with
-       the local median.  The Laplacian threshold is adaptive (99th percentile
-       of all non-zero Laplacian values over *interior* valid pixels only),
-       so mild canopy curvature is kept and boundary artefacts are avoided.
+    Only ever fills cells that are already NaN, with the local median of
+    their valid neighbours - a cell that already has a value is never
+    modified, so a genuine tall or isolated tree crown is left untouched.
 
     Parameters
     ----------
     grid:
         Input CHM as ``(ny, nx)`` float32 north-up array.
     window:
-        Neighbourhood window size for median filter (default 3 = 3×3 pixels).
+        Neighbourhood window size for the median filter (default 3 = 3×3 pixels).
     """
-    from scipy.ndimage import binary_dilation, binary_erosion, laplace, median_filter
+    from scipy.ndimage import binary_dilation, median_filter
 
     out = grid.copy()
     nan_mask = np.isnan(out)
     valid_mask = ~nan_mask
 
-    # Pass 1 — fill NaN pits that are directly adjacent to valid canopy
     if nan_mask.any():
         adjacent = nan_mask & binary_dilation(valid_mask, iterations=1)
         if adjacent.any():
@@ -307,27 +303,6 @@ def _pit_fill(grid: np.ndarray, window: int = 3) -> np.ndarray:
             # use reflect mode so the median filter itself doesn't need zero-padding.
             local_med = median_filter(np.where(nan_mask, np.nanmedian(out), out), size=window)
             out = np.where(adjacent, local_med.astype(np.float32), out)
-            valid_mask = ~np.isnan(out)
-
-    # Pass 2 — Laplacian spike detection restricted to *interior* valid pixels.
-    # Interior = valid pixels that are not adjacent to any NaN region.  Excluding
-    # boundary pixels prevents the large Laplacian values caused by the canopy→NaN
-    # step from being counted in the threshold or triggering false detections.
-    interior_mask = valid_mask & binary_erosion(valid_mask, iterations=1)
-
-    # Compute Laplacian only on valid data; fill NaN with the local median so
-    # no artificial discontinuities are introduced at data boundaries.
-    filled = np.where(nan_mask, np.nanmedian(out) if valid_mask.any() else 0.0, out)
-    lap = np.abs(laplace(filled.astype(np.float64)))
-
-    lap_interior = lap[interior_mask]
-    lap_interior_nonzero = lap_interior[lap_interior > 0]
-    if lap_interior_nonzero.size > 0:
-        threshold = float(np.percentile(lap_interior_nonzero, 99))
-        spike_mask = interior_mask & (lap > threshold)
-        if spike_mask.any():
-            local_med = median_filter(filled, size=window)
-            out = np.where(spike_mask, local_med.astype(np.float32), out)
 
     return out.astype(np.float32)
 
@@ -401,7 +376,7 @@ def _process_tile_chm(
         statistic=height_statistic,
     )
     if pit_fill:
-        grid = _pit_fill(grid)
+        grid = _fill_pits(grid)
     store.write_tile("chm", resolution, year, grid, crop_bbox)
     logger.debug("CHM tile %d written", tile_index)
 
@@ -615,7 +590,7 @@ def _process_tile_all(
                     height_statistic,
                 )
                 if pit_fill:
-                    chm_grid = _pit_fill(chm_grid)
+                    chm_grid = _fill_pits(chm_grid)
                 store.write_tile("chm", resolution, year, chm_grid, crop_bbox)
         except RuntimeError as exc:
             if "no points" not in str(exc).lower():

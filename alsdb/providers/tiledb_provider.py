@@ -39,6 +39,18 @@ class TileDBProvider:
     s3_config_overrides:
         Optional dictionary of raw TileDB ``vfs.s3.*`` config keys to
         override after the defaults are applied (useful for experiments).
+    max_reader_threads:
+        Per-query internal thread count for TileDB (``sm.num_reader_threads``,
+        ``sm.num_tiledb_threads``, ``sm.compute_concurrency_level``,
+        ``sm.io_concurrency_level``). Each query on this context can fan out
+        internally to this many threads *inside libtiledb* — if the caller
+        also runs several queries concurrently at the Python level (e.g. a
+        ``ThreadPoolExecutor`` with ``n_workers`` workers), the two multiply,
+        so this should be sized relative to that: e.g.
+        ``max(1, os.cpu_count() // n_workers)``. Defaults to a conservative
+        ``min(cpu_count, 8)`` for local storage (CPU-bound decompression) and
+        ``min(cpu_count * 4, 64)`` for S3 (network-bound, tolerates more
+        concurrent threads) when left unset.
     """
 
     def __init__(
@@ -49,12 +61,14 @@ class TileDBProvider:
         region: str = "eu-central-1",
         credentials: Optional[Dict[str, str]] = None,
         s3_config_overrides: Optional[Dict[str, str]] = None,
+        max_reader_threads: Optional[int] = None,
     ) -> None:
         if not storage_type or not isinstance(storage_type, str):
             raise ValueError("'storage_type' must be a non-empty string.")
 
         self.storage_type = storage_type.lower()
         self.s3_config_overrides = s3_config_overrides or {}
+        self.max_reader_threads = max_reader_threads
 
         if self.storage_type == "s3":
             if not uri:
@@ -86,8 +100,9 @@ class TileDBProvider:
         region: str,
     ) -> tuple[Dict[str, str], tiledb.Ctx]:
         cores = os.cpu_count() or 8
-        min(cores * 4, 64)
-        min(cores * 8, 256)
+        # S3 reads are network-bound (threads mostly wait on I/O), so a higher
+        # default than the local/CPU-bound case is fine when unset.
+        reader_threads = str(self.max_reader_threads or min(cores * 4, 64))
 
         # endpoint_override must be hostname[:port] only — strip scheme if present
         endpoint = url.removeprefix("https://").removeprefix("http://").rstrip("/")
@@ -98,6 +113,10 @@ class TileDBProvider:
             "vfs.s3.region": region,
             "vfs.s3.scheme": "https",
             "vfs.s3.use_virtual_addressing": "false",
+            "sm.num_reader_threads": reader_threads,
+            "sm.num_tiledb_threads": reader_threads,
+            "sm.compute_concurrency_level": reader_threads,
+            "sm.io_concurrency_level": reader_threads,
             # Ceph compatibility: disable chunked payload signing (XAmzContentSHA256Mismatch)
             "vfs.s3.aws_payload_signing": "false",
             # Multipart upload — required for large LAZ files
@@ -127,13 +146,26 @@ class TileDBProvider:
         return cfg, tiledb.Ctx(tiledb.Config(cfg))
 
     def _initialize_local_context(self) -> tuple[Dict[str, str], tiledb.Ctx]:
+        # Reader/compute/IO thread counts are per-query, inside libtiledb — and
+        # callers commonly run several TileDB queries concurrently themselves
+        # (e.g. run_tiled()'s ThreadPoolExecutor). A hardcoded 32 here means
+        # N concurrent Python workers each fan out to 32 more internal threads,
+        # oversubscribing the machine badly. Scale by core count instead, or
+        # use max_reader_threads if the caller specified one explicitly.
+        cores = os.cpu_count() or 8
+        reader_threads = str(self.max_reader_threads or min(cores, 8))
         cfg = {
-            "py.init_buffer_bytes": str(4 * 1024**3),  # 4 GiB
-            "sm.tile_cache_size": str(4 * 1024**3),  # 4 GiB
-            "sm.num_reader_threads": "32",
-            "sm.num_tiledb_threads": "32",
-            "sm.compute_concurrency_level": "32",
-            "sm.io_concurrency_level": "32",
+            # Initial per-query read buffer. 4 GiB was requested unconditionally
+            # on every query regardless of actual tile size (typically tens of
+            # MB) - with several concurrent worker threads this caused genuine
+            # MemoryErrors. TileDB transparently grows this via incomplete-query
+            # retries if a tile genuinely needs more.
+            "py.init_buffer_bytes": str(256 * 1024**2),  # 256 MiB
+            "sm.tile_cache_size": str(1 * 1024**3),  # 1 GiB
+            "sm.num_reader_threads": reader_threads,
+            "sm.num_tiledb_threads": reader_threads,
+            "sm.compute_concurrency_level": reader_threads,
+            "sm.io_concurrency_level": reader_threads,
         }
         return cfg, tiledb.Ctx(cfg)
 
