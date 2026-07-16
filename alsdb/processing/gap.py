@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from alsdb.processing._tiling import (
+    VEG_CLASSES as _VEG_CLASSES,
     _require_year,
     array_crs,
     array_data_bbox,
@@ -70,7 +71,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
-_VEG_CLASSES = (3, 4, 5)
 _LAI_K_DEFAULT = 0.5
 _LAI_MAX = 15.0  # physical ceiling — raised from 10 to cover dense tropical canopies
 

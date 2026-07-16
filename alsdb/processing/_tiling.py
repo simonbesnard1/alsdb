@@ -34,6 +34,9 @@ PDAL_DTYPES: dict[str, type] = {
     **LAS_ATTRIBUTES,
 }
 
+# LAS classification codes treated as "vegetation".
+VEG_CLASSES = (3, 4, 5)
+
 
 def query_to_array(
     provider: "TileDBProvider",

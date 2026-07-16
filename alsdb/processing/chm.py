@@ -49,6 +49,7 @@ import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
+    VEG_CLASSES as _VEG_CLASSES,
     _filter_ground_outliers,
     _hag_stage,
     _require_year,
@@ -69,7 +70,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
-_VEG_CLASSES = (3, 4, 5)
 _PITFREE_THRESHOLDS = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
 
 

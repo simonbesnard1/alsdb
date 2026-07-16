@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 
 from alsdb.processing._tiling import (
+    VEG_CLASSES as _VEG_CLASSES,
     _require_year,
     array_crs,
     array_data_bbox,
@@ -84,7 +85,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_VEG_CLASSES = (3, 4, 5)
 _DEFAULT_CC_THRESHOLD = 2.0  # m — first returns above this count as "canopy"
 
 _METRIC_NAMES = [
