@@ -70,6 +70,31 @@ logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
 _VEG_CLASSES = (3, 4, 5)
+_PITFREE_THRESHOLDS = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
+
+
+def _classification_ranges(classes: tuple[int, ...]) -> str:
+    """
+    Build a PDAL ``filters.range`` limits string for a (possibly
+    non-contiguous) set of classification codes.
+
+    ``Classification[a:b]`` only expresses one contiguous range - simply
+    taking ``min``/``max`` of an arbitrary class tuple like ``(1, 3, 4, 5)``
+    would wrongly also admit Class 2 (ground). This groups the sorted classes
+    into contiguous runs and joins them, repeating the dimension name per
+    group as PDAL requires (bracket-continuation without repeating the name
+    fails with "No dimension name"), e.g. ``(1, 3, 4, 5)`` ->
+    ``"Classification[1:1],Classification[3:5]"``.
+    """
+    codes = sorted(set(classes))
+    groups: list[list[int]] = []
+    for c in codes:
+        if groups and c == groups[-1][-1] + 1:
+            groups[-1].append(c)
+        else:
+            groups.append([c])
+    parts = [f"Classification[{g[0]}:{g[-1]}]" for g in groups]
+    return ",".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -157,31 +182,62 @@ def _nn_fill(
     return out
 
 
-def _dtm_tin(
+def _delaunay_raster(
     arr: np.ndarray,
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
+    value_field: str = "Z",
 ) -> np.ndarray:
     """
     TIN interpolation via PDAL ``filters.delaunay`` + ``filters.faceraster``.
 
-    The full buffered point array *arr* is passed to ``filters.delaunay``
-    without pre-cropping so that buffer ground points contribute to edge
-    triangles, then ``filters.faceraster`` restricts output to *crop_bbox*.
-    Any cells that remain NaN after triangulation (outside the convex hull)
-    are filled by nearest-neighbour from the ground points.
+    Triangulates *arr* and rasterises to *crop_bbox*.  *arr* is passed in
+    without pre-cropping so that points beyond *crop_bbox* still contribute
+    to edge triangles; ``filters.faceraster`` restricts the output raster to
+    *crop_bbox* on its own.
+
+    *value_field* selects which per-point field gets interpolated.
+    ``filters.faceraster`` always rasterises whatever is in ``Z`` — so for
+    any other field (e.g. ``"HeightAboveGround"``, used by
+    :func:`_pitfree_rasterise`), a copy of *arr* has ``Z`` overwritten with
+    that field before triangulation.  *arr*'s dtype must already declare a
+    ``Z`` field (even if its values are about to be overwritten) since a
+    structured array's fields can't be added on the fly.
+
+    ``filters.faceraster``'s interpolated raster is only materialised
+    through a downstream raster-writer stage — reading the pipeline's point
+    array afterward (what this function used to do) silently returns the
+    *input* points completely unchanged: same X/Y/Z, same count, empty
+    stage metadata. Confirmed empirically, not documented behaviour any
+    docstring here should have assumed. So this writes to GDAL's in-memory
+    ``/vsimem/`` filesystem (no real disk I/O) via ``writers.raster`` and
+    reads the actual interpolated grid back with rasterio.
+
+    Returns a ``(ny, nx)`` float32 north-up array. All-NaN if *arr* has
+    fewer than 3 points, or if the triangulation itself fails (degenerate/
+    collinear input) — treated as "this input contributes nothing" rather
+    than raised, since callers such as :func:`_pitfree_rasterise` combine
+    several such rasters and a single failed layer shouldn't abort the rest.
     """
     cx0, cy0, cx1, cy1 = crop_bbox
     nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
     ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
+    empty = np.full((ny, nx), np.nan, dtype=np.float32)
 
+    if len(arr) < 3:
+        return empty
+
+    if value_field != "Z":
+        arr = arr.copy()
+        arr["Z"] = arr[value_field]
+
+    import uuid
+
+    import rasterio
+    import rasterio.shutil as rio_shutil
+
+    vsi_path = f"/vsimem/_delaunay_raster_{uuid.uuid4().hex}.tif"
     stages = [
-        {
-            "type": "filters.range",
-            "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]",
-        },
-        # No crop before delaunay — keep buffered points so edge triangles
-        # are built from context beyond crop_bbox, then faceraster clips output.
         {"type": "filters.delaunay"},
         {
             "type": "filters.faceraster",
@@ -191,25 +247,99 @@ def _dtm_tin(
             "width": nx,
             "height": ny,
         },
+        {"type": "writers.raster", "gdaldriver": "GTiff", "filename": vsi_path},
     ]
-    raster_pts = _run(stages, arr)
+    try:
+        _run(stages, arr)
+        with rasterio.open(vsi_path) as ds:
+            band = ds.read(1).astype(np.float32)
+            nodata = ds.nodata
+        if nodata is not None:
+            band = np.where(band == nodata, np.nan, band).astype(np.float32)
+        return band
+    except RuntimeError as exc:
+        if "no points" in str(exc).lower():
+            return empty
+        logger.debug("_delaunay_raster: triangulation failed (%s), returning all-NaN", exc)
+        return empty
+    finally:
+        try:
+            rio_shutil.delete(vsi_path)
+        except Exception:
+            pass
 
-    grid = np.full((ny, nx), np.nan, dtype=np.float32)
-    if len(raster_pts) > 0:
-        # Cell centres: X = cx0 + (col + 0.5)*res, Y = cy0 + (row + 0.5)*res
-        col = np.round((raster_pts["X"] - cx0) / resolution - 0.5).astype(int)
-        row = np.round((raster_pts["Y"] - cy0) / resolution - 0.5).astype(int)
-        valid = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
-        grid[row[valid], col[valid]] = raster_pts["Z"][valid].astype(np.float32)
-    grid = flip_to_north_up(grid)  # south-up → north-up
 
-    # Fill cells outside the convex hull (tile edges, isolated voids)
+def _dtm_tin(
+    arr: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+) -> np.ndarray:
+    """
+    Ground TIN via :func:`_delaunay_raster`, with nearest-neighbour fallback.
+
+    Ground points (Class 2) are extracted from the full buffered array
+    *before* triangulation so that buffer points contribute to edge
+    triangles, matching :func:`_delaunay_raster`'s no-precrop contract. Any
+    cells that remain NaN after triangulation (outside the convex hull) are
+    filled by nearest-neighbour from the same ground points.
+    """
+    gnd_pts = _run(
+        [{"type": "filters.range", "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"}],
+        arr,
+    )
+    grid = _delaunay_raster(gnd_pts, crop_bbox, resolution, value_field="Z")
+
     gnd_mask = arr["Classification"] == _GROUND_CLASS
     gnd = arr[gnd_mask]
     if len(gnd) > 0:
         grid = _nn_fill(grid, gnd, crop_bbox, resolution)
 
     return grid
+
+
+def _mask_by_point_distance(
+    grid: np.ndarray,
+    points: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+    max_distance: float,
+) -> np.ndarray:
+    """
+    Null out (set NaN) cells in *grid* whose nearest point in *points* is
+    farther than *max_distance* (metres).
+
+    Delaunay triangulation interpolates across the full interior of a point
+    set's convex hull, including long triangles spanning genuine gaps
+    between distant, sparse clusters with nothing supporting the surface in
+    between - confirmed on real data via :func:`_pitfree_rasterise` giving
+    ~100% cell coverage where naive per-cell binning only covered ~20-30%.
+    This bounds how far that interpolation is trusted, mirroring LAStools'
+    own ``-spike_free`` ``buffer`` parameter.
+
+    Complements :func:`_gate_by_ground_distance` (which drops vegetation
+    points before rasterisation, based on distance to *ground* points) -
+    this instead masks the rasterised cells themselves, based on distance to
+    the same layer's own points, after triangulation.
+    """
+    from scipy.spatial import cKDTree
+
+    valid_mask = ~np.isnan(grid)
+    if not valid_mask.any() or len(points) == 0:
+        return grid
+
+    cx0, _, _, cy1 = crop_bbox
+    row_idx, col_idx = np.where(valid_mask)
+    # north-up: row 0 = top → actual Y = cy1 - (row + 0.5) * resolution
+    qx = cx0 + (col_idx + 0.5) * resolution
+    qy = cy1 - (row_idx + 0.5) * resolution
+
+    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
+
+    out = grid.copy()
+    too_far = dist > max_distance
+    out[row_idx[too_far], col_idx[too_far]] = np.nan
+    return out
 
 
 def _dtm_idw(
@@ -268,6 +398,139 @@ def _dtm_idw(
         values[nearest_dist > max_distance] = np.nan
 
     return flip_to_north_up(values.reshape(ny, nx))
+
+
+def _gate_by_ground_distance(
+    points: np.ndarray,
+    ground: np.ndarray,
+    max_distance: Optional[float],
+) -> np.ndarray:
+    """
+    Drop points farther than *max_distance* from the nearest ground point.
+
+    ``filters.hag_delaunay``/``filters.hag_nn`` will produce a
+    ``HeightAboveGround`` value for a point regardless of how far it sits
+    from real ground support - extrapolating from a distant or
+    poorly-conditioned triangle rather than admitting the estimate is
+    unreliable. Dropping the point instead leaves that cell ``NaN`` in the
+    output, which is more honest than a confident but unsupported guess.
+
+    Parameters
+    ----------
+    points:
+        Vegetation points with an attached ``HeightAboveGround`` field.
+    ground:
+        Class-2 ground points from the same (buffered) query - the source
+        of "real local support", independent of whichever ground points
+        actually fed the HAG interpolation.
+    max_distance:
+        Maximum distance (metres) to the nearest ground point. ``None``
+        disables gating (default - preserves prior behaviour).
+    """
+    if max_distance is None or len(points) == 0 or len(ground) == 0:
+        return points
+
+    from scipy.spatial import cKDTree
+
+    gnd_xy = np.column_stack([ground["X"].astype(np.float64), ground["Y"].astype(np.float64)])
+    pts_xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1)
+    return points[dist <= max_distance]
+
+
+# ---------------------------------------------------------------------------
+# Pit-free canopy-top rasterisation
+# ---------------------------------------------------------------------------
+
+
+def _pitfree_rasterise(
+    points: np.ndarray,
+    crop_bbox: tuple[float, float, float, float],
+    resolution: float,
+    thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
+    max_distance: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Pit-free CHM rasterisation (Khosravipour et al., 2014), adapted to
+    per-point ``HeightAboveGround`` instead of raw elevation.
+
+    For each height threshold, builds an independent Delaunay TIN from
+    points at or above that threshold and rasterises it (:func:`_delaunay_raster`,
+    ``value_field="HeightAboveGround"``); the final grid is the cell-wise
+    maximum across all threshold layers. A higher threshold excludes the
+    spurious low return that would otherwise triangulate into an interior
+    "pit" at that cell, while lower thresholds still cover the rest of the
+    canopy elsewhere in the tile — so pits are avoided during surface
+    construction itself, rather than detected and patched afterward like
+    :func:`_fill_pits`/:func:`_fill_low_confidence_dips` do for naive
+    per-cell max-binning.
+
+    Delaunay triangulation interpolates across the *full* interior of a
+    point set's convex hull, including long triangles spanning genuine gaps
+    between distant, sparse vegetation clusters with nothing supporting the
+    surface in between - confirmed on real data giving ~100% cell coverage
+    where naive per-cell binning only covered ~20-30% (the same coverage
+    mismatch found in LAStools' own TIN-based veg DSM during benchmarking).
+    *max_distance*, if set, masks out (:func:`_mask_by_point_distance`) any
+    cell whose nearest point in that same layer is farther away, mirroring
+    LAStools' own ``-spike_free`` ``buffer`` parameter. ``None`` (default)
+    disables masking - the layer is left exactly as :func:`_delaunay_raster`
+    produces it, matching :func:`_dtm_tin`'s unconditional fill for the
+    (genuinely continuous) ground surface, which vegetation height is not.
+
+    A cell with no threshold layer's support at all (or masked out of all of
+    them) stays NaN, same meaning as before pit-free existed; the pipeline's
+    existing final ``pit_fill`` step (see :func:`_process_tile_chm`/
+    :func:`_process_tile_all`) patches genuinely small residual gaps
+    afterward, identically to naive max-binning.
+
+    Parameters
+    ----------
+    points:
+        HAG-normalised, already classification-filtered (and optionally
+        ground-distance-gated) vegetation points — the same input that
+        would otherwise go straight into ``_rasterise(..., statistic="max")``.
+        Not pre-cropped to *crop_bbox*: each threshold layer's triangulation
+        benefits from the same buffered-context handling as
+        :func:`_delaunay_raster`/:func:`_dtm_tin`.
+    thresholds:
+        Increasing sequence of height cutoffs in metres (default
+        ``(0, 2, 5, 10, 15, 20)``). Not adaptive to point density — the same
+        limitation LAStools' own ``-spike_free`` defaults have; tune for a
+        specific survey's point density if needed.
+    max_distance:
+        Maximum distance (metres) from a cell to that layer's nearest point
+        before the cell is masked out instead of trusted. ``None`` (default)
+        disables masking; set it to bound extrapolation across genuine
+        vegetation gaps (see above).
+
+    Returns
+    -------
+    A ``(ny, nx)`` float32 north-up array. NaN wherever no threshold layer
+    covers a cell (equivalent to a prior "no data" cell).
+    """
+    cx0, cy0, cx1, cy1 = crop_bbox
+    nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
+    ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
+    stacked = np.full((len(thresholds), ny, nx), np.nan, dtype=np.float32)
+
+    for i, t in enumerate(thresholds):
+        layer_pts = points[points["HeightAboveGround"] >= t]
+        if len(layer_pts) < 3:
+            continue
+        layer_grid = _delaunay_raster(
+            layer_pts, crop_bbox, resolution, value_field="HeightAboveGround"
+        )
+        if max_distance is not None:
+            layer_grid = _mask_by_point_distance(
+                layer_grid, layer_pts, crop_bbox, resolution, max_distance
+            )
+        stacked[i] = layer_grid
+
+    all_nan_cols = np.all(np.isnan(stacked), axis=0)
+    grid = np.full((ny, nx), np.nan, dtype=np.float32)
+    grid[~all_nan_cols] = np.nanmax(stacked[:, ~all_nan_cols], axis=0)
+    return grid
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +598,11 @@ def _process_tile_chm(
     first_returns_only: bool,
     height_statistic: str = "max",
     pit_fill: bool = True,
+    max_ground_distance: Optional[float] = None,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    pitfree: bool = False,
+    pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
+    pitfree_max_distance: Optional[float] = None,
 ) -> None:
     arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
@@ -344,7 +612,7 @@ def _process_tile_chm(
     cx0, cy0, cx1, cy1 = crop_bbox
     # Filter to vegetation classes; optionally restrict to first returns so
     # that only the top-of-canopy surface is modelled (recommended).
-    veg_limits = f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"
+    veg_limits = _classification_ranges(veg_classes)
     if first_returns_only:
         veg_limits += ",ReturnNumber[1:1]"
     stages = [
@@ -354,8 +622,13 @@ def _process_tile_chm(
             "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
         },
         {"type": "filters.range", "limits": veg_limits},
-        {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
     ]
+    if not pitfree:
+        # Naive max-binning needs points pre-cropped to the tile; pit-free's
+        # per-threshold Delaunay layers instead crop via faceraster after
+        # triangulating the full buffered extent, so edge triangles have
+        # real neighbouring context (same reasoning as _dtm_tin).
+        stages.append({"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
     try:
         points = _run(stages, arr)
     except RuntimeError as exc:
@@ -367,14 +640,29 @@ def _process_tile_chm(
     if len(points) == 0:
         return
 
-    grid = _rasterise(
-        points["X"],
-        points["Y"],
-        points["HeightAboveGround"],
-        crop_bbox,
-        resolution,
-        statistic=height_statistic,
-    )
+    if max_ground_distance is not None:
+        gnd = arr[arr["Classification"] == _GROUND_CLASS]
+        points = _gate_by_ground_distance(points, gnd, max_ground_distance)
+        if len(points) == 0:
+            return
+
+    if pitfree:
+        grid = _pitfree_rasterise(
+            points,
+            crop_bbox,
+            resolution,
+            thresholds=pitfree_thresholds,
+            max_distance=pitfree_max_distance,
+        )
+    else:
+        grid = _rasterise(
+            points["X"],
+            points["Y"],
+            points["HeightAboveGround"],
+            crop_bbox,
+            resolution,
+            statistic=height_statistic,
+        )
     if pit_fill:
         grid = _fill_pits(grid)
     store.write_tile("chm", resolution, year, grid, crop_bbox)
@@ -497,6 +785,11 @@ def _process_tile_all(
     height_statistic: str = "max",
     dtm_method: str = "tin",
     pit_fill: bool = True,
+    max_ground_distance: Optional[float] = None,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    pitfree: bool = False,
+    pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
+    pitfree_max_distance: Optional[float] = None,
 ) -> None:
     """
     Single-pass tile worker for :func:`compute_all`.
@@ -566,7 +859,7 @@ def _process_tile_all(
 
     # --- CHM (hag_delaunay/hag_nn + veg first returns) ------------------
     if need_chm:
-        veg_limits = f"Classification[{_VEG_CLASSES[0]}:{_VEG_CLASSES[-1]}]"
+        veg_limits = _classification_ranges(veg_classes)
         if first_returns_only:
             veg_limits += ",ReturnNumber[1:1]"
         stages = [
@@ -576,19 +869,32 @@ def _process_tile_all(
                 "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
             },
             {"type": "filters.range", "limits": veg_limits},
-            {"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"},
         ]
+        if not pitfree:
+            stages.append({"type": "filters.crop", "bounds": f"([{cx0},{cx1}],[{cy0},{cy1}])"})
         try:
             pts = _run(stages, arr)
+            if max_ground_distance is not None:
+                gnd = arr[arr["Classification"] == _GROUND_CLASS]
+                pts = _gate_by_ground_distance(pts, gnd, max_ground_distance)
             if len(pts):
-                chm_grid = _rasterise(
-                    pts["X"],
-                    pts["Y"],
-                    pts["HeightAboveGround"],
-                    crop_bbox,
-                    resolution,
-                    height_statistic,
-                )
+                if pitfree:
+                    chm_grid = _pitfree_rasterise(
+                        pts,
+                        crop_bbox,
+                        resolution,
+                        thresholds=pitfree_thresholds,
+                        max_distance=pitfree_max_distance,
+                    )
+                else:
+                    chm_grid = _rasterise(
+                        pts["X"],
+                        pts["Y"],
+                        pts["HeightAboveGround"],
+                        crop_bbox,
+                        resolution,
+                        height_statistic,
+                    )
                 if pit_fill:
                     chm_grid = _fill_pits(chm_grid)
                 store.write_tile("chm", resolution, year, chm_grid, crop_bbox)
@@ -620,6 +926,11 @@ def compute_chm(
     first_returns_only: bool = True,
     height_statistic: str = "max",
     pit_fill: bool = True,
+    max_ground_distance: Optional[float] = None,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    pitfree: bool = False,
+    pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
+    pitfree_max_distance: Optional[float] = None,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -646,6 +957,46 @@ def compute_chm(
         laser pulse hit — i.e. the top of the canopy — which is the
         physically correct input for a CHM.  Set to ``False`` to include
         all vegetation returns (reproduces the legacy behaviour).
+    max_ground_distance:
+        If set, drop vegetation points farther than this distance (metres)
+        from the nearest ground point instead of trusting whatever HAG
+        value ``hag_delaunay``/``hag_nn`` extrapolated for them - those
+        cells are left ``NaN`` rather than filled with an unsupported
+        guess.  ``None`` (default) preserves prior behaviour.
+    veg_classes:
+        LAS classification codes treated as "canopy" for the top surface
+        (default ``(3, 4, 5)`` - low/medium/high vegetation). Benchmarking
+        against an independent reference found that automatic ground-truth
+        classification is least reliable under tall/dense canopy, where a
+        genuine canopy-top point can be left ``Class 1`` (unclassified)
+        instead of confidently labelled - pass e.g. ``(1, 3, 4, 5)`` to
+        include unclassified points alongside vegetation. Does not need to
+        be contiguous.
+    pitfree:
+        If ``True``, replace naive per-cell max-binning with pit-free
+        rasterisation (Khosravipour et al., 2014): builds a Delaunay TIN
+        per height threshold in ``pitfree_thresholds`` (from per-point
+        ``HeightAboveGround`` rather than raw elevation) and takes the
+        cell-wise maximum across all layers. A higher threshold excludes
+        the spurious low return that would otherwise triangulate into an
+        interior pit, while lower thresholds still cover the rest of the
+        canopy — so pits are avoided during surface construction instead of
+        detected and patched afterward. Adds meaningfully more computation
+        (one TIN build per threshold instead of one binning pass).
+        ``False`` (default) preserves prior behaviour.
+    pitfree_thresholds:
+        Increasing height cutoffs (metres) for ``pitfree``'s threshold
+        stack (default ``(0, 2, 5, 10, 15, 20)``). Not adaptive to point
+        density — tune for a specific survey if the defaults don't fit.
+    pitfree_max_distance:
+        CHM only, ``pitfree=True`` only. Delaunay triangulation interpolates
+        across the full interior of a point set's convex hull, including
+        long triangles spanning genuine gaps between distant, sparse
+        vegetation clusters - confirmed on real data giving ~100% cell
+        coverage where naive per-cell binning only covered ~20-30%. Set this
+        (metres) to mask out any cell whose nearest same-layer point is
+        farther away, mirroring LAStools' own ``-spike_free`` ``buffer``
+        parameter. ``None`` (default) disables masking.
     overwrite:
         If ``False`` (default) and CHM data for *year* already exists in
         the store, the computation is skipped entirely.  Set to ``True``
@@ -692,6 +1043,11 @@ def compute_chm(
         first_returns_only=first_returns_only,
         height_statistic=height_statistic,
         pit_fill=pit_fill,
+        max_ground_distance=max_ground_distance,
+        veg_classes=veg_classes,
+        pitfree=pitfree,
+        pitfree_thresholds=pitfree_thresholds,
+        pitfree_max_distance=pitfree_max_distance,
     )
 
 
@@ -857,6 +1213,11 @@ def compute_all(
     first_returns_only: bool = True,
     height_statistic: str = "max",
     pit_fill: bool = True,
+    max_ground_distance: Optional[float] = None,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    pitfree: bool = False,
+    pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
+    pitfree_max_distance: Optional[float] = None,
     overwrite: bool = False,
     dtm_method: str = "tin",
 ) -> None:
@@ -886,6 +1247,12 @@ def compute_all(
         Overlap buffer for ``filters.hag_delaunay`` (CHM only).
     first_returns_only:
         Use only first returns for CHM (and DSM).  See :func:`compute_chm`.
+    max_ground_distance:
+        CHM only - see :func:`compute_chm`.
+    veg_classes:
+        CHM only - see :func:`compute_chm`.
+    pitfree / pitfree_thresholds / pitfree_max_distance:
+        CHM only - see :func:`compute_chm`.
     overwrite:
         If ``False`` (default), skip products already present for *year*.
         If ``True``, recompute everything regardless.
@@ -947,5 +1314,10 @@ def compute_all(
         need_chm=need_chm,
         height_statistic=height_statistic,
         pit_fill=pit_fill,
+        max_ground_distance=max_ground_distance,
+        veg_classes=veg_classes,
+        pitfree=pitfree,
+        pitfree_thresholds=pitfree_thresholds,
+        pitfree_max_distance=pitfree_max_distance,
         dtm_method=dtm_method,
     )

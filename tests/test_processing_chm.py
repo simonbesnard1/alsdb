@@ -8,9 +8,12 @@ import numpy as np
 import pytest
 
 from alsdb.processing.chm import (
+    _classification_ranges,
     _dtm_idw,
+    _gate_by_ground_distance,
     _nn_fill,
     _fill_pits,
+    _pitfree_rasterise,
     _rasterise,
     compute_all,
     compute_chm,
@@ -101,6 +104,61 @@ def test_compute_dsm_writes_data(provider, store):
 def test_compute_chm_writes_data(provider, store):
     store.ensure_group("chm", RES, BBOX, "EPSG:25830")
     compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_max_ground_distance_generous_value_still_writes_data(provider, store):
+    """A generous max_ground_distance shouldn't filter out real, well-supported points."""
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, max_ground_distance=1000.0)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_max_ground_distance_tiny_value_yields_no_data(provider, store):
+    """An unrealistically tiny max_ground_distance should gate out effectively everything."""
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, max_ground_distance=0.001)
+    assert not store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_veg_classes_custom_still_writes_data(provider, store):
+    """Including unclassified points (Class 1) alongside vegetation shouldn't break anything."""
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, veg_classes=(1, 3, 4, 5))
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_veg_classes_nonexistent_class_yields_no_data(provider, store):
+    """A class that doesn't occur in the tile should behave like 'no vegetation points'."""
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, veg_classes=(31,))
+    assert not store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_pitfree_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_pitfree_max_distance_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        pitfree=True,
+        pitfree_max_distance=20.0,
+    )
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_all_pitfree_still_writes_all_three(provider, store):
+    compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
+    assert store.has_data("dtm", RES, YEAR)
+    assert store.has_data("dsm", RES, YEAR)
     assert store.has_data("chm", RES, YEAR)
 
 
@@ -208,6 +266,145 @@ def test_fill_pits_all_nan_returns_all_nan():
 
 
 # ---------------------------------------------------------------------------
+# _pitfree_rasterise — unit tests (real PDAL filters.delaunay/faceraster)
+# ---------------------------------------------------------------------------
+
+
+def _hag_points(xs, ys, heights) -> np.ndarray:
+    """Minimal PDAL-compatible structured array with HeightAboveGround attached.
+
+    ``Z`` must be present (even though _pitfree_rasterise reads
+    HeightAboveGround) because _delaunay_raster's non-"Z" value_field path
+    overwrites a copy's Z field in place - the dtype has to declare it.
+    """
+    dtype = [
+        ("X", np.float64),
+        ("Y", np.float64),
+        ("Z", np.float64),
+        ("HeightAboveGround", np.float64),
+    ]
+    arr = np.zeros(len(xs), dtype=dtype)
+    arr["X"] = xs
+    arr["Y"] = ys
+    arr["Z"] = heights
+    arr["HeightAboveGround"] = heights
+    return arr
+
+
+def _canopy_with_one_pit() -> np.ndarray:
+    """
+    A grid of tall-canopy points (height 15 m) near cell centres on a 10 m
+    grid, with the point near (55, 55) replaced by a spurious low return
+    (height 1 m) - the exact failure mode naive per-cell max-binning can't
+    recover from (nothing else competes inside that one cell), but a
+    pit-free threshold layer above 1 m excludes entirely, leaving only the
+    surrounding (constant 15 m) points to interpolate from.
+
+    Positions are jittered (small, deterministic offsets) rather than a
+    perfectly regular lattice: an exact square grid is a degenerate input
+    for Delaunay triangulation (cocircular points, ambiguous diagonals) and
+    can leave the exact cell where a point was removed as NaN instead of
+    interpolated - a real point cloud is never perfectly grid-aligned, and
+    the jitter avoids that pathological edge case here too.
+    """
+    rng = np.random.default_rng(0)
+    xs, ys, hs = [], [], []
+    for cx in range(5, 100, 10):
+        for cy in range(5, 100, 10):
+            if (cx, cy) == (55, 55):
+                continue
+            jx, jy = rng.uniform(-2.0, 2.0, 2)
+            xs.append(cx + jx)
+            ys.append(cy + jy)
+            hs.append(15.0)
+    xs.append(55.0)
+    ys.append(55.0)
+    hs.append(1.0)
+    return _hag_points(xs, ys, hs)
+
+
+def test_pitfree_rasterise_recovers_pit_naive_binning_creates():
+    points = _canopy_with_one_pit()
+    bbox = (0.0, 0.0, 100.0, 100.0)
+
+    naive = _rasterise(
+        points["X"],
+        points["Y"],
+        points["HeightAboveGround"],
+        bbox,
+        resolution=10.0,
+        statistic="max",
+    )
+    assert float(np.nanmin(naive)) == pytest.approx(1.0, abs=0.01), (
+        "sanity check: naive per-cell binning should show the spurious low cell"
+    )
+
+    pitfree = _pitfree_rasterise(points, bbox, resolution=10.0, thresholds=(0.0, 10.0))
+    assert float(np.nanmin(pitfree)) > 14.0, (
+        "pit-free's t=10 layer excludes the low point entirely, so the only "
+        "contribution at that cell comes from interpolating the surrounding "
+        "constant-15m points"
+    )
+
+
+def test_pitfree_rasterise_output_shape():
+    points = _canopy_with_one_pit()
+    grid = _pitfree_rasterise(points, (0.0, 0.0, 100.0, 100.0), resolution=10.0)
+    assert grid.shape == (10, 10)
+
+
+def test_pitfree_rasterise_output_dtype_float32():
+    points = _canopy_with_one_pit()
+    grid = _pitfree_rasterise(points, (0.0, 0.0, 100.0, 100.0), resolution=10.0)
+    assert grid.dtype == np.float32
+
+
+def test_pitfree_rasterise_too_few_points_returns_all_nan():
+    points = _hag_points([1.0, 2.0], [1.0, 2.0], [10.0, 12.0])
+    grid = _pitfree_rasterise(points, (0.0, 0.0, 100.0, 100.0), resolution=10.0)
+    assert np.all(np.isnan(grid))
+
+
+def _two_clusters_far_apart() -> np.ndarray:
+    """
+    Two vegetation clusters far apart (30 m wide each, ~130 m gap between
+    them), all at the same height. Delaunay triangulation over both
+    clusters together spans the whole gap as a single convex hull,
+    interpolating "canopy" across genuinely non-vegetated ground in
+    between unless distance-masked - the exact coverage mismatch found on
+    real data (~100% coverage where naive binning only covered ~20-30%).
+    """
+    rng = np.random.default_rng(1)
+    xs, ys, hs = [], [], []
+    for cx, cy in zip(rng.uniform(5, 35, 30), rng.uniform(5, 45, 30)):
+        xs.append(cx)
+        ys.append(cy)
+        hs.append(15.0)
+    for cx, cy in zip(rng.uniform(165, 195, 30), rng.uniform(5, 45, 30)):
+        xs.append(cx)
+        ys.append(cy)
+        hs.append(15.0)
+    return _hag_points(xs, ys, hs)
+
+
+def test_pitfree_rasterise_no_max_distance_extrapolates_across_gap():
+    """Sanity check: without max_distance, the gap is filled in (the failure
+    mode max_distance exists to fix)."""
+    points = _two_clusters_far_apart()
+    grid = _pitfree_rasterise(points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,))
+    assert not np.isnan(grid[2, 10]), "middle of the gap should be interpolated without a mask"
+
+
+def test_pitfree_rasterise_max_distance_masks_extrapolated_gap():
+    points = _two_clusters_far_apart()
+    grid = _pitfree_rasterise(
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,), max_distance=20.0
+    )
+    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
+    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+
+
+# ---------------------------------------------------------------------------
 # _dtm_idw — unit tests (pure numpy / scipy)
 # ---------------------------------------------------------------------------
 
@@ -258,6 +455,83 @@ def test_dtm_idw_max_distance_creates_nans():
     grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0, max_distance=5.0)
     # Far cells should be NaN
     assert np.any(np.isnan(grid))
+
+
+# ---------------------------------------------------------------------------
+# _classification_ranges — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_classification_ranges_contiguous():
+    assert _classification_ranges((3, 4, 5)) == "Classification[3:5]"
+
+
+def test_classification_ranges_single_class():
+    assert _classification_ranges((6,)) == "Classification[6:6]"
+
+
+def test_classification_ranges_noncontiguous():
+    assert _classification_ranges((1, 3, 4, 5)) == "Classification[1:1],Classification[3:5]"
+
+
+def test_classification_ranges_deduplicates_and_sorts():
+    assert _classification_ranges((5, 3, 3, 4)) == "Classification[3:5]"
+
+
+def test_classification_ranges_multiple_gaps():
+    assert _classification_ranges((1, 2, 3, 7)) == "Classification[1:3],Classification[7:7]"
+
+
+# ---------------------------------------------------------------------------
+# _gate_by_ground_distance — unit tests
+# ---------------------------------------------------------------------------
+
+
+def _veg_points(xs, ys) -> np.ndarray:
+    dtype = [("X", np.float64), ("Y", np.float64), ("HeightAboveGround", np.float64)]
+    arr = np.zeros(len(xs), dtype=dtype)
+    arr["X"] = xs
+    arr["Y"] = ys
+    arr["HeightAboveGround"] = 10.0
+    return arr
+
+
+def _ground_at(xs, ys) -> np.ndarray:
+    dtype = [("X", np.float64), ("Y", np.float64)]
+    arr = np.zeros(len(xs), dtype=dtype)
+    arr["X"] = xs
+    arr["Y"] = ys
+    return arr
+
+
+def test_gate_by_ground_distance_none_disables_gating():
+    points = _veg_points([0.0, 100.0], [0.0, 100.0])
+    ground = _ground_at([0.0], [0.0])
+    result = _gate_by_ground_distance(points, ground, max_distance=None)
+    assert len(result) == len(points)
+
+
+def test_gate_by_ground_distance_drops_far_points():
+    # One point right next to the only ground point, one far away
+    points = _veg_points([0.0, 500.0], [0.0, 500.0])
+    ground = _ground_at([0.0], [0.0])
+    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
+    assert len(result) == 1
+    assert float(result["X"][0]) == pytest.approx(0.0)
+
+
+def test_gate_by_ground_distance_keeps_near_points():
+    points = _veg_points([1.0, 2.0], [1.0, 2.0])
+    ground = _ground_at([0.0], [0.0])
+    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
+    assert len(result) == 2
+
+
+def test_gate_by_ground_distance_empty_ground_returns_unchanged():
+    points = _veg_points([0.0, 100.0], [0.0, 100.0])
+    ground = _ground_at([], [])
+    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
+    assert len(result) == len(points)
 
 
 # ---------------------------------------------------------------------------
