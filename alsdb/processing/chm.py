@@ -311,10 +311,7 @@ def _mask_by_point_distance(
     Delaunay triangulation interpolates across the full interior of a point
     set's convex hull, including long triangles spanning genuine gaps
     between distant, sparse clusters with nothing supporting the surface in
-    between - confirmed on real data via :func:`_pitfree_rasterise` giving
-    ~100% cell coverage where naive per-cell binning only covered ~20-30%.
-    This bounds how far that interpolation is trusted, mirroring LAStools'
-    own ``-spike_free`` ``buffer`` parameter.
+    between.
 
     Complements :func:`_gate_by_ground_distance` (which drops vegetation
     points before rasterisation, based on distance to *ground* points) -
@@ -454,36 +451,6 @@ def _pitfree_rasterise(
     Pit-free CHM rasterisation (Khosravipour et al., 2014), adapted to
     per-point ``HeightAboveGround`` instead of raw elevation.
 
-    For each height threshold, builds an independent Delaunay TIN from
-    points at or above that threshold and rasterises it (:func:`_delaunay_raster`,
-    ``value_field="HeightAboveGround"``); the final grid is the cell-wise
-    maximum across all threshold layers. A higher threshold excludes the
-    spurious low return that would otherwise triangulate into an interior
-    "pit" at that cell, while lower thresholds still cover the rest of the
-    canopy elsewhere in the tile — so pits are avoided during surface
-    construction itself, rather than detected and patched afterward like
-    :func:`_fill_pits`/:func:`_fill_low_confidence_dips` do for naive
-    per-cell max-binning.
-
-    Delaunay triangulation interpolates across the *full* interior of a
-    point set's convex hull, including long triangles spanning genuine gaps
-    between distant, sparse vegetation clusters with nothing supporting the
-    surface in between - confirmed on real data giving ~100% cell coverage
-    where naive per-cell binning only covered ~20-30% (the same coverage
-    mismatch found in LAStools' own TIN-based veg DSM during benchmarking).
-    *max_distance*, if set, masks out (:func:`_mask_by_point_distance`) any
-    cell whose nearest point in that same layer is farther away, mirroring
-    LAStools' own ``-spike_free`` ``buffer`` parameter. ``None`` (default)
-    disables masking - the layer is left exactly as :func:`_delaunay_raster`
-    produces it, matching :func:`_dtm_tin`'s unconditional fill for the
-    (genuinely continuous) ground surface, which vegetation height is not.
-
-    A cell with no threshold layer's support at all (or masked out of all of
-    them) stays NaN, same meaning as before pit-free existed; the pipeline's
-    existing final ``pit_fill`` step (see :func:`_process_tile_chm`/
-    :func:`_process_tile_all`) patches genuinely small residual gaps
-    afterward, identically to naive max-binning.
-
     Parameters
     ----------
     points:
@@ -541,10 +508,6 @@ def _pitfree_rasterise(
 def _fill_pits(grid: np.ndarray, window: int = 3) -> np.ndarray:
     """
     Fill NaN pits (small gaps inside the canopy footprint) in a CHM.
-
-    Only ever fills cells that are already NaN, with the local median of
-    their valid neighbours - a cell that already has a value is never
-    modified, so a genuine tall or isolated tree crown is left untouched.
 
     Parameters
     ----------
