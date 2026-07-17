@@ -8,13 +8,21 @@ import numpy as np
 import pytest
 
 from alsdb.processing.chm import (
+    _cap_height,
     _classification_ranges,
+    _delaunay_raster,
     _dtm_idw,
+    _exclude_classes_stages,
     _gate_by_ground_distance,
     _nn_fill,
     _fill_pits,
+    _outlier_removal_stages,
     _pitfree_rasterise,
     _rasterise,
+    _run,
+    _spikefree_rasterise,
+    _thin_highest_per_subcell,
+    _validate_grid_alignment,
     compute_all,
     compute_chm,
     compute_dsm,
@@ -128,6 +136,23 @@ def test_compute_chm_veg_classes_custom_still_writes_data(provider, store):
     assert store.has_data("chm", RES, YEAR)
 
 
+def test_compute_chm_remove_outliers_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, remove_outliers=True)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_max_height_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, max_height=60.0)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_dsm_tile_size_not_multiple_of_resolution_raises(provider, store):
+    with pytest.raises(ValueError, match="whole multiple"):
+        compute_dsm(provider, store, resolution=3.0, bbox=BBOX, year=YEAR, tile_size=250.0)
+
+
 def test_compute_chm_veg_classes_nonexistent_class_yields_no_data(provider, store):
     """A class that doesn't occur in the tile should behave like 'no vegetation points'."""
     store.ensure_group("chm", RES, BBOX, "EPSG:25830")
@@ -137,8 +162,22 @@ def test_compute_chm_veg_classes_nonexistent_class_yields_no_data(provider, stor
 
 def test_compute_chm_pitfree_still_writes_data(provider, store):
     store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
+    compute_chm(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        pitfree=True,
+        pitfree_max_distance=20.0,
+    )
     assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_pitfree_without_max_distance_raises(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    with pytest.raises(ValueError, match="pitfree_max_distance"):
+        compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
 
 
 def test_compute_chm_pitfree_max_distance_still_writes_data(provider, store):
@@ -156,10 +195,79 @@ def test_compute_chm_pitfree_max_distance_still_writes_data(provider, store):
 
 
 def test_compute_all_pitfree_still_writes_all_three(provider, store):
-    compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
+    compute_all(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        pitfree=True,
+        pitfree_max_distance=20.0,
+    )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
     assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_all_pitfree_without_max_distance_raises(provider, store):
+    with pytest.raises(ValueError, match="pitfree_max_distance"):
+        compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
+
+
+def test_compute_chm_spikefree_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        spikefree=True,
+        spikefree_max_distance=20.0,
+    )
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_spikefree_without_max_distance_raises(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    with pytest.raises(ValueError, match="spikefree_max_distance"):
+        compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, spikefree=True)
+
+
+def test_compute_chm_pitfree_and_spikefree_together_raises(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        compute_chm(
+            provider,
+            store,
+            resolution=RES,
+            bbox=BBOX,
+            year=YEAR,
+            pitfree=True,
+            pitfree_max_distance=20.0,
+            spikefree=True,
+            spikefree_max_distance=20.0,
+        )
+
+
+def test_compute_all_spikefree_still_writes_all_three(provider, store):
+    compute_all(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        spikefree=True,
+        spikefree_max_distance=20.0,
+    )
+    assert store.has_data("dtm", RES, YEAR)
+    assert store.has_data("dsm", RES, YEAR)
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_all_spikefree_without_max_distance_raises(provider, store):
+    with pytest.raises(ValueError, match="spikefree_max_distance"):
+        compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, spikefree=True)
 
 
 def test_compute_all_writes_all_three(provider, store):
@@ -405,6 +513,80 @@ def test_pitfree_rasterise_max_distance_masks_extrapolated_gap():
 
 
 # ---------------------------------------------------------------------------
+# _thin_highest_per_subcell — unit tests (pure numpy)
+# ---------------------------------------------------------------------------
+
+
+def test_thin_highest_per_subcell_keeps_max_value_point():
+    points = _hag_points(
+        xs=[1.0, 1.2, 5.0, 5.1],
+        ys=[1.0, 1.1, 5.0, 5.2],
+        heights=[3.0, 9.0, 4.0, 2.0],
+    )
+    out = _thin_highest_per_subcell(points, subcell_resolution=2.0)
+    assert len(out) == 2
+    assert set(out["HeightAboveGround"].tolist()) == {9.0, 4.0}
+
+
+def test_thin_highest_per_subcell_preserves_all_fields():
+    points = _hag_points(xs=[1.0, 1.2], ys=[1.0, 1.1], heights=[3.0, 9.0])
+    out = _thin_highest_per_subcell(points, subcell_resolution=5.0)
+    assert len(out) == 1
+    assert out.dtype == points.dtype
+    assert float(out["Z"][0]) == pytest.approx(9.0)
+
+
+def test_thin_highest_per_subcell_empty_input_unchanged():
+    points = _hag_points(xs=[], ys=[], heights=[])
+    out = _thin_highest_per_subcell(points, subcell_resolution=1.0)
+    assert len(out) == 0
+
+
+def test_thin_highest_per_subcell_absolute_grid_not_relative_to_input_extent():
+    """Subcells are snapped to floor(X / subcell_resolution) directly, not
+    relative to the point set's own bounding box - two points that land in
+    the same absolute subcell should thin down to one regardless of where
+    the point set as a whole sits."""
+    points = _hag_points(xs=[100.4, 100.6], ys=[200.4, 200.6], heights=[5.0, 8.0])
+    out = _thin_highest_per_subcell(points, subcell_resolution=1.0)
+    assert len(out) == 1
+    assert float(out["HeightAboveGround"][0]) == pytest.approx(8.0)
+
+
+# ---------------------------------------------------------------------------
+# _spikefree_rasterise — unit tests (real PDAL filters.delaunay/faceraster)
+# ---------------------------------------------------------------------------
+
+
+def test_spikefree_rasterise_output_shape_and_dtype():
+    points = _two_clusters_far_apart()
+    grid = _spikefree_rasterise(
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+    )
+    assert grid.shape == (5, 20)
+    assert grid.dtype == np.float32
+
+
+def test_spikefree_rasterise_masks_extrapolated_gap():
+    """Same gap-protection contract as pitfree's max_distance, since
+    _spikefree_rasterise reuses _mask_by_point_distance directly."""
+    points = _two_clusters_far_apart()
+    grid = _spikefree_rasterise(
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+    )
+    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
+    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+
+
+def test_spikefree_rasterise_too_few_points_returns_all_nan():
+    points = _hag_points([1.0, 2.0], [1.0, 2.0], [10.0, 12.0])
+    grid = _spikefree_rasterise(
+        points, (0.0, 0.0, 100.0, 100.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+    )
+    assert np.all(np.isnan(grid))
+
+
+# ---------------------------------------------------------------------------
 # _dtm_idw — unit tests (pure numpy / scipy)
 # ---------------------------------------------------------------------------
 
@@ -430,6 +612,167 @@ def test_dtm_idw_dtype_float32():
     pts = _ground_points()
     grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
     assert grid.dtype == np.float32
+
+
+def test_dtm_idw_north_up_orientation():
+    """Top row of the grid should correspond to the highest y values."""
+    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64)]
+    pts = np.zeros(2, dtype=dtype)
+    pts["X"] = [5.0, 5.0]
+    pts["Y"] = [5.0, 95.0]
+    pts["Z"] = [1.0, 99.0]
+    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0, k=1)
+    assert float(grid[0, 0]) == pytest.approx(99.0)
+    assert float(grid[9, 0]) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# _delaunay_raster — unit tests (real PDAL filters.delaunay/faceraster)
+# ---------------------------------------------------------------------------
+
+
+def _plane_corners() -> np.ndarray:
+    """Four corner points lying exactly on the plane Z = Y (flat in X).
+
+    A TIN of these four points reproduces Z = Y exactly everywhere inside
+    the convex hull regardless of which diagonal splits the two triangles,
+    since both triangles lie in the same plane - giving exact expected
+    values to assert against, not just an approximate/monotonic check.
+    """
+    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64)]
+    pts = np.zeros(4, dtype=dtype)
+    pts["X"] = [0.0, 100.0, 0.0, 100.0]
+    pts["Y"] = [0.0, 0.0, 100.0, 100.0]
+    pts["Z"] = [0.0, 0.0, 100.0, 100.0]
+    return pts
+
+
+def test_delaunay_raster_north_up_orientation():
+    """Same orientation contract as _rasterise/_dtm_idw: row 0 = north (max y)."""
+    grid = _delaunay_raster(_plane_corners(), (0.0, 0.0, 100.0, 100.0), resolution=10.0)
+    assert float(grid[0, 0]) == pytest.approx(95.0)
+    assert float(grid[9, 0]) == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------------------
+# _exclude_classes_stages — unit tests (real PDAL filters.range)
+# ---------------------------------------------------------------------------
+
+
+def _classified_points(classes) -> np.ndarray:
+    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64), ("Classification", np.uint8)]
+    arr = np.zeros(len(classes), dtype=dtype)
+    arr["X"] = np.arange(len(classes))
+    arr["Y"] = np.arange(len(classes))
+    arr["Classification"] = classes
+    return arr
+
+
+def test_exclude_classes_stages_ands_out_all_listed_classes():
+    """Chained negated stages must exclude noise classes 7 *and* 18, not just
+    points that are simultaneously both (which a single OR'd stage would do)."""
+    pts = _classified_points([1, 2, 3, 7, 18])
+    out = _run(_exclude_classes_stages((7, 18)), pts)
+    assert sorted(out["Classification"].tolist()) == [1, 2, 3]
+
+
+def test_exclude_classes_stages_empty_tuple_keeps_everything():
+    pts = _classified_points([1, 2, 7, 18])
+    out = _run(_exclude_classes_stages(()), pts)
+    assert len(out) == len(pts)
+
+
+# ---------------------------------------------------------------------------
+# _cap_height — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_cap_height_none_disables_cap():
+    grid = np.array([[1.0, 999.0], [np.nan, 5.0]], dtype=np.float32)
+    out = _cap_height(grid, None)
+    assert out[0, 0] == pytest.approx(1.0)
+    assert out[0, 1] == pytest.approx(999.0)
+    assert np.isnan(out[1, 0])
+    assert out[1, 1] == pytest.approx(5.0)
+
+
+def test_cap_height_nulls_values_above_threshold():
+    grid = np.array([[1.0, 999.0], [np.nan, 61.0]], dtype=np.float32)
+    out = _cap_height(grid, max_height=60.0)
+    assert out[0, 0] == pytest.approx(1.0)
+    assert np.isnan(out[0, 1])
+    assert np.isnan(out[1, 0])
+    assert np.isnan(out[1, 1])
+
+
+# ---------------------------------------------------------------------------
+# _outlier_removal_stages — unit tests (real PDAL filters.outlier)
+# ---------------------------------------------------------------------------
+
+
+def _dense_canopy_lattice(spike_z: float = None) -> np.ndarray:
+    """
+    A dense, level canopy (~1 pt/m^2, height ~15 m, small jitter) - the small
+    nearest-neighbour distances a real ALS survey has, unlike a sparse
+    uniform-random scatter, where random density fluctuation alone triggers
+    false positives regardless of any genuine anomaly.
+
+    If *spike_z* is given, one extra point is added at that height, isolated
+    from its neighbours in Z alone (same X/Y density as everything else) -
+    the exact failure mode a height cap alone can't catch if it lands under
+    the cap.
+    """
+    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64), ("Classification", np.uint8)]
+    rng = np.random.default_rng(0)
+    xs, ys, zs = [], [], []
+    for cx in range(0, 40, 2):
+        for cy in range(0, 40, 2):
+            jx, jy = rng.uniform(-0.3, 0.3, 2)
+            xs.append(cx + jx)
+            ys.append(cy + jy)
+            zs.append(15.0 + rng.uniform(-0.2, 0.2))
+    if spike_z is not None:
+        xs.append(20.0)
+        ys.append(20.0)
+        zs.append(spike_z)
+    arr = np.zeros(len(xs), dtype=dtype)
+    arr["X"] = xs
+    arr["Y"] = ys
+    arr["Z"] = zs
+    arr["Classification"] = 4
+    return arr
+
+
+def test_outlier_removal_stages_drops_isolated_spike():
+    pts = _dense_canopy_lattice(spike_z=45.0)
+    out = _run(_outlier_removal_stages(mean_k=8, multiplier=2.0), pts)
+    assert float(np.max(out["Z"])) < 20.0, "the isolated 45 m spike should be removed"
+
+
+def test_outlier_removal_stages_mostly_keeps_uniform_canopy():
+    """Statistical outlier detection has real edge effects even on uniform
+    data (fewer neighbours near the boundary of a bounded point cloud) - the
+    property worth asserting is that it isn't wholesale discarding a normal,
+    outlier-free canopy, not that it's a no-op."""
+    pts = _dense_canopy_lattice()
+    out = _run(_outlier_removal_stages(mean_k=8, multiplier=2.0), pts)
+    assert len(out) >= 0.9 * len(pts)
+    assert float(np.max(out["Z"])) < 16.0
+
+
+# ---------------------------------------------------------------------------
+# _validate_grid_alignment — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_validate_grid_alignment_accepts_whole_multiple():
+    _validate_grid_alignment(tile_size=500.0, resolution=1.0)
+    _validate_grid_alignment(tile_size=250.0, resolution=25.0)
+
+
+def test_validate_grid_alignment_rejects_non_multiple():
+    with pytest.raises(ValueError, match="whole multiple"):
+        _validate_grid_alignment(tile_size=250.0, resolution=3.0)
 
 
 def test_dtm_idw_values_near_input_mean():
