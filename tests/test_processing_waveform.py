@@ -12,8 +12,56 @@ from alsdb.processing.waveform import (
     _build_histogram,
     _canopy_cover,
     _detect_ground,
+    _effective_query_radius,
     _rh_metrics,
 )
+
+# ---------------------------------------------------------------------------
+# _effective_query_radius
+# ---------------------------------------------------------------------------
+
+
+def test_effective_query_radius_no_weighting_returns_footprint_radius():
+    r = _effective_query_radius(
+        footprint_radius=12.5, gaussian_beam_weighting=False, sigma_beam=None
+    )
+    assert r == pytest.approx(12.5)
+
+
+def test_effective_query_radius_default_sigma_beam_extends_past_footprint():
+    # sigma_beam defaults to footprint_radius / 2 = 6.25; beam_extent_sigma=3.0
+    # -> 3 * 6.25 = 18.75, larger than the nominal 12.5 m footprint.
+    r = _effective_query_radius(
+        footprint_radius=12.5,
+        gaussian_beam_weighting=True,
+        sigma_beam=None,
+        beam_extent_sigma=3.0,
+    )
+    assert r == pytest.approx(18.75)
+    assert r > 12.5
+
+
+def test_effective_query_radius_explicit_sigma_beam():
+    # 3 * sigma_beam = 15.0, larger than footprint_radius=5.0, so it wins.
+    r = _effective_query_radius(
+        footprint_radius=5.0,
+        gaussian_beam_weighting=True,
+        sigma_beam=5.0,
+        beam_extent_sigma=3.0,
+    )
+    assert r == pytest.approx(15.0)
+
+
+def test_effective_query_radius_never_shrinks_below_footprint_radius():
+    # A tiny sigma_beam shouldn't shrink the query below the nominal footprint.
+    r = _effective_query_radius(
+        footprint_radius=12.5,
+        gaussian_beam_weighting=True,
+        sigma_beam=0.1,
+        beam_extent_sigma=3.0,
+    )
+    assert r == pytest.approx(12.5)
+
 
 # ---------------------------------------------------------------------------
 # _build_histogram
@@ -160,6 +208,54 @@ def test_rh_metrics_ground_above_all_bins():
     assert np.isnan(rh[50])
 
 
+def _waveform_with_energy_below_ground_peak():
+    """
+    A ground return spread across several bins straddling z_ground (pulse
+    broadening), plus a canopy peak above - the scenario where the old
+    "sum from ground_idx upward" denominator and the new "full waveform
+    total" denominator actually disagree, unlike every waveform above
+    (all of which have z_ground at bin 0, where the two conventions
+    coincide).
+    """
+    z_bins = np.linspace(-2.0, 20.0, 220)  # z_step = 0.1
+    waveform = np.zeros(220)
+    # Ground return centred at z=0, spread across bins below AND above it.
+    gnd_centre = np.argmin(np.abs(z_bins - 0.0))
+    waveform[gnd_centre - 5 : gnd_centre + 5] = 0.02  # 10 bins, half below z_ground=0
+    # Canopy return above ground.
+    can_centre = np.argmin(np.abs(z_bins - 15.0))
+    waveform[can_centre - 2 : can_centre + 2] = 0.05
+    waveform /= waveform.sum()
+    return z_bins, waveform
+
+
+def test_rh_metrics_accounts_for_energy_below_ground_peak():
+    """
+    Cumulative fraction must be computed against the FULL waveform total
+    (matching _canopy_cover's denominator), not just the ground-peak-and-above
+    subset - otherwise RH100 would map to less than 100% of the true energy.
+    """
+    z_bins, waveform = _waveform_with_energy_below_ground_peak()
+    z_ground = 0.0
+    rh = _rh_metrics(waveform, z_bins, z_ground, levels=(0, 100))
+    # RH100 must reach the true canopy-top height, not be truncated because
+    # some energy was excluded from the denominator.
+    assert rh[100] == pytest.approx(15.0, abs=1.0)
+
+
+def test_rh_metrics_low_percentile_can_be_negative():
+    """
+    Real energy below the detected ground peak (pulse/slope broadening) means
+    a low RH percentile can legitimately fall below the peak itself - an
+    expected physical effect (also seen in real GEDI/LVIS RH products), not
+    something this function should clamp to zero.
+    """
+    z_bins, waveform = _waveform_with_energy_below_ground_peak()
+    rh = _rh_metrics(waveform, z_bins, z_ground=0.0, levels=(0, 2))
+    assert rh[0] == pytest.approx(0.0)
+    assert rh[2] <= 0.0
+
+
 # ---------------------------------------------------------------------------
 # _canopy_cover
 # ---------------------------------------------------------------------------
@@ -199,6 +295,37 @@ def test_canopy_cover_in_unit_interval():
     waveform = rng.uniform(0, 1, 100)
     waveform /= waveform.sum()
     cover = _canopy_cover(waveform, z_bins, z_ground=2.0, threshold=2.0)
+    assert 0.0 <= cover <= 1.0
+
+
+def test_canopy_cover_default_rv_rg_matches_naive_energy_ratio():
+    """rv_rg=1.0 (default) must reproduce the plain energy-ratio proxy."""
+    z_bins = np.array([1.0, 3.0, 5.0, 7.0])
+    waveform = np.array([0.5, 0.0, 0.25, 0.25])
+    cover = _canopy_cover(waveform, z_bins, z_ground=0.0, threshold=2.0)
+    naive = float(waveform[z_bins >= 2.0].sum() / waveform.sum())
+    assert cover == pytest.approx(naive)
+
+
+def test_canopy_cover_rv_rg_below_one_increases_cover():
+    """
+    rv_rg < 1 (vegetation reflects less efficiently than ground) must
+    up-weight the vegetation-energy contribution relative to the naive
+    ratio, increasing the reported cover for the same energy split.
+    """
+    z_bins = np.array([1.0, 3.0, 5.0, 7.0])
+    waveform = np.array([0.5, 0.0, 0.25, 0.25])
+    cover_naive = _canopy_cover(waveform, z_bins, z_ground=0.0, threshold=2.0, rv_rg=1.0)
+    cover_corrected = _canopy_cover(waveform, z_bins, z_ground=0.0, threshold=2.0, rv_rg=0.5)
+    assert cover_corrected > cover_naive
+
+
+def test_canopy_cover_rv_rg_in_unit_interval():
+    rng = np.random.default_rng(42)
+    z_bins = np.linspace(0.0, 30.0, 100)
+    waveform = rng.uniform(0, 1, 100)
+    waveform /= waveform.sum()
+    cover = _canopy_cover(waveform, z_bins, z_ground=2.0, threshold=2.0, rv_rg=0.6)
     assert 0.0 <= cover <= 1.0
 
 

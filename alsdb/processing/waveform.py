@@ -13,12 +13,21 @@ below.
 
 Pipeline
 --------
-1. Query TileDB for all ALS points within a circular footprint.
+1. Query TileDB for all ALS points within a circular footprint - when Gaussian
+   beam weighting is on, the query itself extends past the nominal footprint
+   radius (``beam_extent_sigma``) so the beam's Gaussian tail is actually
+   captured before being weighted down, not truncated away (see
+   :func:`_effective_query_radius`).
 2. Build a vertical histogram of Z values, optionally weighted by return
    intensity and/or the Gaussian beam profile.
 3. Convolve with a TX pulse kernel (per-beam empirical shape, or Gaussian).
 4. Detect the ground peak (lowest significant peak in the waveform).
-5. Extract relative-height metrics: RH0–RH100, HOME, canopy cover.
+5. Extract relative-height metrics (RH0-RH100, HOME) as cumulative fractions
+   of the *total* recorded waveform energy, and canopy cover as a
+   gap-probability ratio with an optional reflectance-ratio (``rv_rg``)
+   correction (default ``1.0`` reproduces the uncorrected energy-ratio
+   proxy, not GEDI's true reflectance-corrected L2B cover - see
+   :func:`_canopy_cover`).
 
 Sensor presets
 --------------
@@ -95,6 +104,7 @@ _SIGMA_COV: float = 0.93  # m  GEDI coverage beam pulse σ
 _MIN_POINTS: int = 25
 _RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0  # m  above ground
+_BEAM_EXTENT_SIGMA: float = 3.0  # query out to this many sigma_beam (see _effective_query_radius)
 
 # Empirical TX pulse kernels derived from GEDI L1B data (Hancock et al. gediSimulator).
 # Used when beam_id is supplied; other sensors fall back to a Gaussian kernel (sigma=).
@@ -196,6 +206,37 @@ class WaveformResult:
 # ---------------------------------------------------------------------------
 # Step 1 — footprint query
 # ---------------------------------------------------------------------------
+
+
+def _effective_query_radius(
+    footprint_radius: float,
+    gaussian_beam_weighting: bool,
+    sigma_beam: Optional[float],
+    beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
+) -> float:
+    """
+    Return the radius actually used to query/mask points for one footprint.
+
+    When ``gaussian_beam_weighting`` is enabled, points are weighted by
+    ``exp(-r^2 / (2 * sigma_beam^2))``.  A 2-D Gaussian's cumulative energy
+    within a radius of exactly ``footprint_radius`` (= 2 * sigma_beam with
+    the default ``sigma_beam = footprint_radius / 2``) is only
+    ``1 - exp(-2) ≈ 86.5%`` - querying no farther than ``footprint_radius``
+    silently discards the other ~13.5% of the beam's true energy before it
+    ever reaches the weighting step. Querying out to
+    ``beam_extent_sigma * sigma_beam`` instead (default 3σ ≈ 98.9% of total
+    Gaussian energy) fixes this without changing the weighting formula
+    itself - the tail is now present to be weighted down, rather than
+    absent entirely.
+
+    When ``gaussian_beam_weighting`` is ``False`` there's no Gaussian tail
+    to account for - a flat circular footprint of exactly
+    ``footprint_radius`` is already the correct, unmodified query.
+    """
+    if not gaussian_beam_weighting:
+        return footprint_radius
+    sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
+    return max(footprint_radius, beam_extent_sigma * sb)
 
 
 def _query_footprint(
@@ -307,17 +348,29 @@ def _rh_metrics(
     """
     Compute Relative Height (RH) metrics.
 
-    RH(x) = height above ground at which x% of cumulative waveform energy
-    (integrated upward from the ground peak) is reached.
+    RH(x) = height above the detected ground peak at which x% of the
+    **total recorded waveform energy** is reached, cumulative from the
+    waveform's lowest bin upward - the same total :func:`_canopy_cover` uses
+    for its own denominator (``waveform.sum()``), not a "from the ground
+    peak upward" subset. The TX-pulse convolution and slope broadening both
+    spread some genuine ground-return energy into bins *below* the detected
+    peak; excluding that energy from the denominator (an earlier version of
+    this function did exactly that, via ``waveform[ground_idx:].sum()``)
+    understated the true total and made RH silently disagree with
+    ``_canopy_cover`` computed on the same waveform. A consequence of using
+    the full total: low RH percentiles can come out slightly *negative*
+    when there's real energy below the peak - this is an expected, physical
+    effect of pulse/slope broadening (also seen in real GEDI/LVIS RH
+    products), not a bug, so it isn't clamped away.
     """
     ground_idx = int(np.searchsorted(z_bins, z_ground))
-    above = waveform[ground_idx:]
+    total = float(waveform.sum())
 
-    if above.sum() == 0:
+    if total == 0.0 or ground_idx >= len(z_bins):
         return {lv: np.nan for lv in levels}
 
-    cumulative = np.cumsum(above) / above.sum()
-    z_above = z_bins[ground_idx:] - z_ground  # heights above ground
+    cumulative = np.cumsum(waveform) / total
+    z_above = z_bins - z_ground  # height relative to ground peak; can be negative
 
     rh = {}
     for level in levels:
@@ -336,12 +389,46 @@ def _canopy_cover(
     z_bins: np.ndarray,
     z_ground: float,
     threshold: float = _COVER_THRESHOLD,
+    rv_rg: float = 1.0,
 ) -> float:
-    """Fraction of waveform energy above (z_ground + threshold)."""
-    total = waveform.sum()
+    """
+    Canopy cover from a gap-probability model, with an optional
+    reflectance-ratio correction.
+
+    Physical model: observed energy from a surface type is proportional to
+    (true fractional footprint area of that type) x (its reflectance).
+    Writing true vegetation cover as ``fv`` and ground exposure as
+    ``1 - fv``: ``veg_energy ∝ fv * rho_v``, ``ground_energy ∝ (1 - fv) *
+    rho_g``. Solving for ``fv`` given the observed energies and
+    ``rv_rg = rho_v / rho_g``:
+
+    ``cover = veg_energy / (veg_energy + rv_rg * ground_energy)``
+
+    - the ratio corrects the **ground** term, not the vegetation term
+    (scaling the vegetation term instead, as an earlier version of this
+    function did, moves cover in the wrong direction - verified by direct
+    derivation from the model above, not just recalled from memory, after a
+    test caught the sign error). Not simply "energy above threshold / total
+    energy", though that's exactly what this reduces to at the default
+    ``rv_rg=1.0`` (equal-reflectance assumption): substituting
+    ``ground_energy = total - veg_energy`` collapses the denominator back to
+    ``total``, reproducing the naive ratio. This default is **not** GEDI's
+    actual L2B cover, which applies a real, externally-calibrated rv/rg
+    (commonly < 1 - vegetation typically backscatters less efficiently than
+    bare ground at 1064 nm, so the uncorrected ratio systematically
+    *underestimates* true cover: with a smaller ``rv_rg``, the same observed
+    energy split implies a larger true ``fv``). Pass a calibrated ``rv_rg``
+    for your study area to get the corrected metric; don't guess one.
+    """
+    total = float(waveform.sum())
     if total == 0.0:
         return 0.0
-    return float(waveform[z_bins >= (z_ground + threshold)].sum() / total)
+    veg_energy = float(waveform[z_bins >= (z_ground + threshold)].sum())
+    ground_energy = total - veg_energy
+    denom = veg_energy + rv_rg * ground_energy
+    if denom <= 0.0:
+        return 0.0
+    return float(veg_energy / denom)
 
 
 # ---------------------------------------------------------------------------
@@ -362,9 +449,11 @@ def simulate_waveform(
     intensity_weighted: bool = False,
     gaussian_beam_weighting: bool = True,
     sigma_beam: Optional[float] = None,
+    beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
     slope_correction: bool = False,
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
+    rv_rg: float = 1.0,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
     rng: Optional[np.random.Generator] = None,
 ) -> Optional[WaveformResult]:
@@ -407,6 +496,15 @@ def simulate_waveform(
     sigma_beam : float, optional
         Beam σ in metres for Gaussian weighting.  Defaults to
         ``footprint_radius / 2`` (so the 1/e² point is at the footprint edge).
+    beam_extent_sigma : float
+        How many ``sigma_beam`` to query out to when ``gaussian_beam_weighting``
+        is ``True`` (default 3σ ≈ 98.9% of the beam's total Gaussian energy).
+        Querying only to ``footprint_radius`` (= 2σ with the default
+        ``sigma_beam``) would silently discard ~13.5% of the true beam
+        energy before the weighting step ever sees it - see
+        :func:`_effective_query_radius`. Ignored when
+        ``gaussian_beam_weighting=False`` (a flat circular footprint of
+        exactly ``footprint_radius`` has no tail to account for).
     slope_correction : bool
         If ``True``, fit a plane to the ALS ground points (Classification == 2)
         inside the footprint and subtract it from all Z values before building
@@ -419,6 +517,22 @@ def simulate_waveform(
         Minimum ALS points in footprint; returns ``None`` below this.
     cover_threshold : float
         HAG threshold (m) for canopy cover calculation.
+    rv_rg : float
+        Vegetation-to-ground reflectance ratio at the laser wavelength, used
+        to correct canopy cover from a raw energy ratio to a true
+        fractional-area gap probability: ``cover = veg_energy /
+        (veg_energy + rv_rg * ground_energy)`` (see :func:`_canopy_cover`
+        for the derivation). Default ``1.0`` assumes equal reflectance and
+        reproduces the uncorrected energy-ratio proxy - **not** GEDI's
+        actual L2B cover, which applies a real, externally-calibrated rv/rg
+        (commonly < 1, since vegetation typically backscatters less
+        efficiently than bare ground at 1064 nm - the uncorrected ratio then
+        systematically *underestimates* true cover). Only meaningful when
+        the histogram is genuinely energy-like, i.e. with
+        ``intensity_weighted=True``; with plain point counts (the default),
+        "energy" here just means point density; and ``rv_rg`` should still
+        only be set from a real calibration for your study area, not
+        guessed.
     rh_levels : tuple of int
         RH percentile levels to compute.  Default: RH0–RH100 (GEDI L2A).
         Result ``rh`` dict has integer keys, e.g. ``result.rh[50]`` → RH50.
@@ -431,7 +545,10 @@ def simulate_waveform(
     -------
     WaveformResult or None
     """
-    data = _query_footprint(provider, center_x, center_y, footprint_radius, year)
+    query_radius = _effective_query_radius(
+        footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
+    )
+    data = _query_footprint(provider, center_x, center_y, query_radius, year)
     n_pts = 0 if data is None else int(len(data["Z"]))
     if data is None or n_pts < min_points:
         logger.debug(
@@ -506,7 +623,7 @@ def simulate_waveform(
     # 5. Ground detection + metrics
     z_ground = _detect_ground(waveform, z_bins)
     rh = _rh_metrics(waveform, z_bins, z_ground, levels=rh_levels)
-    cover = _canopy_cover(waveform, z_bins, z_ground, cover_threshold)
+    cover = _canopy_cover(waveform, z_bins, z_ground, cover_threshold, rv_rg=rv_rg)
 
     return WaveformResult(
         z_bins=z_bins,
