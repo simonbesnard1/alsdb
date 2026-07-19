@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 import pdal
@@ -450,6 +450,45 @@ def _mask_by_point_distance(
     return out
 
 
+def _adaptive_max_distance(
+    points: np.ndarray,
+    percentile: float = 95.0,
+    multiplier: float = 2.0,
+) -> float:
+    """
+    Derive a masking distance for :func:`_mask_by_point_distance` from
+    *points*' own nearest-neighbour spacing, instead of requiring a fixed
+    metres value tuned (or guessed) for one specific survey's point density.
+
+    ``pitfree_max_distance``/``spikefree_max_distance`` previously required a
+    single constant - confirmed (this project's own Barcelona benchmark) to
+    vary a lot even within one region depending on point density (median
+    nearest-neighbour spacing measured at 0.7-1.05 m across three sample
+    windows, P95 1.4-1.86 m) - let alone across the very different surveys
+    the all-Spain phase will cover. Khosravipour et al.'s own "freeze"
+    distance isn't a fixed constant either - it's derived from the point
+    cloud's edge-length distribution (99th percentile, per the LAStools
+    reference script this project benchmarks against). This is the same
+    idea applied to nearest-neighbour spacing rather than triangle edge
+    length (the quantity :func:`_mask_by_point_distance` actually works
+    with).
+
+    Returns ``multiplier * percentile(self nearest-neighbour distance)``.
+    Requires at least 2 points; callers (:func:`_pitfree_rasterise`,
+    :func:`_spikefree_rasterise`) already guard smaller point sets before
+    reaching this (pitfree's per-threshold-layer ``len(layer_pts) < 3``
+    check in particular is what makes computing this *per layer* - not once
+    per tile - meaningful, since point density drops sharply as the
+    threshold rises).
+    """
+    from scipy.spatial import cKDTree
+
+    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
+    dist, _ = cKDTree(xy).query(xy, k=2)
+    nn_dist = dist[:, 1]  # column 0 is each point matched to itself (distance 0)
+    return float(multiplier * np.percentile(nn_dist, percentile))
+
+
 def _dtm_idw(
     points: np.ndarray,
     crop_bbox: tuple[float, float, float, float],
@@ -556,7 +595,9 @@ def _pitfree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    max_distance: Optional[float] = None,
+    max_distance: Optional[Union[float, str]] = None,
+    max_distance_percentile: float = 95.0,
+    max_distance_multiplier: float = 2.0,
 ) -> np.ndarray:
     """
     Pit-free CHM rasterisation (Khosravipour et al., 2014), adapted to
@@ -589,6 +630,15 @@ def _pitfree_rasterise(
         the exact over-extrapolation this parameter exists to prevent
         (confirmed empirically: doing so silently restores ~100% coverage
         across genuine gaps, the specific failure mode this masking fixed).
+        Pass the string ``"auto"`` instead of a metres value to derive the
+        distance from each threshold layer's *own* nearest-neighbour point
+        spacing (see :func:`_adaptive_max_distance`) rather than one fixed
+        constant for every layer — computed per layer specifically because
+        point density drops sharply as the threshold rises, the exact gap
+        a single fixed value can't account for.
+    max_distance_percentile, max_distance_multiplier:
+        Only used when ``max_distance == "auto"`` — see
+        :func:`_adaptive_max_distance`.
 
     Returns
     -------
@@ -608,8 +658,13 @@ def _pitfree_rasterise(
             layer_pts, crop_bbox, resolution, value_field="HeightAboveGround"
         )
         if max_distance is not None:
+            eff_distance = (
+                _adaptive_max_distance(layer_pts, max_distance_percentile, max_distance_multiplier)
+                if max_distance == "auto"
+                else max_distance
+            )
             layer_grid = _mask_by_point_distance(
-                layer_grid, layer_pts, crop_bbox, resolution, max_distance
+                layer_grid, layer_pts, crop_bbox, resolution, eff_distance
             )
         stacked[i] = layer_grid
 
@@ -629,7 +684,9 @@ def _spikefree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     subcell_resolution: float,
-    max_distance: float,
+    max_distance: Union[float, str],
+    max_distance_percentile: float = 95.0,
+    max_distance_multiplier: float = 2.0,
 ) -> np.ndarray:
     """
     Spike-free-*approximating* CHM rasterisation (cheap proxy for
@@ -677,7 +734,13 @@ def _spikefree_rasterise(
     max_distance:
         Maximum distance (metres) from a cell to its nearest (thinned)
         point before the cell is masked out by
-        :func:`_mask_by_point_distance` instead of trusted.
+        :func:`_mask_by_point_distance` instead of trusted. Pass the string
+        ``"auto"`` instead of a metres value to derive the distance from the
+        thinned points' own nearest-neighbour spacing (see
+        :func:`_adaptive_max_distance`) rather than one fixed constant.
+    max_distance_percentile, max_distance_multiplier:
+        Only used when ``max_distance == "auto"`` — see
+        :func:`_adaptive_max_distance`.
 
     Returns
     -------
@@ -685,7 +748,12 @@ def _spikefree_rasterise(
     """
     thinned = _thin_highest_per_subcell(points, subcell_resolution, value_field="HeightAboveGround")
     grid = _delaunay_raster(thinned, crop_bbox, resolution, value_field="HeightAboveGround")
-    return _mask_by_point_distance(grid, thinned, crop_bbox, resolution, max_distance)
+    eff_distance = (
+        _adaptive_max_distance(thinned, max_distance_percentile, max_distance_multiplier)
+        if max_distance == "auto"
+        else max_distance
+    )
+    return _mask_by_point_distance(grid, thinned, crop_bbox, resolution, eff_distance)
 
 
 # ---------------------------------------------------------------------------
@@ -774,14 +842,18 @@ def _process_tile_chm(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[float] = None,
+    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance_percentile: float = 95.0,
+    pitfree_max_distance_multiplier: float = 2.0,
     max_height: Optional[float] = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[float] = None,
+    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_max_distance_percentile: float = 95.0,
+    spikefree_max_distance_multiplier: float = 2.0,
 ) -> None:
     arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
     if arr.size == 0:
@@ -846,6 +918,8 @@ def _process_tile_chm(
             resolution,
             thresholds=pitfree_thresholds,
             max_distance=pitfree_max_distance,
+            max_distance_percentile=pitfree_max_distance_percentile,
+            max_distance_multiplier=pitfree_max_distance_multiplier,
         )
     elif spikefree:
         grid = _spikefree_rasterise(
@@ -854,6 +928,8 @@ def _process_tile_chm(
             resolution,
             subcell_resolution=(spikefree_subcell_resolution or resolution / 3.0),
             max_distance=spikefree_max_distance,
+            max_distance_percentile=spikefree_max_distance_percentile,
+            max_distance_multiplier=spikefree_max_distance_multiplier,
         )
     else:
         grid = _rasterise(
@@ -992,14 +1068,18 @@ def _process_tile_all(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[float] = None,
+    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance_percentile: float = 95.0,
+    pitfree_max_distance_multiplier: float = 2.0,
     max_height: Optional[float] = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[float] = None,
+    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_max_distance_percentile: float = 95.0,
+    spikefree_max_distance_multiplier: float = 2.0,
     dsm_exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
 ) -> None:
     """
@@ -1099,6 +1179,8 @@ def _process_tile_all(
                         resolution,
                         thresholds=pitfree_thresholds,
                         max_distance=pitfree_max_distance,
+                        max_distance_percentile=pitfree_max_distance_percentile,
+                        max_distance_multiplier=pitfree_max_distance_multiplier,
                     )
                 elif spikefree:
                     chm_grid = _spikefree_rasterise(
@@ -1107,6 +1189,8 @@ def _process_tile_all(
                         resolution,
                         subcell_resolution=(spikefree_subcell_resolution or resolution / 3.0),
                         max_distance=spikefree_max_distance,
+                        max_distance_percentile=spikefree_max_distance_percentile,
+                        max_distance_multiplier=spikefree_max_distance_multiplier,
                     )
                 else:
                     chm_grid = _rasterise(
@@ -1153,14 +1237,18 @@ def compute_chm(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[float] = None,
+    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance_percentile: float = 95.0,
+    pitfree_max_distance_multiplier: float = 2.0,
     max_height: Optional[float] = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[float] = None,
+    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_max_distance_percentile: float = 95.0,
+    spikefree_max_distance_multiplier: float = 2.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -1226,7 +1314,24 @@ def compute_chm(
         coverage where naive per-cell binning only covered ~20-30%. Set this
         (metres) to mask out any cell whose nearest same-layer point is
         farther away, mirroring LAStools' own ``-spike_free`` ``buffer``
-        parameter. ``None`` (default) disables masking.
+        parameter. ``None`` (default) disables masking. Pass ``"auto"``
+        instead of a metres value to derive the distance from each
+        threshold layer's own nearest-neighbour point spacing rather than
+        one fixed constant for every layer (density drops sharply as the
+        threshold rises, so a single fixed value can't fit every layer
+        equally) - see :func:`_adaptive_max_distance`. Neither a fixed
+        value nor ``"auto"`` was empirically validated as "correct" for a
+        given survey as of this writing - both alsdb's original 3 m guess
+        and the LAStools reference's own un-tuned 0.5 m default turned out
+        to be arbitrary relative to PNOA's actual point spacing (measured:
+        median nearest-neighbour distance 0.7-1.05 m, P95 1.4-1.86 m,
+        varying by location) - ``"auto"`` at least adapts to that variation
+        automatically rather than requiring a fixed guess to be re-tuned
+        per survey.
+    pitfree_max_distance_percentile, pitfree_max_distance_multiplier:
+        Only used when ``pitfree_max_distance == "auto"``. Default (95th
+        percentile, 2x) is a reasonable starting point, not an empirically
+        validated one - see :func:`_adaptive_max_distance`.
     max_height:
         If set, any CHM cell exceeding this height (metres) is left ``NaN``
         instead of kept - both ``height_statistic="max"`` and the pit-free
@@ -1287,7 +1392,12 @@ def compute_chm(
         ``spikefree=True`` only, required (raises ``ValueError`` if
         ``None``) - same reasoning as ``pitfree_max_distance``: without it,
         triangulation silently extrapolates across arbitrarily large gaps
-        with no signal anything is wrong.
+        with no signal anything is wrong. Also accepts ``"auto"``, same
+        meaning as ``pitfree_max_distance``'s (computed once from the
+        thinned points, since spikefree has only one layer, not six).
+    spikefree_max_distance_percentile, spikefree_max_distance_multiplier:
+        Only used when ``spikefree_max_distance == "auto"`` - see
+        :func:`_adaptive_max_distance`.
     overwrite:
         If ``False`` (default) and CHM data for *year* already exists in
         the store, the computation is skipped entirely.  Set to ``True``
@@ -1360,6 +1470,8 @@ def compute_chm(
         pitfree=pitfree,
         pitfree_thresholds=pitfree_thresholds,
         pitfree_max_distance=pitfree_max_distance,
+        pitfree_max_distance_percentile=pitfree_max_distance_percentile,
+        pitfree_max_distance_multiplier=pitfree_max_distance_multiplier,
         max_height=max_height,
         remove_outliers=remove_outliers,
         outlier_mean_k=outlier_mean_k,
@@ -1367,6 +1479,8 @@ def compute_chm(
         spikefree=spikefree,
         spikefree_subcell_resolution=spikefree_subcell_resolution,
         spikefree_max_distance=spikefree_max_distance,
+        spikefree_max_distance_percentile=spikefree_max_distance_percentile,
+        spikefree_max_distance_multiplier=spikefree_max_distance_multiplier,
     )
 
 
@@ -1551,14 +1665,18 @@ def compute_all(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[float] = None,
+    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance_percentile: float = 95.0,
+    pitfree_max_distance_multiplier: float = 2.0,
     max_height: Optional[float] = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[float] = None,
+    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_max_distance_percentile: float = 95.0,
+    spikefree_max_distance_multiplier: float = 2.0,
     dsm_exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
     overwrite: bool = False,
     dtm_method: str = "tin",
@@ -1593,9 +1711,11 @@ def compute_all(
         CHM only - see :func:`compute_chm`.
     veg_classes:
         CHM only - see :func:`compute_chm`.
-    pitfree / pitfree_thresholds / pitfree_max_distance / max_height /
-    remove_outliers / outlier_mean_k / outlier_multiplier / spikefree /
-    spikefree_subcell_resolution / spikefree_max_distance:
+    pitfree / pitfree_thresholds / pitfree_max_distance /
+    pitfree_max_distance_percentile / pitfree_max_distance_multiplier /
+    max_height / remove_outliers / outlier_mean_k / outlier_multiplier /
+    spikefree / spikefree_subcell_resolution / spikefree_max_distance /
+    spikefree_max_distance_percentile / spikefree_max_distance_multiplier:
         CHM only - see :func:`compute_chm`.
     dsm_exclude_classes:
         DSM only - see :func:`compute_dsm`. Prefixed with ``dsm_`` (unlike
@@ -1692,6 +1812,8 @@ def compute_all(
         pitfree=pitfree,
         pitfree_thresholds=pitfree_thresholds,
         pitfree_max_distance=pitfree_max_distance,
+        pitfree_max_distance_percentile=pitfree_max_distance_percentile,
+        pitfree_max_distance_multiplier=pitfree_max_distance_multiplier,
         max_height=max_height,
         remove_outliers=remove_outliers,
         outlier_mean_k=outlier_mean_k,
@@ -1699,6 +1821,8 @@ def compute_all(
         spikefree=spikefree,
         spikefree_subcell_resolution=spikefree_subcell_resolution,
         spikefree_max_distance=spikefree_max_distance,
+        spikefree_max_distance_percentile=spikefree_max_distance_percentile,
+        spikefree_max_distance_multiplier=spikefree_max_distance_multiplier,
         dsm_exclude_classes=dsm_exclude_classes,
         dtm_method=dtm_method,
     )

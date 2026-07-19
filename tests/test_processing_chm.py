@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from alsdb.processing.chm import (
+    _adaptive_max_distance,
     _cap_height,
     _classification_ranges,
     _delaunay_raster,
@@ -277,6 +278,49 @@ def test_compute_all_writes_all_three(provider, store):
     assert store.has_data("chm", RES, YEAR)
 
 
+def test_compute_chm_pitfree_max_distance_auto_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        pitfree=True,
+        pitfree_max_distance="auto",
+    )
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_chm_spikefree_max_distance_auto_still_writes_data(provider, store):
+    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
+    compute_chm(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        spikefree=True,
+        spikefree_max_distance="auto",
+    )
+    assert store.has_data("chm", RES, YEAR)
+
+
+def test_compute_all_pitfree_max_distance_auto_still_writes_all_three(provider, store):
+    compute_all(
+        provider,
+        store,
+        resolution=RES,
+        bbox=BBOX,
+        year=YEAR,
+        pitfree=True,
+        pitfree_max_distance="auto",
+    )
+    assert store.has_data("dtm", RES, YEAR)
+    assert store.has_data("dsm", RES, YEAR)
+    assert store.has_data("chm", RES, YEAR)
+
+
 def test_compute_dtm_overwrite_false_skips(provider, store):
     """Second call with overwrite=False must not re-compute."""
     compute_dtm(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
@@ -512,6 +556,59 @@ def test_pitfree_rasterise_max_distance_masks_extrapolated_gap():
     assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
 
 
+def test_pitfree_rasterise_max_distance_auto_masks_extrapolated_gap():
+    """ "auto" should behave like a well-chosen fixed value on this fixture:
+    the within-cluster spacing is small relative to the ~130 m gap, so the
+    derived distance should mask the gap without touching near-cluster cells."""
+    points = _two_clusters_far_apart()
+    grid = _pitfree_rasterise(
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,), max_distance="auto"
+    )
+    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
+    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+
+
+# ---------------------------------------------------------------------------
+# _adaptive_max_distance — unit tests (pure numpy/scipy)
+# ---------------------------------------------------------------------------
+
+
+def test_adaptive_max_distance_matches_known_grid_spacing():
+    dtype = [("X", np.float64), ("Y", np.float64)]
+    xs, ys = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
+    points = np.zeros(xs.size, dtype=dtype)
+    points["X"], points["Y"] = xs.ravel(), ys.ravel()
+    d = _adaptive_max_distance(points, percentile=95.0, multiplier=2.0)
+    assert d == pytest.approx(4.0, abs=0.2)
+
+
+def test_adaptive_max_distance_scales_with_density():
+    """Sparser points must give a proportionally larger distance - confirms
+    this actually adapts to point spacing rather than returning a constant."""
+    dtype = [("X", np.float64), ("Y", np.float64)]
+    xs_dense, ys_dense = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
+    dense = np.zeros(xs_dense.size, dtype=dtype)
+    dense["X"], dense["Y"] = xs_dense.ravel(), ys_dense.ravel()
+
+    xs_sparse, ys_sparse = np.meshgrid(np.arange(0.0, 100.0, 5.0), np.arange(0.0, 100.0, 5.0))
+    sparse = np.zeros(xs_sparse.size, dtype=dtype)
+    sparse["X"], sparse["Y"] = xs_sparse.ravel(), ys_sparse.ravel()
+
+    d_dense = _adaptive_max_distance(dense)
+    d_sparse = _adaptive_max_distance(sparse)
+    assert d_sparse > d_dense
+
+
+def test_adaptive_max_distance_multiplier_scales_linearly():
+    dtype = [("X", np.float64), ("Y", np.float64)]
+    xs, ys = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
+    points = np.zeros(xs.size, dtype=dtype)
+    points["X"], points["Y"] = xs.ravel(), ys.ravel()
+    d1 = _adaptive_max_distance(points, multiplier=1.0)
+    d3 = _adaptive_max_distance(points, multiplier=3.0)
+    assert d3 == pytest.approx(3.0 * d1)
+
+
 # ---------------------------------------------------------------------------
 # _thin_highest_per_subcell — unit tests (pure numpy)
 # ---------------------------------------------------------------------------
@@ -573,6 +670,19 @@ def test_spikefree_rasterise_masks_extrapolated_gap():
     points = _two_clusters_far_apart()
     grid = _spikefree_rasterise(
         points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+    )
+    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
+    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+
+
+def test_spikefree_rasterise_max_distance_auto_masks_extrapolated_gap():
+    points = _two_clusters_far_apart()
+    grid = _spikefree_rasterise(
+        points,
+        (0.0, 0.0, 200.0, 50.0),
+        resolution=10.0,
+        subcell_resolution=3.0,
+        max_distance="auto",
     )
     assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
     assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
