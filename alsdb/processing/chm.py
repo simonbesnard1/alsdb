@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
@@ -241,8 +242,13 @@ def _thin_highest_per_subcell(
 
     col = np.floor(points["X"] / subcell_resolution).astype(np.int64)
     row = np.floor(points["Y"] / subcell_resolution).astype(np.int64)
-    _, cell_id = np.unique(np.stack([row, col], axis=1), axis=0, return_inverse=True)
-    cell_id = cell_id.ravel()
+    # A packed 1-D key (row * col_range + col) identifies each (row, col)
+    # subcell just as uniquely as np.unique(stack([row, col]), axis=0) did,
+    # without going through numpy's much slower void-type row comparison:
+    # consecutive rows' key ranges are contiguous, never overlapping, since
+    # the multiplier (col_range) exactly equals the width of one row's own
+    # range - collision-free regardless of row/col's absolute magnitude.
+    cell_id = row * (col.max() - col.min() + 1) + col
 
     # Sort by (cell_id, -value) so the first row of each cell_id run is the
     # max-value_field point in that subcell.
@@ -286,7 +292,7 @@ def _nn_fill(
     qy = cy1 - (row_idx + 0.5) * resolution
 
     xy = np.column_stack([gnd["X"].astype(np.float64), gnd["Y"].astype(np.float64)])
-    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
+    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1, workers=-1)
 
     out = grid.copy()
     out[row_idx, col_idx] = gnd["Z"][idxs].astype(np.float32)
@@ -393,15 +399,16 @@ def _dtm_tin(
     triangles, matching :func:`_delaunay_raster`'s no-precrop contract. Any
     cells that remain NaN after triangulation (outside the convex hull) are
     filled by nearest-neighbour from the same ground points.
-    """
-    gnd_pts = _run(
-        [{"type": "filters.range", "limits": f"Classification[{_GROUND_CLASS}:{_GROUND_CLASS}]"}],
-        arr,
-    )
-    grid = _delaunay_raster(gnd_pts, crop_bbox, resolution, value_field="Z")
 
-    gnd_mask = arr["Classification"] == _GROUND_CLASS
-    gnd = arr[gnd_mask]
+    Selects Class 2 once via a plain numpy mask rather than running a
+    second PDAL pipeline just for the same filter: ``filters.range`` is a
+    streaming, order-preserving filter, so a PDAL-filtered result and
+    ``arr[arr["Classification"] == _GROUND_CLASS]`` are the identical subset
+    in the identical order - the PDAL round-trip was pure overhead.
+    """
+    gnd = arr[arr["Classification"] == _GROUND_CLASS]
+    grid = _delaunay_raster(gnd, crop_bbox, resolution, value_field="Z")
+
     if len(gnd) > 0:
         grid = _nn_fill(grid, gnd, crop_bbox, resolution)
 
@@ -442,7 +449,7 @@ def _mask_by_point_distance(
     qy = cy1 - (row_idx + 0.5) * resolution
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
+    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1, workers=-1)
 
     out = grid.copy()
     too_far = dist > max_distance
@@ -484,7 +491,7 @@ def _adaptive_max_distance(
     from scipy.spatial import cKDTree
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(xy, k=2)
+    dist, _ = cKDTree(xy).query(xy, k=2, workers=-1)
     nn_dist = dist[:, 1]  # column 0 is each point matched to itself (distance 0)
     return float(multiplier * np.percentile(nn_dist, percentile))
 
@@ -530,7 +537,7 @@ def _dtm_idw(
 
     k_actual = min(k, len(xy))
     tree = cKDTree(xy)
-    dists, idxs = tree.query(query, k=k_actual)
+    dists, idxs = tree.query(query, k=k_actual, workers=-1)
 
     if k_actual == 1:
         values = z[idxs].copy()
@@ -581,7 +588,7 @@ def _gate_by_ground_distance(
 
     gnd_xy = np.column_stack([ground["X"].astype(np.float64), ground["Y"].astype(np.float64)])
     pts_xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1)
+    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1, workers=-1)
     return points[dist <= max_distance]
 
 
@@ -668,9 +675,13 @@ def _pitfree_rasterise(
             )
         stacked[i] = layer_grid
 
-    all_nan_cols = np.all(np.isnan(stacked), axis=0)
-    grid = np.full((ny, nx), np.nan, dtype=np.float32)
-    grid[~all_nan_cols] = np.nanmax(stacked[:, ~all_nan_cols], axis=0)
+    # np.nanmax over an all-NaN column already returns NaN on its own (with
+    # a "All-NaN slice encountered" RuntimeWarning, suppressed below) -
+    # equivalent to the previous mask-and-scatter, without the two
+    # fancy-indexing copies that approach needed.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        grid = np.nanmax(stacked, axis=0).astype(np.float32)
     return grid
 
 
