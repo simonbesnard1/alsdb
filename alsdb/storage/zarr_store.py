@@ -88,17 +88,16 @@ def _apply_s3_retry_defaults(storage_options: dict) -> dict:
     transient AWS/S3-compatible endpoint errors).  User-supplied values
     in *storage_options* are never overwritten.
 
-    Note: ``AioSession.__init__``. Retry behaviour is configured exclusively via
-    the botocore ``Config`` below.
+    Note: this must go through s3fs's ``config_kwargs`` (a plain dict s3fs
+    merges into its own ``AioConfig(...)``), not ``client_kwargs["config"]``
+    — s3fs already passes its own ``config=`` positional into
+    ``create_client(..., **client_kwargs)``, so a ``config`` key inside
+    ``client_kwargs`` collides with it and raises "multiple values for
+    keyword argument 'config'".
     """
-    from botocore.config import Config
-
     opts = storage_options.copy()
-    client_kwargs = opts.setdefault("client_kwargs", {})
-    if "config" not in client_kwargs:
-        client_kwargs["config"] = Config(
-            retries={"max_attempts": _S3_DEFAULT_RETRIES, "mode": "adaptive"},
-        )
+    config_kwargs = opts.setdefault("config_kwargs", {})
+    config_kwargs.setdefault("retries", {"max_attempts": _S3_DEFAULT_RETRIES, "mode": "adaptive"})
     return opts
 
 
