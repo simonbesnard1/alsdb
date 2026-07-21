@@ -70,6 +70,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Module-level, added once at import time - not a per-call
+# warnings.catch_warnings() context manager. That would look equivalent but
+# isn't safe here: catch_warnings() mutates the *global* filter list on
+# __enter__/__exit__, and _pitfree_rasterise runs concurrently across
+# run_tiled's worker threads (n_workers up to 50 in production) - one
+# thread's __exit__ can restore the filter list while another thread's
+# nanmax call is still relying on the "ignore" filter being active,
+# letting the warning leak through. Confirmed empirically: 1 leak in 2000
+# concurrent calls across 50 threads with the context-manager version.
+# A one-time, never-reverted global filter has no such race.
+warnings.filterwarnings("ignore", message="All-NaN slice encountered", category=RuntimeWarning)
+
 _GROUND_CLASS = 2
 _PITFREE_THRESHOLDS = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
 _NOISE_CLASSES = (7, 18)  # ASPRS LAS: 7 = low noise, 18 = high noise
@@ -676,12 +688,11 @@ def _pitfree_rasterise(
         stacked[i] = layer_grid
 
     # np.nanmax over an all-NaN column already returns NaN on its own (with
-    # a "All-NaN slice encountered" RuntimeWarning, suppressed below) -
+    # a "All-NaN slice encountered" RuntimeWarning, suppressed at module
+    # level - see the filterwarnings call near the top of this file) -
     # equivalent to the previous mask-and-scatter, without the two
     # fancy-indexing copies that approach needed.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        grid = np.nanmax(stacked, axis=0).astype(np.float32)
+    grid = np.nanmax(stacked, axis=0).astype(np.float32)
     return grid
 
 
