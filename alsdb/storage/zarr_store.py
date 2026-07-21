@@ -84,15 +84,16 @@ _S3_DEFAULT_RETRIES = 10
 def _apply_s3_retry_defaults(storage_options: dict) -> dict:
     """Inject sensible retry defaults for S3 backends.
 
-    Configures both s3fs-level retries (covers connection drops, socket
-    timeouts) and botocore adaptive retry mode (covers throttling and
+    Configures botocore adaptive retry mode (covers throttling and
     transient AWS/S3-compatible endpoint errors).  User-supplied values
     in *storage_options* are never overwritten.
+
+    Note: ``AioSession.__init__``. Retry behaviour is configured exclusively via
+    the botocore ``Config`` below.
     """
     from botocore.config import Config
 
     opts = storage_options.copy()
-    opts.setdefault("retries", _S3_DEFAULT_RETRIES)
     client_kwargs = opts.setdefault("client_kwargs", {})
     if "config" not in client_kwargs:
         client_kwargs["config"] = Config(
