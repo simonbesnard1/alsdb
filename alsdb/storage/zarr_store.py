@@ -110,6 +110,30 @@ def _apply_s3_client_defaults(storage_options: dict) -> dict:
     return opts
 
 
+@retry(
+    (OSError, ConnectionError),
+    tries=10,
+    delay=5,
+    backoff=3,
+    logger=logger,
+)
+def _open_group_retrying(path: str, mode: str, storage_options: dict | None = None):
+    """Open a Zarr group, retrying on transient S3 failures.
+
+    ``ALSZarrStore.__init__`` calls this exactly once per store. Unlike
+    ``ensure_group``/``write_tile``/``has_data``, this used to be a bare
+    ``zarr.open_group(...)`` call with no retry protection - a single
+    transient GetObject failure while reading the root's zarr.json would
+    crash the whole process before any tile work started, with no
+    top-level except around it in the calling workflow script.
+    """
+    import zarr
+
+    if storage_options is not None:
+        return zarr.open_group(path, mode=mode, storage_options=storage_options)
+    return zarr.open_group(path, mode=mode)
+
+
 def _res_str(resolution: float) -> str:
     """Format resolution as a group name, e.g. 1.0 → '1m', 0.5 → '0.5m'."""
     if resolution == int(resolution):
@@ -140,16 +164,14 @@ class ALSZarrStore:
         mode: str = "a",
         storage_options: dict | None = None,
     ) -> None:
-        import zarr
-
         self.path = path  # keep as-is so S3 URIs survive repr
         self._storage_options = storage_options or {}
         _path_str = str(path)
         if self._storage_options and _path_str.startswith("s3://"):
             s3_opts = _apply_s3_client_defaults(self._storage_options)
-            self._root = zarr.open_group(_path_str, mode=mode, storage_options=s3_opts)
+            self._root = _open_group_retrying(_path_str, mode, s3_opts)
         else:
-            self._root = zarr.open_group(_path_str, mode=mode)
+            self._root = _open_group_retrying(_path_str, mode)
         # Per-resolution-group locks so different variables can be written
         # concurrently (e.g. CHM and DTM in parallel) without blocking each other.
         self._group_locks: dict[str, threading.Lock] = {}
