@@ -304,7 +304,7 @@ def _nn_fill(
     qy = cy1 - (row_idx + 0.5) * resolution
 
     xy = np.column_stack([gnd["X"].astype(np.float64), gnd["Y"].astype(np.float64)])
-    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1, workers=-1)
+    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
 
     out = grid.copy()
     out[row_idx, col_idx] = gnd["Z"][idxs].astype(np.float32)
@@ -461,7 +461,7 @@ def _mask_by_point_distance(
     qy = cy1 - (row_idx + 0.5) * resolution
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1, workers=-1)
+    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
 
     out = grid.copy()
     too_far = dist > max_distance
@@ -503,7 +503,7 @@ def _adaptive_max_distance(
     from scipy.spatial import cKDTree
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(xy, k=2, workers=-1)
+    dist, _ = cKDTree(xy).query(xy, k=2)
     nn_dist = dist[:, 1]  # column 0 is each point matched to itself (distance 0)
     return float(multiplier * np.percentile(nn_dist, percentile))
 
@@ -549,7 +549,7 @@ def _dtm_idw(
 
     k_actual = min(k, len(xy))
     tree = cKDTree(xy)
-    dists, idxs = tree.query(query, k=k_actual, workers=-1)
+    dists, idxs = tree.query(query, k=k_actual)
 
     if k_actual == 1:
         values = z[idxs].copy()
@@ -600,7 +600,7 @@ def _gate_by_ground_distance(
 
     gnd_xy = np.column_stack([ground["X"].astype(np.float64), ground["Y"].astype(np.float64)])
     pts_xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1, workers=-1)
+    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1)
     return points[dist <= max_distance]
 
 
