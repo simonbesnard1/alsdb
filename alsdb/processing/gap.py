@@ -45,12 +45,14 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
+)
+from alsdb.processing._tiling import (
     _require_year,
     array_crs,
     array_data_bbox,
@@ -215,13 +217,13 @@ def _compute_gap_grid_baba(
 
 
 def _process_tile(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     lai: bool,
     k: float,
     clumping_index: float = 1.0,
@@ -263,11 +265,11 @@ def _process_tile(
 
 
 def compute_gap_fraction(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     *,
     lai: bool = False,
     k: float = _LAI_K_DEFAULT,

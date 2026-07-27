@@ -4,8 +4,8 @@
 
 import json
 import logging
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, Optional
 
 import numpy as np
 import pdal
@@ -31,20 +31,7 @@ def _crs_is_feet(crs_str: str) -> bool:
     """Return True if any axis of *crs_str* uses feet as its linear unit."""
     lower = crs_str.lower()
     # US survey foot (EPSG:9003) and international foot (EPSG:9002)
-    if any(
-        kw in lower
-        for kw in (
-            "ftus",
-            "survey foot",
-            "survey feet",
-            "us foot",
-            "international foot",
-            '"foot"',
-            '"feet"',
-        )
-    ):
-        return True
-    return False
+    return bool(any(kw in lower for kw in ("ftus", "survey foot", "survey feet", "us foot", "international foot", '"foot"', '"feet"')))
 
 
 def _find_utm_crs(native_crs_str: str, bbox: tuple) -> str:
@@ -120,11 +107,11 @@ class ALSTile:
     def __init__(
         self,
         path: str | Path,
-        classification_filter: Optional[list[int]] = None,
+        classification_filter: list[int] | None = None,
         reclassify: bool = False,
         ground_classifier: str = "csf",
         denoise: bool = False,
-        reproject_to: Optional[str] = None,
+        reproject_to: str | None = None,
         hag_low: float = _HAG_LOW,
         hag_med: float = _HAG_MED,
         hag_high: float = _HAG_HIGH,
@@ -164,7 +151,7 @@ class ALSTile:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_z_scale(self) -> Optional[float]:
+    def _get_z_scale(self) -> float | None:
         """Return foot→metre scale factor when reprojecting a feet-based CRS, else None."""
         if self._get_out_crs() is None:
             return None
@@ -180,7 +167,7 @@ class ALSTile:
             return 0.3048
         return None
 
-    def _get_out_crs(self) -> Optional[str]:
+    def _get_out_crs(self) -> str | None:
         """Resolve the reprojection target CRS (cached). Returns None if no reprojection."""
         if self._resolved_crs is not _UNRESOLVED:
             return self._resolved_crs  # type: ignore[return-value]
@@ -307,7 +294,7 @@ class ALSTile:
     # ------------------------------------------------------------------
 
     def iter_chunks(
-        self, chunk_size: Optional[int] = None
+        self, chunk_size: int | None = None
     ) -> Generator[tuple[np.ndarray, np.ndarray, dict], None, None]:
         """
         Yield ``(x, y, attrs)`` tuples ready for writing to TileDB.

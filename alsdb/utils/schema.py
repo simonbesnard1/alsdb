@@ -92,42 +92,42 @@ _FILTERS_DEFAULT = tiledb.FilterList([tiledb.ZstdFilter(level=9)])
 # ---------------------------------------------------------------------------
 _CRS_DOMAINS: dict[str, dict] = {
     # ETRS89 / UTM Zone 30N — Iberian Peninsula (PNOA)
-    "EPSG:25830": dict(
-        domain_min_x=100_000,
-        domain_max_x=900_000,
-        domain_min_y=3_000_000,
-        domain_max_y=9_999_900,
-    ),
+    "EPSG:25830": {
+        "domain_min_x": 100_000,
+        "domain_max_x": 900_000,
+        "domain_min_y": 3_000_000,
+        "domain_max_y": 9_999_900,
+    },
     # RD New — Netherlands (AHN)
-    "EPSG:28992": dict(
-        domain_min_x=-7_000,
-        domain_max_x=300_000,
-        domain_min_y=289_000,
-        domain_max_y=629_000,
-    ),
+    "EPSG:28992": {
+        "domain_min_x": -7_000,
+        "domain_max_x": 300_000,
+        "domain_min_y": 289_000,
+        "domain_max_y": 629_000,
+    },
     # Lambert 93 — France (IGN)
-    "EPSG:2154": dict(
-        domain_min_x=99_000,
-        domain_max_x=1_242_000,
-        domain_min_y=6_049_000,
-        domain_max_y=7_111_000,
-    ),
+    "EPSG:2154": {
+        "domain_min_x": 99_000,
+        "domain_max_x": 1_242_000,
+        "domain_min_y": 6_049_000,
+        "domain_max_y": 7_111_000,
+    },
     # British National Grid — UK (EA)
-    "EPSG:27700": dict(
-        domain_min_x=-100_000,
-        domain_max_x=700_000,
-        domain_min_y=0,
-        domain_max_y=1_300_000,
-    ),
+    "EPSG:27700": {
+        "domain_min_x": -100_000,
+        "domain_max_x": 700_000,
+        "domain_min_y": 0,
+        "domain_max_y": 1_300_000,
+    },
     # Global fallback — covers any projected CRS in metres (UTM, Mercator,
     # national grids, etc.).  Values are set to ±20 000 km, which safely
     # includes the most extreme projected coordinates on Earth.
-    "_global": dict(
-        domain_min_x=-20_000_000,
-        domain_max_x=20_000_000,
-        domain_min_y=-20_000_000,
-        domain_max_y=20_000_000,
-    ),
+    "_global": {
+        "domain_min_x": -20_000_000,
+        "domain_max_x": 20_000_000,
+        "domain_min_y": -20_000_000,
+        "domain_max_y": 20_000_000,
+    },
 }
 
 

@@ -4,9 +4,9 @@
 
 import json
 import logging
+from collections.abc import Generator
 from functools import cached_property
 from pathlib import Path
-from typing import Generator, Optional
 
 import numpy as np
 import pdal
@@ -27,7 +27,7 @@ class Tile:
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
-        self._metadata: Optional[dict] = None
+        self._metadata: dict | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -86,8 +86,8 @@ class Tile:
 
     def read(
         self,
-        chunk_size: Optional[int] = None,
-        out_crs: Optional[str] = None,
+        chunk_size: int | None = None,
+        out_crs: str | None = None,
     ) -> Generator[np.ndarray, None, None]:
         """
         Yield structured numpy arrays of LAS points read via PDAL.

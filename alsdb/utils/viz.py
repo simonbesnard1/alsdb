@@ -97,7 +97,7 @@ def rasterize(
     from scipy.stats import binned_statistic_2d
 
     x_min, x_max, y_min, y_max = _extent(df)
-    nx, ny, x_edges, y_edges = _bin_counts(df, resolution)
+    _nx, _ny, x_edges, y_edges = _bin_counts(df, resolution)
 
     result, _, _, _ = binned_statistic_2d(
         df.X.to_numpy(),
@@ -309,8 +309,8 @@ def plot_classification(
     -------
     matplotlib.axes.Axes
     """
-    import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
     from matplotlib.colors import ListedColormap
 
     grid, extent = rasterize(df, "Classification", resolution=resolution, statistic="mean")
@@ -373,7 +373,7 @@ def plot_waveform(
     ax_rh=None,
     rh_levels: tuple[int, ...] = (25, 50, 75, 95, 100),
     figsize: tuple[float, float] = (11, 6),
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Two-panel waveform plot for a :class:`~alsdb.processing.waveform.WaveformResult`.
@@ -509,7 +509,7 @@ def plot_waveform(
         transform=ax_wave.transAxes,
         fontsize=8,
         va="bottom",
-        bbox=dict(boxstyle="round,pad=0.4", fc="white", alpha=0.8),
+        bbox={"boxstyle": "round,pad=0.4", "fc": "white", "alpha": 0.8},
     )
 
     # ------------------------------------------------------------------
@@ -547,9 +547,9 @@ def plot_rh_profile(
     ax_rh: Optional = None,
     ax_wave: Optional = None,
     figsize: tuple[float, float] = (9, 4.6),
-    savgol_window: Optional[int] = None,
+    savgol_window: int | None = None,
     peak_prominence: float = 0.12,
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Two-panel figure matching the GEDI L2A canonical waveform representation.
@@ -586,7 +586,7 @@ def plot_rh_profile(
     matplotlib.figure.Figure
     """
     import matplotlib.pyplot as plt
-    from scipy.signal import savgol_filter, find_peaks
+    from scipy.signal import find_peaks, savgol_filter
 
     if ax_rh is None or ax_wave is None:
         fig, (ax_rh, ax_wave) = plt.subplots(1, 2, figsize=figsize)
@@ -710,7 +710,7 @@ def plot_rh_profile(
             ),
             textcoords=("axes fraction" if False else "data", "axes fraction"),
             xycoords="data",
-            arrowprops=dict(arrowstyle="->", lw=0.8),
+            arrowprops={"arrowstyle": "->", "lw": 0.8},
             fontsize=10,
             annotation_clip=False,
         )
@@ -723,7 +723,7 @@ def plot_rh_profile(
             ),
             textcoords=("axes fraction" if False else "data", "axes fraction"),
             xycoords="data",
-            arrowprops=dict(arrowstyle="->", lw=0.8),
+            arrowprops={"arrowstyle": "->", "lw": 0.8},
             fontsize=10,
             annotation_clip=False,
         )
@@ -733,7 +733,7 @@ def plot_rh_profile(
             "",
             xy=(xb, h_w[high_peak]),
             xytext=(xb, h_w[low_peak]),
-            arrowprops=dict(arrowstyle="<->", lw=1.0),
+            arrowprops={"arrowstyle": "<->", "lw": 1.0},
         )
         ax_wave.text(
             xb + 0.04,
@@ -749,7 +749,7 @@ def plot_rh_profile(
         rf"$E(h_{{\mathrm{{split}}}}) = {U_strength:.2f}$",
         transform=ax_wave.transAxes,
         fontsize=11,
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="0.7"),
+        bbox={"boxstyle": "round,pad=0.3", "fc": "white", "ec": "0.7"},
     )
     ax_wave.legend(frameon=False, fontsize=10, loc="upper right")
 
@@ -869,7 +869,7 @@ def plot_pointcloud_3d(
             colour_arg = [
                 f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})" for r, g, b in colours_rgb
             ]
-            marker = dict(size=point_size, color=colour_arg, opacity=0.8)
+            marker = {"size": point_size, "color": colour_arg, "opacity": 0.8}
         else:
             import matplotlib.pyplot as plt
 
@@ -878,7 +878,7 @@ def plot_pointcloud_3d(
             colour_arg = [
                 f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})" for r, g, b, _ in rgba
             ]
-            marker = dict(size=point_size, color=colour_arg, opacity=0.8)
+            marker = {"size": point_size, "color": colour_arg, "opacity": 0.8}
 
         fig = go.Figure(
             data=[
@@ -892,13 +892,13 @@ def plot_pointcloud_3d(
             ]
         )
         fig.update_layout(
-            scene=dict(
-                xaxis_title="Easting (m)",
-                yaxis_title="Northing (m)",
-                zaxis_title="Elevation (m)",
-                aspectmode="data",
-            ),
-            margin=dict(l=0, r=0, b=0, t=30),
+            scene={
+                "xaxis_title": "Easting (m)",
+                "yaxis_title": "Northing (m)",
+                "zaxis_title": "Elevation (m)",
+                "aspectmode": "data",
+            },
+            margin={"l": 0, "r": 0, "b": 0, "t": 30},
             title=f"Point cloud — {len(df):,} pts  |  colour: {color_by}",
         )
         return fig
@@ -922,7 +922,7 @@ def plot_pointcloud_3d(
             rasterized=True,
         )
     else:
-        import matplotlib.cm as cm
+        from matplotlib import cm
 
         cmap_obj = cm.get_cmap(cmap)
         ax.scatter(
@@ -962,7 +962,7 @@ def plot_waveforms_3d(
     elev: float = 25.0,
     azim: float = -60.0,
     figsize: tuple[float, float] = (12, 8),
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     3-D waterfall plot of simulated GEDI-like waveforms.
@@ -1030,28 +1030,26 @@ def plot_waveforms_3d(
         for _, row in results.iterrows():
             heights = row[rh_cols].to_numpy(dtype=float)
             rgba = cmap_obj(norm(row[color_by]))
-            hex_col = "#{:02x}{:02x}{:02x}".format(
-                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
-            )
+            hex_col = f"#{int(rgba[0] * 255):02x}{int(rgba[1] * 255):02x}{int(rgba[2] * 255):02x}"
             fig.add_trace(
                 go.Scatter3d(
                     x=[row["center_x"]] * 101,
                     y=percentiles,
                     z=heights,
                     mode="lines",
-                    line=dict(color=hex_col, width=line_width * 2),
+                    line={"color": hex_col, "width": line_width * 2},
                     showlegend=False,
                     opacity=alpha,
                 )
             )
         fig.update_layout(
-            scene=dict(
-                xaxis_title="Easting (m)",
-                yaxis_title="Cumulative energy (%)",
-                zaxis_title="Height above ground (m)",
-            ),
+            scene={
+                "xaxis_title": "Easting (m)",
+                "yaxis_title": "Cumulative energy (%)",
+                "zaxis_title": "Height above ground (m)",
+            },
             title=title or "Simulated waveforms — RH profiles",
-            margin=dict(l=0, r=0, b=0, t=40),
+            margin={"l": 0, "r": 0, "b": 0, "t": 40},
         )
         return fig
 
@@ -1094,7 +1092,7 @@ def plot_overview(
     df: pd.DataFrame,
     resolution: float = 1.0,
     figsize: tuple[float, float] = (16, 14),
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Four-panel overview figure: DSM with hillshade, RGB, intensity, classification.

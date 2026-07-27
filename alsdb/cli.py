@@ -7,7 +7,6 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Optional
 
 import click
 
@@ -78,10 +77,10 @@ def ingest_cmd(
     laz_path: Path,
     array_uri: str,
     storage_type: str,
-    s3_url: Optional[str],
+    s3_url: str | None,
     s3_region: str,
-    s3_access_key: Optional[str],
-    s3_secret_key: Optional[str],
+    s3_access_key: str | None,
+    s3_secret_key: str | None,
     tile_extent: float,
     chunk_size: int,
     domain_min_x: float,
@@ -92,7 +91,7 @@ def ingest_cmd(
     overwrite: bool,
 ) -> None:
     """Ingest a PNOA LAZ tile into a TileDB array at ARRAY_URI."""
-    credentials: Optional[Dict[str, str]] = None
+    credentials: dict[str, str] | None = None
     if s3_access_key and s3_secret_key:
         credentials = {"AccessKeyId": s3_access_key, "SecretAccessKey": s3_secret_key}
 

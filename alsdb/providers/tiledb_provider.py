@@ -4,7 +4,6 @@
 
 import logging
 import os
-from typing import Dict, Optional
 
 import tiledb
 
@@ -56,12 +55,12 @@ class TileDBProvider:
     def __init__(
         self,
         storage_type: str = "local",
-        uri: Optional[str] = None,
-        url: Optional[str] = None,
+        uri: str | None = None,
+        url: str | None = None,
         region: str = "eu-central-1",
-        credentials: Optional[Dict[str, str]] = None,
-        s3_config_overrides: Optional[Dict[str, str]] = None,
-        max_reader_threads: Optional[int] = None,
+        credentials: dict[str, str] | None = None,
+        s3_config_overrides: dict[str, str] | None = None,
+        max_reader_threads: int | None = None,
     ) -> None:
         if not storage_type or not isinstance(storage_type, str):
             raise ValueError("'storage_type' must be a non-empty string.")
@@ -87,7 +86,7 @@ class TileDBProvider:
         else:
             raise ValueError(f"Invalid storage_type {storage_type!r}. Must be 'local' or 's3'.")
 
-        self._schema_cache: Optional[tiledb.ArraySchema] = None
+        self._schema_cache: tiledb.ArraySchema | None = None
 
     # ------------------------------------------------------------------
     # Context initialisation
@@ -95,10 +94,10 @@ class TileDBProvider:
 
     def _initialize_s3_context(
         self,
-        credentials: Optional[Dict[str, str]],
+        credentials: dict[str, str] | None,
         url: str,
         region: str,
-    ) -> tuple[Dict[str, str], tiledb.Ctx]:
+    ) -> tuple[dict[str, str], tiledb.Ctx]:
         cores = os.cpu_count() or 8
         # S3 reads are network-bound (threads mostly wait on I/O), so a higher
         # default than the local/CPU-bound case is fine when unset.
@@ -107,7 +106,7 @@ class TileDBProvider:
         # endpoint_override must be hostname[:port] only — strip scheme if present
         endpoint = url.removeprefix("https://").removeprefix("http://").rstrip("/")
 
-        cfg: Dict[str, str] = {
+        cfg: dict[str, str] = {
             # Endpoint (Ceph/MinIO — path-style, no virtual addressing)
             "vfs.s3.endpoint_override": endpoint,
             "vfs.s3.region": region,
@@ -145,7 +144,7 @@ class TileDBProvider:
         cfg.update(self.s3_config_overrides)
         return cfg, tiledb.Ctx(tiledb.Config(cfg))
 
-    def _initialize_local_context(self) -> tuple[Dict[str, str], tiledb.Ctx]:
+    def _initialize_local_context(self) -> tuple[dict[str, str], tiledb.Ctx]:
         # Reader/compute/IO thread counts are per-query, inside libtiledb — and
         # callers commonly run several TileDB queries concurrently themselves
         # (e.g. run_tiled()'s ThreadPoolExecutor). A hardcoded 32 here means

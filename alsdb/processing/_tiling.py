@@ -14,8 +14,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pdal
@@ -39,9 +40,9 @@ VEG_CLASSES = (3, 4, 5)
 
 
 def query_to_array(
-    provider: "TileDBProvider",
-    bbox: Optional[tuple[float, float, float, float]],
-    year: Optional[int] = None,
+    provider: TileDBProvider,
+    bbox: tuple[float, float, float, float] | None,
+    year: int | None = None,
 ) -> np.ndarray:
     """
     Query the TileDB array and return a PDAL-compatible numpy structured array.
@@ -77,11 +78,11 @@ def query_to_array(
 
     dtype = [(name, PDAL_DTYPES[name]) for name in PDAL_DTYPES]
     out = np.empty(n, dtype=dtype)
-    for name in PDAL_DTYPES:
+    for name, np_dtype in PDAL_DTYPES.items():
         if name in data:
-            out[name] = data[name].astype(PDAL_DTYPES[name])
+            out[name] = data[name].astype(np_dtype)
         else:
-            out[name] = np.zeros(n, dtype=PDAL_DTYPES[name])
+            out[name] = np.zeros(n, dtype=np_dtype)
     return out
 
 

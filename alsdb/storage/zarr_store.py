@@ -201,7 +201,7 @@ class ALSZarrStore:
         variables: dict[str, list[str]],
         tile_size: float = 500.0,
         storage_options: dict | None = None,
-    ) -> "ALSZarrStore":
+    ) -> ALSZarrStore:
         """
         Create a new Zarr store pre-allocated for *bbox* and *variables*.
 
@@ -410,10 +410,10 @@ class ALSZarrStore:
         cx0, cy0, cx1, cy1 = crop_bbox
 
         # Pixel offsets (north-up: row 0 = top of grid)
-        col0 = int(round((cx0 - x_origin) / resolution))
-        col1 = int(round((cx1 - x_origin) / resolution))
-        row0 = int(round((y_origin - cy1) / resolution))
-        row1 = int(round((y_origin - cy0) / resolution))
+        col0 = round((cx0 - x_origin) / resolution)
+        col1 = round((cx1 - x_origin) / resolution)
+        row0 = round((y_origin - cy1) / resolution)
+        row1 = round((y_origin - cy0) / resolution)
 
         # Clamp to store bounds (last tile may be smaller than tile_size)
         col1 = min(col1, nx_store)

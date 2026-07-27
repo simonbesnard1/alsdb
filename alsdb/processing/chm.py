@@ -44,13 +44,15 @@ from __future__ import annotations
 import json
 import logging
 import warnings
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pdal
 
 from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
+)
+from alsdb.processing._tiling import (
     _filter_ground_outliers,
     _hag_stage,
     _require_year,
@@ -200,7 +202,7 @@ def _rasterise(
     # Resolve percentile shorthand → callable
     if isinstance(statistic, str) and statistic.startswith("p") and statistic[1:].isdigit():
         q = int(statistic[1:])
-        stat_fn = lambda arr: np.nanpercentile(arr, q) if len(arr) > 0 else np.nan  # noqa: E731
+        stat_fn = lambda arr: np.nanpercentile(arr, q) if len(arr) > 0 else np.nan
     else:
         stat_fn = statistic  # type: ignore[assignment]
 
@@ -297,7 +299,7 @@ def _nn_fill(
         return grid
 
     cx0, _, _, cy1 = crop_bbox
-    ny, nx = grid.shape
+    _ny, _nx = grid.shape
     row_idx, col_idx = np.where(nan_mask)
     # north-up: row 0 = top → actual Y = cy1 - (row + 0.5) * resolution
     qx = cx0 + (col_idx + 0.5) * resolution
@@ -519,7 +521,7 @@ def _dtm_idw(
     resolution: float,
     power: float = 2.0,
     k: int = 8,
-    max_distance: Optional[float] = None,
+    max_distance: float | None = None,
 ) -> np.ndarray:
     """
     IDW interpolation of ground points using scipy kd-tree.
@@ -574,7 +576,7 @@ def _dtm_idw(
 def _gate_by_ground_distance(
     points: np.ndarray,
     ground: np.ndarray,
-    max_distance: Optional[float],
+    max_distance: float | None,
 ) -> np.ndarray:
     """
     Drop points farther than *max_distance* from the nearest ground point.
@@ -619,7 +621,7 @@ def _pitfree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    max_distance: Optional[Union[float, str]] = None,
+    max_distance: float | str | None = None,
     max_distance_percentile: float = 95.0,
     max_distance_multiplier: float = 2.0,
 ) -> np.ndarray:
@@ -711,7 +713,7 @@ def _spikefree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     subcell_resolution: float,
-    max_distance: Union[float, str],
+    max_distance: float | str,
     max_distance_percentile: float = 95.0,
     max_distance_multiplier: float = 2.0,
 ) -> np.ndarray:
@@ -788,7 +790,7 @@ def _spikefree_rasterise(
 # ---------------------------------------------------------------------------
 
 
-def _cap_height(grid: np.ndarray, max_height: Optional[float]) -> np.ndarray:
+def _cap_height(grid: np.ndarray, max_height: float | None) -> np.ndarray:
     """
     Null out (NaN) CHM cells exceeding *max_height* instead of leaving an
     implausible value in place.
@@ -855,30 +857,30 @@ def _run(stages: list, arr: np.ndarray) -> np.ndarray:
 
 
 def _process_tile_chm(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     first_returns_only: bool,
     height_statistic: str = "max",
     pit_fill: bool = True,
-    max_ground_distance: Optional[float] = None,
+    max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance: float | str | None = None,
     pitfree_max_distance_percentile: float = 95.0,
     pitfree_max_distance_multiplier: float = 2.0,
-    max_height: Optional[float] = None,
+    max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
-    spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_subcell_resolution: float | None = None,
+    spikefree_max_distance: float | str | None = None,
     spikefree_max_distance_percentile: float = 95.0,
     spikefree_max_distance_multiplier: float = 2.0,
 ) -> None:
@@ -975,13 +977,13 @@ def _process_tile_chm(
 
 
 def _process_tile_dtm(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     dtm_method: str = "tin",
 ) -> None:
     arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
@@ -1028,13 +1030,13 @@ def _process_tile_dtm(
 
 
 def _process_tile_dsm(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     first_returns_only: bool,
     exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
 ) -> None:
@@ -1077,13 +1079,13 @@ def _process_tile_dsm(
 
 
 def _process_tile_all(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     first_returns_only: bool,
     need_dtm: bool,
     need_dsm: bool,
@@ -1091,20 +1093,20 @@ def _process_tile_all(
     height_statistic: str = "max",
     dtm_method: str = "tin",
     pit_fill: bool = True,
-    max_ground_distance: Optional[float] = None,
+    max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance: float | str | None = None,
     pitfree_max_distance_percentile: float = 95.0,
     pitfree_max_distance_multiplier: float = 2.0,
-    max_height: Optional[float] = None,
+    max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
-    spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_subcell_resolution: float | None = None,
+    spikefree_max_distance: float | str | None = None,
     spikefree_max_distance_percentile: float = 95.0,
     spikefree_max_distance_multiplier: float = 2.0,
     dsm_exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
@@ -1251,29 +1253,29 @@ def _process_tile_all(
 
 
 def compute_chm(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     *,
     first_returns_only: bool = True,
     height_statistic: str = "max",
     pit_fill: bool = True,
-    max_ground_distance: Optional[float] = None,
+    max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance: float | str | None = None,
     pitfree_max_distance_percentile: float = 95.0,
     pitfree_max_distance_multiplier: float = 2.0,
-    max_height: Optional[float] = None,
+    max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
-    spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_subcell_resolution: float | None = None,
+    spikefree_max_distance: float | str | None = None,
     spikefree_max_distance_percentile: float = 95.0,
     spikefree_max_distance_multiplier: float = 2.0,
     overwrite: bool = False,
@@ -1512,11 +1514,11 @@ def compute_chm(
 
 
 def compute_dtm(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     *,
     dtm_method: str = "tin",
     overwrite: bool = False,
@@ -1596,12 +1598,12 @@ def compute_dtm(
 
 
 def compute_dsm(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 1.0,
     first_returns_only: bool = True,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     *,
     exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
     overwrite: bool = False,
@@ -1677,31 +1679,31 @@ def compute_dsm(
 
 
 def compute_all(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
     first_returns_only: bool = True,
     height_statistic: str = "max",
     pit_fill: bool = True,
-    max_ground_distance: Optional[float] = None,
+    max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: Optional[Union[float, str]] = None,
+    pitfree_max_distance: float | str | None = None,
     pitfree_max_distance_percentile: float = 95.0,
     pitfree_max_distance_multiplier: float = 2.0,
-    max_height: Optional[float] = None,
+    max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
-    spikefree_subcell_resolution: Optional[float] = None,
-    spikefree_max_distance: Optional[Union[float, str]] = None,
+    spikefree_subcell_resolution: float | None = None,
+    spikefree_max_distance: float | str | None = None,
     spikefree_max_distance_percentile: float = 95.0,
     spikefree_max_distance_multiplier: float = 2.0,
     dsm_exclude_classes: tuple[int, ...] = _NOISE_CLASSES,

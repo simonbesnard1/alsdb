@@ -71,12 +71,15 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
+)
+from alsdb.processing._tiling import (
     _require_year,
     array_crs,
     array_data_bbox,
@@ -447,7 +450,7 @@ def calibrate_naesset(
     agb_field: np.ndarray,
     p0: tuple[float, float, float] = (0.8, 1.8, 0.5),
     return_cov: bool = False,
-) -> "tuple[float, float, float] | tuple[tuple[float, float, float], np.ndarray]":
+) -> tuple[float, float, float] | tuple[tuple[float, float, float], np.ndarray]:
     """
     Fit Næsset power-law AGB coefficients (a, b, c) to field-plot data.
 
@@ -554,7 +557,7 @@ def calibrate_naesset(
 
 def wrap_sklearn_model(
     estimator,
-    features: Optional[list[str]] = None,
+    features: list[str] | None = None,
 ) -> Callable:
     """
     Wrap a fitted scikit-learn estimator as a ``model_fn`` for
@@ -738,17 +741,17 @@ def _extract_metrics_baba(
 
 
 def _process_tile_metrics(
-    provider: "TileDBProvider",
+    provider: TileDBProvider,
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     tile_index: int,
     resolution: float,
-    year: Optional[int],
+    year: int | None,
     cc_threshold: float,
     baba_radius: float = 0.0,
     min_density: float = 0.0,
-    model_fn: Optional[Callable] = None,
+    model_fn: Callable | None = None,
 ) -> None:
     """
     Extract per-cell metrics and either write them all (``model_fn=None``,
@@ -799,11 +802,11 @@ def _process_tile_metrics(
 
 
 def compute_metrics(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
     baba_radius: float = 0.0,
@@ -853,14 +856,13 @@ def compute_metrics(
         return
     if not check_year_exists(year, provider):
         return
-    if not overwrite:
-        if all(store.has_data(v, resolution, year) for v in _METRIC_NAMES):
-            logger.info(
-                "LiDAR metrics already present for year %d at %.0f m — skipping",
-                year,
-                resolution,
-            )
-            return
+    if not overwrite and all(store.has_data(v, resolution, year) for v in _METRIC_NAMES):
+        logger.info(
+            "LiDAR metrics already present for year %d at %.0f m — skipping",
+            year,
+            resolution,
+        )
+        return
     crs = array_crs(provider)
     for var in _METRIC_NAMES:
         store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
@@ -890,12 +892,12 @@ def compute_metrics(
 
 
 def compute_biomass(
-    provider: "TileDBProvider",
-    store: "ALSZarrStore",
+    provider: TileDBProvider,
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    model_fn: Optional[Callable[[dict[str, np.ndarray]], np.ndarray]] = None,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    model_fn: Callable[[dict[str, np.ndarray]], np.ndarray] | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     *,
     baba_radius: float = 0.0,

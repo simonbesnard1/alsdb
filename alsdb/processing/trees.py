@@ -49,7 +49,6 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -78,7 +77,7 @@ _TREE_ID_STRIDE = 100_000
 # ---------------------------------------------------------------------------
 
 
-def _hag_stages(arr: np.ndarray, min_height: float, voxel_size: Optional[float]) -> list[dict]:
+def _hag_stages(arr: np.ndarray, min_height: float, voxel_size: float | None) -> list[dict]:
     """HAG + pre-filter stages shared by all code paths (run before litree)."""
     stages: list[dict] = [
         _hag_stage(arr),
@@ -153,8 +152,12 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
                 hull = ConvexHull(np.column_stack([x_crown, y_crown]))
                 crown_area = float(hull.volume)  # scipy: volume = area in 2-D
                 crown_radius = float(np.sqrt(crown_area / np.pi))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Crown hull failed for tree %s (%s), leaving crown_area/crown_radius as NaN",
+                    tid,
+                    exc,
+                )
 
         records.append(
             {
@@ -176,14 +179,14 @@ def _process_tile(
     query_bbox: tuple[float, float, float, float],
     crop_bbox: tuple[float, float, float, float],
     tile_index: int,
-    year: Optional[int],
+    year: int | None,
     min_points: int,
     min_height: float,
     radius: float,
-    voxel_size: Optional[float],
+    voxel_size: float | None,
     adaptive_radius: bool = False,
     crown_fraction: float = 0.5,
-) -> Optional[tuple[np.ndarray, pd.DataFrame]]:
+) -> tuple[np.ndarray, pd.DataFrame] | None:
     """
     Segment trees within one sub-tile.
 
@@ -264,14 +267,14 @@ def _process_tile(
 
 def segment_trees(
     provider: TileDBProvider,
-    bbox: Optional[tuple[float, float, float, float]] = None,
-    year: Optional[int] = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    year: int | None = None,
     min_points: int = 10,
     min_height: float = 3.0,
     radius: float = 2.0,
     adaptive_radius: bool = False,
-    voxel_size: Optional[float] = None,
-    tile_size: Optional[float] = None,
+    voxel_size: float | None = None,
+    tile_size: float | None = None,
     tile_buffer: float = 30.0,
     n_workers: int = 1,
     crown_fraction: float = 0.5,
@@ -390,7 +393,7 @@ def segment_trees(
         f"{voxel_size} m" if voxel_size else "none",
     )
 
-    tile_results: list[Optional[tuple[np.ndarray, pd.DataFrame]]] = [None] * n_tiles
+    tile_results: list[tuple[np.ndarray, pd.DataFrame] | None] = [None] * n_tiles
 
     def _worker(idx: int, qb, cb):
         result = _process_tile(

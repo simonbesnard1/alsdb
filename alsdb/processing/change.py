@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def compute_change(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     variable: str,
     year_from: int,
     year_to: int,

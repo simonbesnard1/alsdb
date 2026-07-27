@@ -85,7 +85,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -211,7 +210,7 @@ class WaveformResult:
 def _effective_query_radius(
     footprint_radius: float,
     gaussian_beam_weighting: bool,
-    sigma_beam: Optional[float],
+    sigma_beam: float | None,
     beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
 ) -> float:
     """
@@ -244,8 +243,8 @@ def _query_footprint(
     center_x: float,
     center_y: float,
     radius: float,
-    year: Optional[int],
-) -> Optional[dict[str, np.ndarray]]:
+    year: int | None,
+) -> dict[str, np.ndarray] | None:
     """
     Return ALS points within a circular footprint as a dict of 1-D arrays.
 
@@ -440,23 +439,23 @@ def simulate_waveform(
     provider: TileDBProvider,
     center_x: float,
     center_y: float,
-    year: Optional[int] = None,
+    year: int | None = None,
     footprint_radius: float = _FOOTPRINT_RADIUS,
     z_step: float = _Z_STEP,
     sigma: float = _SIGMA_FULL,
-    beam_id: Optional[str] = None,
+    beam_id: str | None = None,
     noise_std: float = 0.0,
     intensity_weighted: bool = False,
     gaussian_beam_weighting: bool = True,
-    sigma_beam: Optional[float] = None,
+    sigma_beam: float | None = None,
     beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
     slope_correction: bool = False,
     min_points: int = _MIN_POINTS,
     cover_threshold: float = _COVER_THRESHOLD,
     rv_rg: float = 1.0,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
-    rng: Optional[np.random.Generator] = None,
-) -> Optional[WaveformResult]:
+    rng: np.random.Generator | None = None,
+) -> WaveformResult | None:
     """
     Simulate a GEDI large-footprint waveform at a given UTM location.
 
@@ -549,7 +548,7 @@ def simulate_waveform(
         footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
     )
     data = _query_footprint(provider, center_x, center_y, query_radius, year)
-    n_pts = 0 if data is None else int(len(data["Z"]))
+    n_pts = 0 if data is None else len(data["Z"])
     if data is None or n_pts < min_points:
         logger.debug(
             "simulate_waveform: footprint at (%.0f, %.0f) year=%s has only %d points "
@@ -632,7 +631,7 @@ def simulate_waveform(
         rh=rh,
         home=rh.get(50, np.nan),
         cover=cover,
-        n_points=int(len(z)),
+        n_points=len(z),
         center_x=center_x,
         center_y=center_y,
     )
@@ -644,10 +643,10 @@ def simulate_batch(
     x_col: str = "center_x",
     y_col: str = "center_y",
     beam_col: str = "beam",
-    year: Optional[int] = None,
+    year: int | None = None,
     n_workers: int = 1,
-    output_path: Optional[str] = None,
-    rng: Optional[np.random.Generator] = None,
+    output_path: str | None = None,
+    rng: np.random.Generator | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """

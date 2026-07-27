@@ -3,14 +3,13 @@
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
 import logging
-from typing import Optional
 
 import tiledb
 
 logger = logging.getLogger(__name__)
 
 
-def consolidate(uri: str, ctx: Optional[tiledb.Ctx] = None) -> None:
+def consolidate(uri: str, ctx: tiledb.Ctx | None = None) -> None:
     """
     Consolidate TileDB array fragments.
 
@@ -30,7 +29,7 @@ def consolidate(uri: str, ctx: Optional[tiledb.Ctx] = None) -> None:
     logger.info("Consolidation complete: %s", uri)
 
 
-def vacuum(uri: str, ctx: Optional[tiledb.Ctx] = None) -> None:
+def vacuum(uri: str, ctx: tiledb.Ctx | None = None) -> None:
     """
     Vacuum a TileDB array, removing obsolete fragment files left after consolidation.
 

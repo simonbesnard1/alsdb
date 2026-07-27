@@ -26,16 +26,18 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Optional
 
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from scipy.spatial import ConvexHull
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -62,13 +64,13 @@ def _discrete_colors(n: int, cmap: str = "tab20") -> np.ndarray:
 
 def plot_trees(
     trees: pd.DataFrame,
-    points: Optional[np.ndarray] = None,
+    points: np.ndarray | None = None,
     cmap: str = "YlGn",
-    vmin: Optional[float] = None,
-    vmax: Optional[float] = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
     show_crowns: bool = True,
-    output_path: Optional[str | Path] = None,
-    ax: Optional[plt.Axes] = None,
+    output_path: str | Path | None = None,
+    ax: plt.Axes | None = None,
 ) -> plt.Figure:
     """
     2-D plan-view map of detected trees.
@@ -133,8 +135,13 @@ def plot_trees(
                         patches.append(_hull_patch(x_t, y_t))
                         colors.append(color)
                         continue
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "plot_trees: hull patch failed for tree %s (%s), "
+                            "falling back to a circle",
+                            row["tree_id"],
+                            exc,
+                        )
             # Fallback: circle with crown_radius
             r = row.get("crown_radius", 5.0)
             r = r if (r and not np.isnan(r)) else 5.0
@@ -186,12 +193,12 @@ def plot_trees(
 
 def plot_trees_3d(
     points: np.ndarray,
-    trees: Optional[pd.DataFrame] = None,
+    trees: pd.DataFrame | None = None,
     max_trees: int = 30,
     point_size: float = 0.5,
     alpha: float = 0.6,
-    output_path: Optional[str | Path] = None,
-    ax: Optional[plt.Axes] = None,
+    output_path: str | Path | None = None,
+    ax: plt.Axes | None = None,
 ) -> plt.Figure:
     """
     3-D scatter of the segmented point cloud.

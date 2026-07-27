@@ -3,7 +3,6 @@
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
 import logging
-from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -67,8 +66,8 @@ class ALSProvider(TileDBProvider):
         min_y: float,
         max_x: float,
         max_y: float,
-        attributes: Optional[List[str]] = None,
-        year: Optional[int] = None,
+        attributes: list[str] | None = None,
+        year: int | None = None,
     ) -> pd.DataFrame:
         """
         Query all points within a bounding box.
@@ -113,8 +112,8 @@ class ALSProvider(TileDBProvider):
         self,
         tile_x_km: int,
         tile_y_km: int,
-        attributes: Optional[List[str]] = None,
-        year: Optional[int] = None,
+        attributes: list[str] | None = None,
+        year: int | None = None,
     ) -> pd.DataFrame:
         """
         Query all points within a PNOA tile identified by its km-grid coordinates.
@@ -150,7 +149,7 @@ class ALSProvider(TileDBProvider):
         )
         return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
 
-    def available_years(self) -> List[int]:
+    def available_years(self) -> list[int]:
         """
         Return the sorted list of survey years present in the array.
 
@@ -170,8 +169,8 @@ class ALSProvider(TileDBProvider):
         min_y: float,
         max_x: float,
         max_y: float,
-        attributes: Optional[List[str]] = None,
-        year: Optional[int] = None,
+        attributes: list[str] | None = None,
+        year: int | None = None,
     ) -> pd.DataFrame:
         """Alias for :meth:`query_bbox` — returns a :class:`pandas.DataFrame`."""
         return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
@@ -182,8 +181,8 @@ class ALSProvider(TileDBProvider):
         min_y: float,
         max_x: float,
         max_y: float,
-        attributes: Optional[List[str]] = None,
-        year: Optional[int] = None,
+        attributes: list[str] | None = None,
+        year: int | None = None,
     ):
         """
         Query a bounding box and return an :class:`xarray.Dataset`.
@@ -214,6 +213,6 @@ class ALSProvider(TileDBProvider):
         )
         return ds
 
-    def get_available_attributes(self) -> List[str]:
+    def get_available_attributes(self) -> list[str]:
         """Return the list of attribute names present in the array schema."""
         return [self.schema.attr(i).name for i in range(self.schema.nattr)]

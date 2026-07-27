@@ -8,17 +8,16 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import tiledb
 from retry import retry
 
+from alsdb.core.alstile import ALSTile
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.utils.schema import TileDBSchemaConfig, create_schema
-from alsdb.core.alstile import ALSTile
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +89,13 @@ class ALSDatabase(TileDBProvider):
     def __init__(
         self,
         storage_type: str = "local",
-        uri: Optional[str] = None,
-        schema_cfg: Optional[TileDBSchemaConfig] = None,
-        url: Optional[str] = None,
+        uri: str | None = None,
+        schema_cfg: TileDBSchemaConfig | None = None,
+        url: str | None = None,
         region: str = "eu-central-1",
-        credentials: Optional[Dict[str, str]] = None,
-        s3_config_overrides: Optional[Dict[str, str]] = None,
-        max_reader_threads: Optional[int] = None,
+        credentials: dict[str, str] | None = None,
+        s3_config_overrides: dict[str, str] | None = None,
+        max_reader_threads: int | None = None,
     ) -> None:
         super().__init__(
             storage_type=storage_type,
@@ -114,14 +113,14 @@ class ALSDatabase(TileDBProvider):
     # Array lifecycle
     # ------------------------------------------------------------------
 
-    def stored_crs(self) -> Optional[str]:
+    def stored_crs(self) -> str | None:
         """Return the CRS stored in array metadata, or ``None`` if not set."""
         if not self.array_exists():
             return None
         with self.open("r") as arr:
             return arr.meta.get(_CRS_KEY)
 
-    def create(self, overwrite: bool = False, crs: Optional[str] = None) -> None:
+    def create(self, overwrite: bool = False, crs: str | None = None) -> None:
         """
         Explicitly create the TileDB array.
 
@@ -161,7 +160,7 @@ class ALSDatabase(TileDBProvider):
     # Manifest
     # ------------------------------------------------------------------
 
-    def load_manifest(self) -> Dict[str, dict]:
+    def load_manifest(self) -> dict[str, dict]:
         """
         Return the ingestion manifest stored in array metadata.
 
@@ -174,12 +173,12 @@ class ALSDatabase(TileDBProvider):
             raw = arr.meta.get(_MANIFEST_KEY, "{}")
         return json.loads(raw)
 
-    def _save_manifest(self, manifest: Dict[str, dict]) -> None:
+    def _save_manifest(self, manifest: dict[str, dict]) -> None:
         if not self.array_exists():
             return
         self._write_metadata(_MANIFEST_KEY, json.dumps(manifest))
 
-    def list_ingested(self) -> List[dict]:
+    def list_ingested(self) -> list[dict]:
         """
         Return a list of manifest entries, sorted by timestamp.
 
@@ -270,7 +269,7 @@ class ALSDatabase(TileDBProvider):
         backoff=3,
         logger=logger,
     )
-    def _write_to_tiledb(self, coords: tuple, data: Dict[str, np.ndarray]) -> None:
+    def _write_to_tiledb(self, coords: tuple, data: dict[str, np.ndarray]) -> None:
         with tiledb.open(self.array_uri, mode="w", ctx=self.ctx) as array:
             array[coords] = data
 
@@ -294,8 +293,8 @@ class ALSDatabase(TileDBProvider):
         x: np.ndarray,
         y: np.ndarray,
         year: int,
-        attrs: Dict[str, np.ndarray],
-        crs: Optional[str] = None,
+        attrs: dict[str, np.ndarray],
+        crs: str | None = None,
     ) -> None:
         """
         Append a batch of points to the TileDB array.
@@ -334,14 +333,14 @@ class ALSDatabase(TileDBProvider):
         self,
         laz_path: Path,
         chunk_size: int,
-        classification_filter: Optional[list[int]],
-        stored_crs: Optional[str],
-        _tile: Optional[ALSTile] = None,
+        classification_filter: list[int] | None,
+        stored_crs: str | None,
+        _tile: ALSTile | None = None,
         reclassify: bool = False,
         ground_classifier: str = "csf",
         denoise: bool = False,
-        reproject_to: Optional[str] = None,
-    ) -> Tuple[int, dict]:
+        reproject_to: str | None = None,
+    ) -> tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
 
@@ -389,7 +388,7 @@ class ALSDatabase(TileDBProvider):
                 "bbox": list(tile_name.bbox_native),
                 "n_points": 0,
                 "status": "ok",
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
             }
 
         x_all = np.concatenate(xs)
@@ -402,7 +401,7 @@ class ALSDatabase(TileDBProvider):
             schema_attrs = {
                 rdr.schema.attr(i).name: rdr.schema.attr(i) for i in range(rdr.schema.nattr)
             }
-        attrs_all: Dict[str, np.ndarray] = {}
+        attrs_all: dict[str, np.ndarray] = {}
         for name, a in schema_attrs.items():
             parts = [
                 ch.get(name, np.zeros(len(xs[i]), dtype=a.dtype))
@@ -427,20 +426,20 @@ class ALSDatabase(TileDBProvider):
             "bbox": list(tile_name.bbox_native),
             "n_points": total,
             "status": "ok",
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
         }
         return total, entry
 
     def ingest(
         self,
         laz_path: str | Path,
-        chunk_size: Optional[int] = None,
-        classification_filter: Optional[list[int]] = None,
+        chunk_size: int | None = None,
+        classification_filter: list[int] | None = None,
         overwrite: bool = False,
         reclassify: bool = False,
         ground_classifier: str = "csf",
         denoise: bool = False,
-        reproject_to: Optional[str] = None,
+        reproject_to: str | None = None,
     ) -> None:
         """
         Ingest a single LAZ tile into the TileDB array.
@@ -521,7 +520,7 @@ class ALSDatabase(TileDBProvider):
             manifest[filename] = {
                 "status": "failed",
                 "error": str(exc),
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
             }
             self._save_manifest(manifest)
             raise
@@ -538,17 +537,17 @@ class ALSDatabase(TileDBProvider):
 
     def ingest_many(
         self,
-        laz_paths: List[str | Path],
-        chunk_size: Optional[int] = None,
-        classification_filter: Optional[list[int]] = None,
+        laz_paths: list[str | Path],
+        chunk_size: int | None = None,
+        classification_filter: list[int] | None = None,
         consolidate_every: int = 50,
         n_workers: int = 1,
         overwrite: bool = False,
         reclassify: bool = False,
         ground_classifier: str = "csf",
         denoise: bool = False,
-        reproject_to: Optional[str] = None,
-    ) -> Dict[str, int]:
+        reproject_to: str | None = None,
+    ) -> dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
 
@@ -587,8 +586,8 @@ class ALSDatabase(TileDBProvider):
 
         # Pre-load manifest; filter already-ingested files unless overwrite
         manifest = self.load_manifest()
-        pending: List[Path] = []
-        results: Dict[str, int] = {}
+        pending: list[Path] = []
+        results: dict[str, int] = {}
         for p in laz_paths:
             if not overwrite and manifest.get(p.name, {}).get("status") == "ok":
                 logger.debug("Already ingested %s — skipping", p.name)
@@ -640,7 +639,7 @@ class ALSDatabase(TileDBProvider):
         _n_failed = 0
         _t0 = time.monotonic()
 
-        def _worker(path: Path) -> Tuple[str, int, dict]:
+        def _worker(path: Path) -> tuple[str, int, dict]:
             total, entry = self._ingest_tile(
                 path,
                 chunk_size,
@@ -675,7 +674,7 @@ class ALSDatabase(TileDBProvider):
                         manifest[filename] = {
                             "status": "failed",
                             "error": str(exc),
-                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "ts": datetime.now(UTC).isoformat(),
                         }
                         results[filename] = 0
                         n = 0

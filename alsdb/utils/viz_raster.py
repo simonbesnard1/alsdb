@@ -25,7 +25,7 @@ Typical usage::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -39,10 +39,10 @@ if TYPE_CHECKING:
 
 
 def _read_from_store(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     variable: str,
     resolution: float,
-    year: Optional[int] = None,
+    year: int | None = None,
 ) -> tuple[np.ndarray, list[float]]:
     """
     Extract a 2-D float32 grid and imshow extent from the store.
@@ -111,7 +111,7 @@ def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
     return ls.shade(filled, cmap=cmap_obj, norm=norm, vert_exag=vert_exag, blend_mode="soft")
 
 
-def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
+def _label(store: ALSZarrStore, variable: str, year: int | None) -> str:
     year_str = f" ({year})" if year is not None else ""
     return f"{variable.upper()}{year_str} — {store.path.name}"
 
@@ -122,12 +122,12 @@ def _label(store: "ALSZarrStore", variable: str, year: Optional[int]) -> str:
 
 
 def plot_chm(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "Greens",
     vmin: float = 0.0,
-    vmax: Optional[float] = None,
+    vmax: float | None = None,
     ax=None,
 ):
     """
@@ -188,9 +188,9 @@ def plot_chm(
 
 
 def plot_dtm(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "terrain",
     hillshade: bool = True,
     vert_exag: float = 3.0,
@@ -248,9 +248,9 @@ def plot_dtm(
 
 
 def plot_dsm(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "terrain",
     hillshade: bool = True,
     vert_exag: float = 3.0,
@@ -308,12 +308,12 @@ def plot_dsm(
 
 
 def plot_agb(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "YlGn",
     vmin: float = 0.0,
-    vmax: Optional[float] = None,
+    vmax: float | None = None,
     ax=None,
 ):
     """
@@ -366,9 +366,9 @@ def plot_agb(
 
 
 def plot_gap(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "RdYlGn_r",
     vmin: float = 0.0,
     vmax: float = 1.0,
@@ -421,12 +421,12 @@ def plot_gap(
 
 
 def plot_lai(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     cmap: str = "YlGn",
     vmin: float = 0.0,
-    vmax: Optional[float] = None,
+    vmax: float | None = None,
     ax=None,
 ):
     """
@@ -479,12 +479,12 @@ def plot_lai(
 
 
 def plot_metrics(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    year: Optional[int] = None,
-    variables: Optional[list[str]] = None,
+    year: int | None = None,
+    variables: list[str] | None = None,
     figsize: tuple[float, float] = (24, 16),
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Multi-panel overview of LiDAR structural metrics.
@@ -621,12 +621,12 @@ def plot_metrics(
 
 
 def plot_products(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 1.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     figsize: tuple[float, float] = (18, 6),
     hillshade: bool = True,
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Three-panel overview: DTM | DSM | CHM.
@@ -666,12 +666,12 @@ def plot_products(
 
 
 def plot_products_agb(
-    store: "ALSZarrStore",
+    store: ALSZarrStore,
     resolution: float = 10.0,
-    year: Optional[int] = None,
+    year: int | None = None,
     figsize: tuple[float, float] = (22, 6),
     hillshade: bool = True,
-    title: Optional[str] = None,
+    title: str | None = None,
 ):
     """
     Four-panel overview: DTM | DSM | CHM | AGB.
