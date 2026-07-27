@@ -31,7 +31,20 @@ def _crs_is_feet(crs_str: str) -> bool:
     """Return True if any axis of *crs_str* uses feet as its linear unit."""
     lower = crs_str.lower()
     # US survey foot (EPSG:9003) and international foot (EPSG:9002)
-    return bool(any(kw in lower for kw in ("ftus", "survey foot", "survey feet", "us foot", "international foot", '"foot"', '"feet"')))
+    return bool(
+        any(
+            kw in lower
+            for kw in (
+                "ftus",
+                "survey foot",
+                "survey feet",
+                "us foot",
+                "international foot",
+                '"foot"',
+                '"feet"',
+            )
+        )
+    )
 
 
 def _find_utm_crs(native_crs_str: str, bbox: tuple) -> str:
