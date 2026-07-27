@@ -11,6 +11,7 @@ and :mod:`alsdb.processing.biomass`.
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import math
@@ -389,7 +390,14 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
 
 
 def run_tiled(
-    worker_fn: Callable, provider, tiles, store, n_workers: int, progress_every: int = 500, **kwargs
+    worker_fn: Callable,
+    provider,
+    tiles,
+    store,
+    n_workers: int,
+    progress_every: int = 500,
+    gc_every: int = 100,
+    **kwargs,
 ) -> None:
     """
     Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
@@ -405,6 +413,17 @@ def run_tiled(
     completing steadily and it's genuinely just a lot of data" from "nothing
     has finished in the last N minutes").
 
+    Also forces a ``gc.collect()`` every *gc_every* completions. PDAL/GDAL
+    point/array objects form reference cycles that Python's generational GC
+    only reclaims once its own allocation-count thresholds trigger - on a
+    long, allocation-heavy run those thresholds fire far too rarely, letting
+    cycles pile up for a long time before eventually being collected. This
+    reads identically to a real memory leak from `top`/RSS alone, but a
+    direct A/B reproduction (same pipeline, same real tiles) showed RSS
+    staying flat for thousands of tiles with periodic forced collection,
+    versus climbing into the hundreds of GB without it - so this isn't
+    optional cleanup, it's the actual fix for that failure mode.
+
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
@@ -416,6 +435,8 @@ def run_tiled(
         completed += 1
         if completed % progress_every == 0 or completed == total:
             logger.info("run_tiled: %d/%d tiles completed", completed, total)
+        if completed % gc_every == 0:
+            gc.collect()
 
     if n_workers == 1:
         for idx, (query_bbox, crop_bbox) in enumerate(tiles):
