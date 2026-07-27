@@ -342,6 +342,19 @@ def _delaunay_raster(
     ``/vsimem/`` filesystem (no real disk I/O) via ``writers.raster`` and
     reads the actual interpolated grid back with rasterio.
 
+    Cleanup goes through :class:`rasterio.io.MemoryFile` rather than a raw
+    ``/vsimem/`` path string + ``rasterio.shutil.delete()``: the latter has
+    to open the file to determine its driver before it can delete it, which
+    raises ("Invalid dataset") and is silently swallowed whenever the
+    pipeline produced no valid raster (degenerate/collinear triangulation,
+    or too few surviving points at a given height threshold — routine in
+    real data, especially at pitfree's higher threshold layers). Confirmed
+    by direct reproduction: that path leaked 100% of the time on degenerate
+    input, permanently, since a ``/vsimem/`` file is never touched by
+    Python's own garbage collector. ``MemoryFile.close()`` unlinks
+    unconditionally, with no driver validation, so it cleans up correctly
+    whether or not the pipeline ever wrote anything valid.
+
     Returns a ``(ny, nx)`` float32 north-up array. All-NaN if *arr* has
     fewer than 3 points, or if the triangulation itself fails (degenerate/
     collinear input) — treated as "this input contributes nothing" rather
@@ -360,42 +373,34 @@ def _delaunay_raster(
         arr = arr.copy()
         arr["Z"] = arr[value_field]
 
-    import uuid
+    from rasterio.io import MemoryFile
 
-    import rasterio
-    import rasterio.shutil as rio_shutil
-
-    vsi_path = f"/vsimem/_delaunay_raster_{uuid.uuid4().hex}.tif"
-    stages = [
-        {"type": "filters.delaunay"},
-        {
-            "type": "filters.faceraster",
-            "resolution": resolution,
-            "origin_x": cx0,
-            "origin_y": cy0,
-            "width": nx,
-            "height": ny,
-        },
-        {"type": "writers.raster", "gdaldriver": "GTiff", "filename": vsi_path},
-    ]
-    try:
-        _run(stages, arr)
-        with rasterio.open(vsi_path) as ds:
-            band = ds.read(1).astype(np.float32)
-            nodata = ds.nodata
-        if nodata is not None:
-            band = np.where(band == nodata, np.nan, band).astype(np.float32)
-        return band
-    except RuntimeError as exc:
-        if "no points" in str(exc).lower():
-            return empty
-        logger.debug("_delaunay_raster: triangulation failed (%s), returning all-NaN", exc)
-        return empty
-    finally:
+    with MemoryFile(filename="_delaunay_raster.tif") as memfile:
+        stages = [
+            {"type": "filters.delaunay"},
+            {
+                "type": "filters.faceraster",
+                "resolution": resolution,
+                "origin_x": cx0,
+                "origin_y": cy0,
+                "width": nx,
+                "height": ny,
+            },
+            {"type": "writers.raster", "gdaldriver": "GTiff", "filename": memfile.name},
+        ]
         try:
-            rio_shutil.delete(vsi_path)
-        except Exception:
-            pass
+            _run(stages, arr)
+            with memfile.open() as ds:
+                band = ds.read(1).astype(np.float32)
+                nodata = ds.nodata
+            if nodata is not None:
+                band = np.where(band == nodata, np.nan, band).astype(np.float32)
+            return band
+        except RuntimeError as exc:
+            if "no points" in str(exc).lower():
+                return empty
+            logger.debug("_delaunay_raster: triangulation failed (%s), returning all-NaN", exc)
+            return empty
 
 
 def _dtm_tin(
