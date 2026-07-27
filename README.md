@@ -80,13 +80,13 @@ alsdb.setup_logging()
 
 # Ingest
 db = ALSDatabase(storage_type="local", uri="my_array")
-db.ingest("path/to/tile.laz")                        # year, CRS, bbox from LAZ header
-db.ingest_many(paths, max_workers=8)                 # batch — already-ingested files skipped
+db.ingest("path/to/tile.laz")  # year, CRS, bbox from LAZ header
+db.ingest_many(paths, max_workers=8)  # batch — already-ingested files skipped
 
 # Query
 reader = ALSProvider(storage_type="local", uri="my_array")
 df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
-print(reader.available_years())                      # [2019, 2021, 2023]
+print(reader.available_years())  # [2019, 2021, 2023]
 ```
 
 ---
