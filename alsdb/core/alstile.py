@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pdal
 
-from alsdb.tile.Tile import Tile
+from alsdb.tile.tile import Tile
 from alsdb.tile.tile_name import TileNameBase
 from alsdb.utils.schema import LAS_ATTRIBUTES
 
@@ -62,7 +62,7 @@ class ALSTile:
     """
     Processes a single LAZ tile into arrays ready for TileDB ingestion.
 
-    Wraps :class:`~alsdb.tile.Tile.Tile` and applies optional reprojection,
+    Wraps :class:`~alsdb.tile.tile.Tile` and applies optional reprojection,
     reclassification, and point filtering before handing data to
     :class:`~alsdb.core.alsdatabase.ALSDatabase`.
 

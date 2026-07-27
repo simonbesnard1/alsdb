@@ -152,7 +152,7 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
                 hull = ConvexHull(np.column_stack([x_crown, y_crown]))
                 crown_area = float(hull.volume)  # scipy: volume = area in 2-D
                 crown_radius = float(np.sqrt(crown_area / np.pi))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - degenerate hull geometry, fall back to NaN
                 logger.debug(
                     "Crown hull failed for tree %s (%s), leaving crown_area/crown_radius as NaN",
                     tid,

@@ -254,8 +254,7 @@ def _parse_crs(srs: dict) -> str:
             if auth:
                 return f"{auth[0]}:{auth[1]}"
             return crs_obj.to_wkt() if not from_proj4 else text
-        except Exception:
-            # Deliberately broad: pyproj may be unavailable, or the CRS text
+        except Exception:  # noqa: BLE001 - pyproj may be unavailable, or the CRS text
             # unrecognised/malformed in ways that raise all sorts of errors -
             # any failure here just means "return the input unchanged".
             return text

@@ -9,7 +9,7 @@ from alsdb.core.alsprovider import ALSProvider
 from alsdb.core.alstile import ALSTile
 from alsdb.processing.change import compute_change
 from alsdb.providers.tiledb_provider import TileDBProvider
-from alsdb.tile.Tile import Tile
+from alsdb.tile.tile import Tile
 from alsdb.tile.tile_name import PNOATileName, parse_tile_filename
 from alsdb.utils.constants import PNOA_TILE_SIZE_M, UTM30N, WGS84, ALSProduct
 from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig, create_schema

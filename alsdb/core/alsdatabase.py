@@ -668,7 +668,7 @@ class ALSDatabase(TileDBProvider):
                         results[filename] = n
                         if n > 0:
                             newly_written += 1
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - one bad file must not abort the whole batch
                         filename = path.name
                         logger.error("Failed to ingest %s: %s", filename, exc)
                         manifest[filename] = {
@@ -712,7 +712,7 @@ class ALSDatabase(TileDBProvider):
                 for meta_mode in ("commits", "fragment_meta"):
                     try:
                         self.consolidate(mode=meta_mode)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - best-effort cleanup, never fatal
                         logger.debug("Metadata consolidation (%s) skipped: %s", meta_mode, exc)
 
         elapsed_total = time.monotonic() - _t0

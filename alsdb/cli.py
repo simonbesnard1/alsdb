@@ -131,7 +131,7 @@ def ingest_cmd(
 @click.argument("laz_path", type=click.Path(exists=True, path_type=Path))
 def info_cmd(laz_path: Path) -> None:
     """Show filename metadata and bounding box for a PNOA LAZ tile."""
-    from alsdb.tile.Tile import Tile
+    from alsdb.tile.tile import Tile
 
     tile = Tile(laz_path)
     name = tile.name

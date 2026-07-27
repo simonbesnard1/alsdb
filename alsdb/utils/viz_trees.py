@@ -135,7 +135,7 @@ def plot_trees(
                         patches.append(_hull_patch(x_t, y_t))
                         colors.append(color)
                         continue
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - degenerate hull, fall back to a circle
                         logger.debug(
                             "plot_trees: hull patch failed for tree %s (%s), "
                             "falling back to a circle",
