@@ -387,7 +387,9 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     return result
 
 
-def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int, **kwargs) -> None:
+def run_tiled(
+    worker_fn: Callable, provider, tiles, store, n_workers: int, progress_every: int = 500, **kwargs
+) -> None:
     """
     Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
 
@@ -395,12 +397,29 @@ def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int, **kwa
 
         worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)
 
+    Logs "N/total tiles completed" every *progress_every* completions (and
+    once at the end) - a crash that kills the process before it can log
+    anything else still leaves behind how far tile completion actually got,
+    which memory usage alone can't tell you (e.g. distinguishing "tiles are
+    completing steadily and it's genuinely just a lot of data" from "nothing
+    has finished in the last N minutes").
+
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
+    total = len(tiles)
+    completed = 0
+
+    def _note_progress() -> None:
+        nonlocal completed
+        completed += 1
+        if completed % progress_every == 0 or completed == total:
+            logger.info("run_tiled: %d/%d tiles completed", completed, total)
+
     if n_workers == 1:
         for idx, (query_bbox, crop_bbox) in enumerate(tiles):
             worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
+            _note_progress()
     else:
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = {
@@ -411,6 +430,7 @@ def run_tiled(worker_fn: Callable, provider, tiles, store, n_workers: int, **kwa
             }
             for future in as_completed(futures):
                 future.result()  # re-raise worker exceptions
+                _note_progress()
 
 
 def flip_to_north_up(grid: np.ndarray, transpose: bool = False) -> np.ndarray:
