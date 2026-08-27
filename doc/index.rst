@@ -1,8 +1,8 @@
 .. _alsdb_docs_mainpage:
 
-##################
+####################
 alsDB Documentation
-##################
+####################
 
 .. toctree::
    :maxdepth: 1

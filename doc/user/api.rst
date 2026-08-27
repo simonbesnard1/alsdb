@@ -25,7 +25,7 @@ Storage
    :toctree: generated/
    :recursive:
 
-   alsdb.storage.ALSZarrStore
+   storage.ALSZarrStore
 
 TileDB backend
 ==============
@@ -59,10 +59,10 @@ Canopy Height Model
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.chm.compute_chm
-   alsdb.processing.chm.compute_dtm
-   alsdb.processing.chm.compute_dsm
-   alsdb.processing.chm.compute_all
+   processing.chm.compute_chm
+   processing.chm.compute_dtm
+   processing.chm.compute_dsm
+   processing.chm.compute_all
 
 Gap fraction and LAI
 ---------------------
@@ -71,7 +71,7 @@ Gap fraction and LAI
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.gap.compute_gap_fraction
+   processing.gap.compute_gap_fraction
 
 Structural metrics and biomass
 -------------------------------
@@ -80,11 +80,11 @@ Structural metrics and biomass
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.biomass.compute_metrics
-   alsdb.processing.biomass.compute_biomass
-   alsdb.processing.biomass.naesset_model
-   alsdb.processing.biomass.calibrate_naesset
-   alsdb.processing.biomass.wrap_sklearn_model
+   processing.biomass.compute_metrics
+   processing.biomass.compute_biomass
+   processing.biomass.naesset_model
+   processing.biomass.calibrate_naesset
+   processing.biomass.wrap_sklearn_model
 
 Multi-temporal change detection
 --------------------------------
@@ -93,7 +93,7 @@ Multi-temporal change detection
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.change.compute_change
+   processing.change.compute_change
 
 Individual tree segmentation
 -----------------------------
@@ -102,7 +102,7 @@ Individual tree segmentation
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.trees.segment_trees
+   processing.trees.segment_trees
 
 Waveform simulation
 --------------------
@@ -111,8 +111,8 @@ Waveform simulation
    :toctree: generated/
    :recursive:
 
-   alsdb.processing.waveform.simulate_waveform
-   alsdb.processing.waveform.simulate_batch
+   processing.waveform.simulate_waveform
+   processing.waveform.simulate_batch
 
 Tiling utilities
 -----------------
@@ -121,12 +121,12 @@ Tiling utilities
    :toctree: generated/
    :recursive:
 
-   alsdb.processing._tiling.tile_bboxes
-   alsdb.processing._tiling.run_tiled
-   alsdb.processing._tiling.array_crs
-   alsdb.processing._tiling.array_data_bbox
-   alsdb.processing._tiling.check_year_exists
-   alsdb.processing._tiling.check_bbox_overlap
+   processing._tiling.tile_bboxes
+   processing._tiling.run_tiled
+   processing._tiling.array_crs
+   processing._tiling.array_data_bbox
+   processing._tiling.check_year_exists
+   processing._tiling.check_bbox_overlap
 
 Visualisation
 =============
@@ -138,15 +138,15 @@ Visualisation
    :toctree: generated/
    :recursive:
 
-   alsdb.utils.viz.plot_overview
-   alsdb.utils.viz.plot_dsm
-   alsdb.utils.viz.plot_rgb
-   alsdb.utils.viz.plot_intensity
-   alsdb.utils.viz.plot_classification
-   alsdb.utils.viz.plot_waveform
-   alsdb.utils.viz.plot_rh_profile
-   alsdb.utils.viz.plot_waveforms_3d
-   alsdb.utils.viz.plot_pointcloud_3d
+   utils.viz.plot_overview
+   utils.viz.plot_dsm
+   utils.viz.plot_rgb
+   utils.viz.plot_intensity
+   utils.viz.plot_classification
+   utils.viz.plot_waveform
+   utils.viz.plot_rh_profile
+   utils.viz.plot_waveforms_3d
+   utils.viz.plot_pointcloud_3d
 
 Gridded product plots
 ----------------------
@@ -155,15 +155,15 @@ Gridded product plots
    :toctree: generated/
    :recursive:
 
-   alsdb.utils.viz_raster.plot_chm
-   alsdb.utils.viz_raster.plot_dtm
-   alsdb.utils.viz_raster.plot_dsm
-   alsdb.utils.viz_raster.plot_agb
-   alsdb.utils.viz_raster.plot_gap
-   alsdb.utils.viz_raster.plot_lai
-   alsdb.utils.viz_raster.plot_metrics
-   alsdb.utils.viz_raster.plot_products
-   alsdb.utils.viz_raster.plot_products_agb
+   utils.viz_raster.plot_chm
+   utils.viz_raster.plot_dtm
+   utils.viz_raster.plot_dsm
+   utils.viz_raster.plot_agb
+   utils.viz_raster.plot_gap
+   utils.viz_raster.plot_lai
+   utils.viz_raster.plot_metrics
+   utils.viz_raster.plot_products
+   utils.viz_raster.plot_products_agb
 
 Utilities
 =========
@@ -172,5 +172,5 @@ Utilities
    :toctree: generated/
    :recursive:
 
-   alsdb.utils.constants.ALSProduct
-   alsdb.setup_logging
+   utils.constants.ALSProduct
+   setup_logging
