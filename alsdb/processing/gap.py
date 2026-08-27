@@ -96,12 +96,21 @@ def _compute_gap_grid(
     resolution: float,
     bbox: tuple[float, float, float, float],
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> np.ndarray:
     """
     Compute per-cell gap fraction from a HAG-annotated point array.
 
     Returns a ``(ny, nx)`` float32 north-up array; cells with no first
     returns are ``np.nan``.
+
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS). Not universal across surveys -- see
+        ``pavd.py``'s module docstring for a real dataset (DE-Hai) that
+        uses a different code entirely; verify with
+        ``np.unique(points["Classification"], return_counts=True)`` before
+        trusting the default on a new array.
     """
     min_x, min_y, max_x, max_y = bbox
     nx = max(1, int(np.ceil((max_x - min_x) / resolution)))
@@ -115,7 +124,16 @@ def _compute_gap_grid(
     cls_fr = points["Classification"][fr]
 
     gnd = (cls_fr == _GROUND_CLASS).astype(np.float64)
-    veg = np.isin(cls_fr, _VEG_CLASSES).astype(np.float64)
+    veg = np.isin(cls_fr, veg_classes).astype(np.float64)
+    if not (gnd.any() or veg.any()):
+        logger.warning(
+            "_compute_gap_grid: veg_classes=%s and ground class %d matched 0 "
+            "of %d first returns -- this survey likely uses different "
+            "classification codes; the resulting gap grid will be all-NaN.",
+            veg_classes,
+            _GROUND_CLASS,
+            len(cls_fr),
+        )
 
     # Bin all first-return points once with np.bincount — one C-level pass
     # instead of three separate binned_statistic_2d scans.
@@ -170,6 +188,7 @@ def _compute_gap_grid_baba(
     bbox: tuple[float, float, float, float],
     baba_radius: float,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> np.ndarray:
     """
     Compute per-cell gap fraction using a circular neighbourhood of radius
@@ -178,6 +197,11 @@ def _compute_gap_grid_baba(
     The denominator is ``N_gnd + N_veg`` (classified first returns only),
     consistent with the standard grid estimator.  Unclassified, noise, and
     building returns are excluded so they do not dilute the gap estimate.
+
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS) -- see :func:`_compute_gap_grid`'s docstring;
+        not universal across surveys.
     """
     fr_mask = points["ReturnNumber"] == 1
     fr_pts = points[fr_mask]
@@ -203,7 +227,7 @@ def _compute_gap_grid_baba(
 
         cls_k = cls_fr[idxs]
         n_gnd = int((cls_k == _GROUND_CLASS).sum())
-        n_veg = int(np.isin(cls_k, _VEG_CLASSES).sum())
+        n_veg = int(np.isin(cls_k, veg_classes).sum())
         total = n_gnd + n_veg
         if total > 0:
             gap[row, col] = n_gnd / total
@@ -229,6 +253,7 @@ def _process_tile(
     clumping_index: float = 1.0,
     baba_radius: float = 0.0,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> None:
     arr = query_to_array(provider, query_bbox, year=year)
     if arr.size == 0:
@@ -241,10 +266,17 @@ def _process_tile(
 
     if baba_radius > 0:
         gap = _compute_gap_grid_baba(
-            points, resolution, crop_bbox, baba_radius, min_density=min_density
+            points,
+            resolution,
+            crop_bbox,
+            baba_radius,
+            min_density=min_density,
+            veg_classes=veg_classes,
         )
     else:
-        gap = _compute_gap_grid(points, resolution, crop_bbox, min_density=min_density)
+        gap = _compute_gap_grid(
+            points, resolution, crop_bbox, min_density=min_density, veg_classes=veg_classes
+        )
 
     if np.all(np.isnan(gap)):
         logger.debug("Gap tile %d: all NaN, skipping", tile_index)
@@ -276,6 +308,7 @@ def compute_gap_fraction(
     clumping_index: float = 1.0,
     baba_radius: float = 0.0,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -324,6 +357,13 @@ def compute_gap_fraction(
         Minimum first-return density (returns m⁻²) for a cell to receive
         a gap fraction estimate.  Cells below this threshold are set to
         ``np.nan``.  Default ``0.0`` disables the guard.
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS). Not universal across surveys -- see
+        ``pavd.py``'s module docstring for a real dataset that uses a
+        different code entirely; verify with
+        ``np.unique(classification, return_counts=True)`` before trusting
+        the default on a new array.
     overwrite:
         If ``False`` (default) and gap (and LAI if requested) already exist
         for *year* in the store, the computation is skipped.
@@ -379,4 +419,5 @@ def compute_gap_fraction(
         clumping_index=clumping_index,
         baba_radius=baba_radius,
         min_density=min_density,
+        veg_classes=veg_classes,
     )

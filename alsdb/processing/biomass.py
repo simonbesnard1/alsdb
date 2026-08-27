@@ -200,6 +200,7 @@ def _extract_metrics(
     bbox: tuple[float, float, float, float],
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR structural metrics over *bbox*.
@@ -213,6 +214,13 @@ def _extract_metrics(
         Minimum total point density (pts m⁻²) required for a cell to receive
         metric values.  Cells below this threshold are set to ``np.nan`` for
         all metrics.  Default ``0.0`` disables the guard.
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS). Not universal across surveys -- see
+        ``pavd.py``'s module docstring for a real dataset that uses a
+        different code entirely; verify with
+        ``np.unique(points["Classification"], return_counts=True)`` before
+        trusting the default on a new array.
     """
     x_min, y_min, x_max, y_max = bbox
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
@@ -233,7 +241,7 @@ def _extract_metrics(
     fr = points["ReturnNumber"] == 1
     hag_fr = hag[fr]
 
-    veg = np.isin(points["Classification"], _VEG_CLASSES) & (hag > 0)
+    veg = np.isin(points["Classification"], veg_classes) & (hag > 0)
     hag_v = hag[veg]
 
     def _bin(px: np.ndarray, py: np.ndarray) -> np.ndarray:
@@ -628,6 +636,7 @@ def _extract_metrics_baba(
     baba_radius: float,
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR metrics using a circular neighbourhood of radius
@@ -669,9 +678,9 @@ def _extract_metrics_baba(
     ret_all = points["ReturnNumber"]
     # Precomputed once over all points rather than re-running np.isin (and
     # the > 0 comparison) inside the loop for every one of nx*ny output
-    # cells - _VEG_CLASSES is tiny and fixed, so there's nothing per-cell
-    # about this test.
-    veg_all = np.isin(points["Classification"], _VEG_CLASSES) & (hag_all > 0)
+    # cells - veg_classes is tiny and fixed per call, so there's nothing
+    # per-cell about this test.
+    veg_all = np.isin(points["Classification"], veg_classes) & (hag_all > 0)
 
     for k, idxs in enumerate(indices_list):
         if not idxs:
@@ -752,6 +761,7 @@ def _process_tile_metrics(
     baba_radius: float = 0.0,
     min_density: float = 0.0,
     model_fn: Callable | None = None,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> None:
     """
     Extract per-cell metrics and either write them all (``model_fn=None``,
@@ -772,6 +782,7 @@ def _process_tile_metrics(
             baba_radius=baba_radius,
             cc_threshold=cc_threshold,
             min_density=min_density,
+            veg_classes=veg_classes,
         )
     else:
         metrics = _extract_metrics(
@@ -780,6 +791,7 @@ def _process_tile_metrics(
             bbox=crop_bbox,
             cc_threshold=cc_threshold,
             min_density=min_density,
+            veg_classes=veg_classes,
         )
 
     if model_fn is None:
@@ -811,6 +823,7 @@ def compute_metrics(
     *,
     baba_radius: float = 0.0,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -843,6 +856,13 @@ def compute_metrics(
         values.  Cells below this threshold are set to ``np.nan`` for all
         metrics.  Typical values: 0.5 (sparse survey), 1.0 (moderate),
         4.0 (dense modern ALS).  Default ``0.0`` disables the guard.
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS). Not universal across surveys -- see
+        ``pavd.py``'s module docstring for a real dataset that uses a
+        different code entirely; verify with
+        ``np.unique(classification, return_counts=True)`` before trusting
+        the default on a new array.
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
@@ -888,6 +908,7 @@ def compute_metrics(
         cc_threshold=cc_threshold,
         baba_radius=baba_radius,
         min_density=min_density,
+        veg_classes=veg_classes,
     )
 
 
@@ -906,6 +927,7 @@ def compute_biomass(
     tile_buffer: float = 50.0,
     n_workers: int = 1,
     min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> None:
     """
     Estimate Above-Ground Biomass (AGB) and write into *store*.
@@ -930,6 +952,10 @@ def compute_biomass(
     min_density:
         Minimum total point density (pts m⁻²) required before AGB is
         estimated for a cell.  See :func:`compute_metrics` for guidance.
+    veg_classes:
+        LAS classification codes treated as vegetation (default ``(3, 4,
+        5)``, standard ASPRS). See :func:`compute_metrics` for the same
+        parameter's full caveat -- not universal across surveys.
     overwrite:
         If ``False`` (default) and biomass data for *year* already exists
         in the store, the computation is skipped.
@@ -1000,4 +1026,5 @@ def compute_biomass(
             model_fn=model_fn,
             baba_radius=baba_radius,
             min_density=min_density,
+            veg_classes=veg_classes,
         )

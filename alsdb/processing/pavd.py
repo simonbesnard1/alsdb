@@ -94,6 +94,7 @@ def _pavd_profile_from_hag(
     z_step: float = _Z_STEP_DEFAULT,
     k: float = _LAI_K_DEFAULT,
     min_ground_points: int = _MIN_GROUND_POINTS_DEFAULT,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> PAVDProfile | None:
     """
     Pure-math core: first-return height-above-ground values and LAS
@@ -106,13 +107,37 @@ def _pavd_profile_from_hag(
 
     Returns ``None`` if there are too few ground returns to estimate
     ``G(0)`` reliably, or no vegetation signal above ground at all.
+
+    veg_classes:
+        LAS classification codes treated as "vegetation" (default ``(3, 4,
+        5)`` -- standard ASPRS low/medium/high vegetation). NOT every survey
+        uses those codes: confirmed on a real DE-Hai (Thuringia, Germany)
+        product processed with the DGM/DOM convention, which uses a single
+        non-terrain bucket, class 20, for all above-ground returns -- with
+        the default here, ``veg_mask`` matched zero points and the function
+        silently returned a bogus ``canopy_height`` of well under 1 m for a
+        real ~30 m canopy instead of erroring. Always check a real
+        dataset's actual classification codes (e.g. via
+        ``np.unique(classification, return_counts=True)``) rather than
+        assuming the ASPRS default applies -- see the empty-mask warning
+        below, which is the guard that should catch this in the future.
     """
     gnd_mask = classification == _GROUND_CLASS
     n_gnd = int(gnd_mask.sum())
     if n_gnd < min_ground_points:
         return None
 
-    veg_mask = np.isin(classification, _VEG_CLASSES)
+    veg_mask = np.isin(classification, veg_classes)
+    if not veg_mask.any():
+        logger.warning(
+            "_pavd_profile_from_hag: veg_classes=%s matched 0 of %d points -- "
+            "this survey likely uses different classification codes than the "
+            "ASPRS default; the resulting profile (if any) is almost certainly "
+            "wrong (ground-only). Check np.unique(classification) for this "
+            "dataset's real codes and pass the correct veg_classes explicitly.",
+            veg_classes,
+            len(classification),
+        )
     classified = gnd_mask | veg_mask  # matches gap.py's denominator convention:
     # unclassified/noise/building returns excluded, not just left in as dead weight
     hag_cls = hag[classified]
@@ -173,6 +198,7 @@ def compute_als_pavd_profile(
     year: int | None = None,
     min_points: int = _MIN_POINTS_DEFAULT,
     min_ground_points: int = _MIN_GROUND_POINTS_DEFAULT,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> PAVDProfile | None:
     """
     Vertical PAVD profile from real ALS returns in a circular footprint --
@@ -200,6 +226,14 @@ def compute_als_pavd_profile(
     min_ground_points : int
         Minimum classified-ground first returns; returns ``None`` below this
         (see module docstring on the ground-return floor).
+    veg_classes : tuple[int, ...]
+        LAS classification codes treated as "vegetation" (default ``(3, 4,
+        5)``, standard ASPRS). Not universal -- e.g. real DE-Hai (Thuringia)
+        data uses class 20 for all non-terrain/DOM returns instead. See
+        :func:`_pavd_profile_from_hag`'s docstring for the real failure mode
+        this caused when left at the default on that dataset. Always verify
+        with ``np.unique(classification, return_counts=True)`` on a real
+        sample from the specific array before trusting the default.
 
     Returns
     -------
@@ -239,7 +273,12 @@ def compute_als_pavd_profile(
     hag = z_fr - z_ground
 
     return _pavd_profile_from_hag(
-        hag, cls_fr, z_step=z_step, k=k, min_ground_points=min_ground_points
+        hag,
+        cls_fr,
+        z_step=z_step,
+        k=k,
+        min_ground_points=min_ground_points,
+        veg_classes=veg_classes,
     )
 
 
@@ -302,7 +341,7 @@ def fit_transmittance_model(
                 _model, cumulative_pai[valid], transmittance[valid], p0=[0.1], bounds=(0.0, np.inf)
             )
             beta = float(beta)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - curve_fit's failure modes vary, fall back to NaN
             logger.warning("fit_transmittance_model: curve_fit failed (%s) -- beta=NaN", exc)
             beta = np.nan
     else:
@@ -318,4 +357,4 @@ def fit_transmittance_model(
         else np.full_like(cumulative_pai, np.nan)
     )
 
-    return dict(transmittance=transmittance, beta=beta, fitted=fitted)
+    return {"transmittance": transmittance, "beta": beta, "fitted": fitted}
