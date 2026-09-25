@@ -1,0 +1,151 @@
+{
+  "input_sha256": "ebd627e530ba2137dbab2dd54e51634b0fe22d2a5130441a05a0a9847df930d7",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+  "python": "3.14.4 | packaged by conda-forge | (main, Apr  8 2026, 01:59:35) [GCC 14.3.0]",
+  "input": "data/example_als/brazil_als/RIB_A01_2014_laz_0.laz",
+  "sample": "first records in file order",
+  "points": 500000,
+  "read_seconds": 0.2540233019999505,
+  "baseline_commit": "7ce8a9fe9470491c1316838e8f6c1d95914ce589",
+  "normalization_single_allocation": {
+    "seconds": [
+      0.5846727079997436,
+      0.6115609090002181,
+      0.6552175960000568
+    ],
+    "median_seconds": 0.6115609090002181
+  },
+  "normalization_four_appends": {
+    "seconds": [
+      1.6652431279999291,
+      1.6490126369999416,
+      1.6263762680000582
+    ],
+    "median_seconds": 1.6490126369999416
+  },
+  "bbox": [
+    658194.42,
+    8901880.8,
+    658294.42,
+    8901980.8
+  ],
+  "owned_points": 125787,
+  "metrics_all": {
+    "seconds": [
+      0.056534531000124844,
+      0.05677829099977316,
+      0.056229648999760684
+    ],
+    "median_seconds": 0.056534531000124844
+  },
+  "metrics_h95_cc": {
+    "seconds": [
+      0.04898767999975462,
+      0.04867023599990716,
+      0.04879586000015479
+    ],
+    "median_seconds": 0.04879586000015479
+  },
+  "gap": {
+    "seconds": [
+      0.020142445999681513,
+      0.020840783000039664,
+      0.019891939999979513
+    ],
+    "median_seconds": 0.020142445999681513
+  },
+  "legacy_metrics_buffered": {
+    "seconds": [
+      0.22249769800009744,
+      0.20160262099989268,
+      0.19780600399963078
+    ],
+    "median_seconds": 0.20160262099989268
+  },
+  "legacy_metrics_owned": {
+    "seconds": [
+      0.0442324489999919,
+      0.04249093999987963,
+      0.04337585399980526
+    ],
+    "median_seconds": 0.04337585399980526
+  },
+  "legacy_owned_max_differences": {
+    "h50": 0.07806396484375,
+    "h75": 0.13841724395751953,
+    "h95": 0.0485382080078125,
+    "hmax": 0.30491065979003906,
+    "hmean": 0.0424957275390625,
+    "cc": 0.001557469367980957,
+    "density": 0.039999961853027344,
+    "fhd": 0.00597381591796875,
+    "vci": 0.001363217830657959,
+    "crr": 0.005225658416748047,
+    "pv_0_2": 0.001397252082824707,
+    "pv_2_5": 0.0018005073070526123,
+    "pv_5_10": 0.0017223358154296875,
+    "pv_10_20": 0.0018981099128723145,
+    "pv_20_40": 0.0019790232181549072,
+    "pv_above40": 0.00024768710136413574
+  },
+  "query_all_attributes": {
+    "seconds": [
+      0.049682543000017176,
+      0.04538374300000214,
+      0.03873119799982305
+    ],
+    "median_seconds": 0.04538374300000214
+  },
+  "query_selected_attributes": {
+    "seconds": [
+      0.01511984599983407,
+      0.0152354550000382,
+      0.015423859999827982
+    ],
+    "median_seconds": 0.0152354550000382
+  },
+  "waveforms_30_single_queries": {
+    "seconds": [
+      0.40747960499993496
+    ],
+    "median_seconds": 0.40747960499993496
+  },
+  "waveforms_30_batched": {
+    "seconds": [
+      0.21804123700030686
+    ],
+    "median_seconds": 0.21804123700030686
+  },
+  "pavd_30_single_queries": {
+    "seconds": [
+      1.2059484830001566
+    ],
+    "median_seconds": 1.2059484830001566
+  },
+  "pavd_30_batched": {
+    "seconds": [
+      1.0323034810003264
+    ],
+    "median_seconds": 1.0323034810003264
+  },
+  "trees_15m_with_10m_buffer_sample_0_5m": {
+    "seconds": [
+      0.963164721999874
+    ],
+    "median_seconds": 0.963164721999874
+  },
+  "tree_count": 7,
+  "segmented_tree_points": 1972,
+  "rasters_separate": {
+    "seconds": [
+      2.4561257159998604
+    ],
+    "median_seconds": 2.4561257159998604
+  },
+  "rasters_fused": {
+    "seconds": [
+      1.7738366670000687
+    ],
+    "median_seconds": 1.7738366670000687
+  }
+}

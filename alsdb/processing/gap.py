@@ -52,19 +52,6 @@ import numpy as np
 from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
 )
-from alsdb.processing._tiling import (
-    _require_year,
-    array_crs,
-    array_data_bbox,
-    attach_hag,
-    baba_neighbourhoods,
-    check_bbox_overlap,
-    check_year_exists,
-    flip_to_north_up,
-    query_to_array,
-    run_tiled,
-    tile_bboxes,
-)
 
 if TYPE_CHECKING:
     from alsdb.providers.tiledb_provider import TileDBProvider
@@ -99,7 +86,7 @@ def _compute_gap_grid(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> np.ndarray:
     """
-    Compute per-cell gap fraction from a HAG-annotated point array.
+    Compute per-cell gap fraction directly from classified first returns.
 
     Returns a ``(ny, nx)`` float32 north-up array; cells with no first
     returns are ``np.nan``.
@@ -112,52 +99,57 @@ def _compute_gap_grid(
         ``np.unique(points["Classification"], return_counts=True)`` before
         trusting the default on a new array.
     """
-    min_x, min_y, max_x, max_y = bbox
-    nx = max(1, int(np.ceil((max_x - min_x) / resolution)))
-    ny = max(1, int(np.ceil((max_y - min_y) / resolution)))
-    x_edges = np.linspace(min_x, max_x, nx + 1)
-    y_edges = np.linspace(min_y, max_y, ny + 1)
+    return gap_statistics(points, resolution, bbox, min_density, veg_classes)["gap"]
 
-    fr = points["ReturnNumber"] == 1
-    x_fr = points["X"][fr]
-    y_fr = points["Y"][fr]
-    cls_fr = points["Classification"][fr]
 
-    gnd = (cls_fr == _GROUND_CLASS).astype(np.float64)
-    veg = np.isin(cls_fr, veg_classes).astype(np.float64)
-    if not (gnd.any() or veg.any()):
-        logger.warning(
-            "_compute_gap_grid: veg_classes=%s and ground class %d matched 0 "
-            "of %d first returns -- this survey likely uses different "
-            "classification codes; the resulting gap grid will be all-NaN.",
-            veg_classes,
-            _GROUND_CLASS,
-            len(cls_fr),
+def gap_statistics(
+    points, resolution, bbox, min_density=0.0, veg_classes=_VEG_CLASSES, baba_radius=0.0
+):
+    """Gap estimate, first-return support counts and zero-gap saturation flag."""
+    from scipy.spatial import cKDTree
+
+    from alsdb.processing._grid import GridSpec
+
+    grid = GridSpec.from_bbox(bbox, resolution)
+    if baba_radius > 0:
+        first = (points["ReturnNumber"] == 1) & np.isfinite(points["X"]) & np.isfinite(points["Y"])
+        classification = points["Classification"][first]
+        ground = classification == _GROUND_CLASS
+        classified = ground | np.isin(classification, veg_classes)
+        x, y = grid.centers()
+        centers = np.column_stack((x.ravel(), y.ravel()))
+        xy = np.column_stack((points["X"][first], points["Y"][first]))
+
+        def count(mask):
+            return cKDTree(xy[mask]).query_ball_point(centers, baba_radius, return_length=True)
+
+        ng, nc, nf = (count(mask) for mask in (ground, classified, np.ones(len(xy), bool)))
+        area = np.pi * baba_radius**2
+    else:
+        inside, cells = grid.point_bins(points)
+        first = points["ReturnNumber"][inside] == 1
+        cells = cells[first]
+        classification = points["Classification"][inside][first]
+        ground = classification == _GROUND_CLASS
+        classified = ground | np.isin(classification, veg_classes)
+        n = grid.nx * grid.ny
+        ng = np.bincount(cells, weights=ground, minlength=n)
+        nc = np.bincount(cells, weights=classified, minlength=n)
+        nf = np.bincount(cells, minlength=n)
+        area = resolution**2
+    supported = (nc > 0) & (nf / area >= min_density)
+    gap = np.divide(ng, nc, out=np.full(len(nc), np.nan), where=supported)
+    saturated = np.where(supported, (ng == 0).astype(float), np.nan)
+    return {
+        name: values.reshape(grid.shape).astype(np.float32)
+        for name, values in (
+            ("gap", gap),
+            ("gap_n_ground", ng),
+            ("gap_n_classified", nc),
+            ("gap_n_first", nf),
+            ("gap_saturated", saturated),
         )
-
-    # Bin all first-return points once with np.bincount — one C-level pass
-    # instead of three separate binned_statistic_2d scans.
-    xi_fr = np.clip(np.digitize(x_fr, x_edges) - 1, 0, nx - 1)
-    yi_fr = np.clip(np.digitize(y_fr, y_edges) - 1, 0, ny - 1)
-    cell_fr = xi_fr * ny + yi_fr
-    n_gnd = np.bincount(cell_fr, weights=gnd, minlength=nx * ny).reshape(nx, ny)
-    n_veg = np.bincount(cell_fr, weights=veg, minlength=nx * ny).reshape(nx, ny)
-    n_fr = np.bincount(cell_fr, minlength=nx * ny).reshape(nx, ny).astype(np.float64)
-
-    # Denominator: classified returns only, so unclassified/building/noise
-    # returns don't dilute the gap estimate.  Cells with none → NaN.
-    n_classified = n_gnd + n_veg
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        gap = np.where(n_classified > 0, n_gnd / n_classified, np.nan)
-
-    # Mask cells below minimum first-return density threshold
-    if min_density > 0.0:
-        cell_area = resolution**2
-        sparse = (n_fr / cell_area) < min_density
-        gap = np.where(sparse, np.nan, gap)
-
-    return flip_to_north_up(gap, transpose=True)
+    }
 
 
 def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.ndarray:
@@ -170,7 +162,9 @@ def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.nd
     where Ω is the element clumping index (0 < Ω ≤ 1).  Random foliage → Ω = 1
     (no correction).  Clumped canopies have Ω < 1, so L_true > L_e.
     """
-    if clumping_index <= 0 or clumping_index > 1:
+    if not np.isfinite(k) or k <= 0:
+        raise ValueError("k must be finite and positive")
+    if not np.isfinite(clumping_index) or clumping_index <= 0 or clumping_index > 1:
         raise ValueError(f"clumping_index must be in (0, 1], got {clumping_index}")
     with np.errstate(invalid="ignore", divide="ignore"):
         lai = -np.log(np.where(gap > 0, gap, np.nan)) / (k * clumping_index)
@@ -203,96 +197,13 @@ def _compute_gap_grid_baba(
         5)``, standard ASPRS) -- see :func:`_compute_gap_grid`'s docstring;
         not universal across surveys.
     """
-    fr_mask = points["ReturnNumber"] == 1
-    fr_pts = points[fr_mask]
-    if len(fr_pts) == 0:
-        x_min, y_min, x_max, y_max = bbox
-        nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
-        ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
-        return np.full((ny, nx), np.nan, dtype=np.float32)
-
-    nx, ny, indices_list, neighbourhood_area = baba_neighbourhoods(
-        fr_pts, resolution, bbox, baba_radius
-    )
-    cls_fr = fr_pts["Classification"]
-    gap = np.full((ny, nx), np.nan, dtype=np.float32)
-
-    for k, idxs in enumerate(indices_list):
-        if not idxs:
-            continue
-        row, col = divmod(k, nx)
-
-        if min_density > 0.0 and (len(idxs) / neighbourhood_area) < min_density:
-            continue  # leave gap[row, col] as NaN
-
-        cls_k = cls_fr[idxs]
-        n_gnd = int((cls_k == _GROUND_CLASS).sum())
-        n_veg = int(np.isin(cls_k, veg_classes).sum())
-        total = n_gnd + n_veg
-        if total > 0:
-            gap[row, col] = n_gnd / total
-
-    return flip_to_north_up(gap)
+    return gap_statistics(
+        points, resolution, bbox, min_density, veg_classes, baba_radius=baba_radius
+    )["gap"]
 
 
 # ---------------------------------------------------------------------------
 # Per-tile worker
-# ---------------------------------------------------------------------------
-
-
-def _process_tile(
-    provider: TileDBProvider,
-    query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    store: ALSZarrStore,
-    tile_index: int,
-    resolution: float,
-    year: int | None,
-    lai: bool,
-    k: float,
-    clumping_index: float = 1.0,
-    baba_radius: float = 0.0,
-    min_density: float = 0.0,
-    veg_classes: tuple[int, ...] = _VEG_CLASSES,
-) -> None:
-    arr = query_to_array(provider, query_bbox, year=year)
-    if arr.size == 0:
-        logger.debug("Gap tile %d: no points, skipping", tile_index)
-        return
-
-    # attach_hag is only needed when lai=True (Beer-Lambert uses HeightAboveGround).
-    # Gap fraction itself works on Classification and ReturnNumber alone.
-    points = attach_hag(arr) if lai else arr
-
-    if baba_radius > 0:
-        gap = _compute_gap_grid_baba(
-            points,
-            resolution,
-            crop_bbox,
-            baba_radius,
-            min_density=min_density,
-            veg_classes=veg_classes,
-        )
-    else:
-        gap = _compute_gap_grid(
-            points, resolution, crop_bbox, min_density=min_density, veg_classes=veg_classes
-        )
-
-    if np.all(np.isnan(gap)):
-        logger.debug("Gap tile %d: all NaN, skipping", tile_index)
-        return
-
-    store.write_tile("gap", resolution, year, gap, crop_bbox)
-
-    if lai:
-        lai_grid = _gap_to_lai(gap, k, clumping_index=clumping_index)
-        store.write_tile("lai", resolution, year, lai_grid, crop_bbox)
-
-    logger.debug("Gap tile %d written", tile_index)
-
-
-# ---------------------------------------------------------------------------
-# Public API
 # ---------------------------------------------------------------------------
 
 
@@ -313,6 +224,8 @@ def compute_gap_fraction(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    ground_outlier_removal: bool = False,
+    quality: bool = True,
 ) -> None:
     """
     Compute gap fraction (and optionally effective LAI) and write into *store*.
@@ -370,54 +283,30 @@ def compute_gap_fraction(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+        Query overlap buffer (default 50 m), expanded to cover baba_radius.
     n_workers:
         Parallel workers (default 1 = sequential).
     """
-    _require_year(year)
-    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
-    if bbox is not None and not check_bbox_overlap(bbox, provider):
-        return
-    if not check_year_exists(year, provider):
-        return
-    if not overwrite:
-        gap_done = store.has_data("gap", resolution, year)
-        lai_done = (not lai) or store.has_data("lai", resolution, year)
-        if gap_done and lai_done:
-            logger.info(
-                "Gap fraction already present for year %d at %.0f m — skipping",
-                year,
-                resolution,
-            )
-            return
-    crs = array_crs(provider)
-    store.ensure_group("gap", resolution, effective_bbox, crs, tile_size)
-    if lai:
-        store.ensure_group("lai", resolution, effective_bbox, crs, tile_size)
-    effective_buffer = max(tile_buffer, baba_radius)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
-    logger.info(
-        "Computing gap fraction  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
-        resolution,
-        len(tiles),
-        n_workers,
-        year,
-        ", LAI" if lai else "",
-        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
-    )
+    from alsdb.processing.forest import compute_forest_products
 
-    run_tiled(
-        _process_tile,
+    compute_forest_products(
         provider,
-        tiles,
         store,
-        n_workers,
-        resolution=resolution,
-        year=year,
+        resolution,
+        bbox,
+        year,
+        metrics=(),
+        gap=True,
         lai=lai,
         k=k,
         clumping_index=clumping_index,
         baba_radius=baba_radius,
         min_density=min_density,
         veg_classes=veg_classes,
+        overwrite=overwrite,
+        tile_size=tile_size,
+        tile_buffer=tile_buffer,
+        n_workers=n_workers,
+        ground_outlier_removal=ground_outlier_removal,
+        quality=quality,
     )

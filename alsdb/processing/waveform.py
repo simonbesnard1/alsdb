@@ -82,7 +82,6 @@ from __future__ import annotations
 
 import functools
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
 
@@ -124,7 +123,7 @@ _BEAM_IDS: frozenset[str] = frozenset(
 
 
 @functools.lru_cache(maxsize=8)
-def _load_pulse(beam_id: str) -> np.ndarray:
+def _load_pulse(beam_id: str, z_step: float = _Z_STEP) -> np.ndarray:
     """
     Load and return the normalised TX pulse kernel for *beam_id*.
 
@@ -136,9 +135,18 @@ def _load_pulse(beam_id: str) -> np.ndarray:
     """
     path = files("alsdb") / "data" / "pulse_shapes" / f"meanPulse.{beam_id}.txt"
     data = np.loadtxt(str(path))  # (N, 2): col0 = position (m), col1 = amplitude
-    amp = data[:, 1].astype(np.float64)
-    amp /= amp.sum()
-    return amp
+    if not np.isfinite(z_step) or z_step <= 0:
+        raise ValueError("z_step must be finite and positive")
+    position = data[:, 0].astype(float)
+    amp = np.maximum(data[:, 1].astype(float), 0)
+    position -= position[np.argmax(amp)]
+    spacing = np.median(np.diff(position))
+    edges = np.r_[position - spacing / 2, position[-1] + spacing / 2]
+    cumulative = np.r_[0.0, np.cumsum(amp)]
+    radius = int(np.ceil(max(abs(edges[0]), abs(edges[-1])) / z_step))
+    target_edges = (np.arange(-radius, radius + 2) - 0.5) * z_step
+    kernel = np.diff(np.interp(target_edges, edges, cumulative, left=0, right=cumulative[-1]))
+    return kernel / kernel.sum()
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +191,9 @@ class WaveformResult:
     n_points: int
     center_x: float
     center_y: float
+    ground_supported: bool = False
+    ground_offset: float = np.nan
+    slope_corrected: bool = False
 
     def rh_array(self, levels: tuple[int, ...] = _RH_LEVELS) -> np.ndarray:
         """RH values as a 1-D array for the given levels."""
@@ -197,6 +208,9 @@ class WaveformResult:
             "home": self.home,
             "cover": self.cover,
             "n_points": self.n_points,
+            "ground_supported": self.ground_supported,
+            "ground_offset": self.ground_offset,
+            "slope_corrected": self.slope_corrected,
         }
         d.update({f"rh{lv}": v for lv, v in sorted(self.rh.items())})
         return d
@@ -232,6 +246,12 @@ def _effective_query_radius(
     to account for - a flat circular footprint of exactly
     ``footprint_radius`` is already the correct, unmodified query.
     """
+    if not np.isfinite(footprint_radius) or footprint_radius <= 0:
+        raise ValueError("footprint_radius must be finite and positive")
+    if sigma_beam is not None and (not np.isfinite(sigma_beam) or sigma_beam <= 0):
+        raise ValueError("sigma_beam must be finite and positive")
+    if not np.isfinite(beam_extent_sigma) or beam_extent_sigma <= 0:
+        raise ValueError("beam_extent_sigma must be finite and positive")
     if not gaussian_beam_weighting:
         return footprint_radius
     sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
@@ -256,7 +276,7 @@ def _query_footprint(
     # +1: TileDB-Py int-dimension slices are exclusive-end (like Python slices)
     y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
 
-    attrs = ["Z", "Intensity", "ReturnNumber", "Classification"]
+    attrs = ["Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "Withheld"]
     with provider.open("r") as arr:
         data = arr.query(attrs=attrs)[
             center_x - radius : center_x + radius,
@@ -294,10 +314,12 @@ def _build_histogram(
     hist : np.ndarray
         Weighted point count per bin.
     """
+    if not np.isfinite(z_step) or z_step <= 0:
+        raise ValueError("z_step must be finite and positive")
     z_min = float(z.min())
     z_max = float(z.max())
     n_bins = max(1, int(np.ceil((z_max - z_min) / z_step)))
-    edges = np.linspace(z_min, z_max, n_bins + 1)
+    edges = z_min + np.arange(n_bins + 1) * z_step
     hist, _ = np.histogram(z, bins=edges, weights=weights)
     centres = (edges[:-1] + edges[1:]) / 2.0
     return centres, hist.astype(np.float64)
@@ -455,6 +477,43 @@ def simulate_waveform(
     rv_rg: float = 1.0,
     rh_levels: tuple[int, ...] = _RH_LEVELS,
     rng: np.random.Generator | None = None,
+    return_weighting: str = "count",
+    density_radius: float | None = None,
+) -> WaveformResult | None:
+    """Query a footprint and simulate it; see waveform_from_points for parameters."""
+    options = dict(locals())
+    options.pop("provider")
+    radius = _effective_query_radius(
+        footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
+    )
+    if density_radius is not None and (not np.isfinite(density_radius) or density_radius <= 0):
+        raise ValueError("density_radius must be finite and positive")
+    data = _query_footprint(provider, center_x, center_y, radius + (density_radius or 0), year)
+    return waveform_from_points(data, **options)
+
+
+def waveform_from_points(
+    data,
+    center_x: float,
+    center_y: float,
+    year: int | None = None,
+    footprint_radius: float = _FOOTPRINT_RADIUS,
+    z_step: float = _Z_STEP,
+    sigma: float = _SIGMA_FULL,
+    beam_id: str | None = None,
+    noise_std: float = 0.0,
+    intensity_weighted: bool = False,
+    gaussian_beam_weighting: bool = True,
+    sigma_beam: float | None = None,
+    beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
+    slope_correction: bool = False,
+    min_points: int = _MIN_POINTS,
+    cover_threshold: float = _COVER_THRESHOLD,
+    rv_rg: float = 1.0,
+    rh_levels: tuple[int, ...] = _RH_LEVELS,
+    rng: np.random.Generator | None = None,
+    return_weighting: str = "count",
+    density_radius: float | None = None,
 ) -> WaveformResult | None:
     """
     Simulate a GEDI large-footprint waveform at a given UTM location.
@@ -508,8 +567,7 @@ def simulate_waveform(
         If ``True``, fit a plane to the ALS ground points (Classification == 2)
         inside the footprint and subtract it from all Z values before building
         the histogram.  This collapses the slope-broadened ground return back
-        to a sharp peak and measures vegetation height perpendicular to the
-        terrain surface rather than vertically.  Requires at least 3 ground
+        to a sharp peak and retains vertical vegetation height above the fitted terrain.  Requires at least 3 ground
         points; silently skipped otherwise.  Default ``False`` — only enable
         for terrain with slopes > ~15°.
     min_points : int
@@ -544,10 +602,40 @@ def simulate_waveform(
     -------
     WaveformResult or None
     """
-    query_radius = _effective_query_radius(
+    from scipy.spatial import cKDTree
+
+    from alsdb.processing._footprints import point_array
+    from alsdb.processing._surface import clean_points
+
+    if (
+        not np.isfinite([z_step, sigma, noise_std, rv_rg]).all()
+        or z_step <= 0
+        or sigma <= 0
+        or noise_std < 0
+        or rv_rg <= 0
+    ):
+        raise ValueError("Invalid waveform bin, pulse, noise or reflectance parameters")
+    if return_weighting not in ("count", "fractional"):
+        raise ValueError("return_weighting must be count or fractional")
+    if density_radius is not None and (not np.isfinite(density_radius) or density_radius <= 0):
+        raise ValueError("density_radius must be finite and positive")
+    radius = _effective_query_radius(
         footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
     )
-    data = _query_footprint(provider, center_x, center_y, query_radius, year)
+    density_weight = None
+    if data is not None:
+        data = clean_points(point_array(data))
+        inside = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2 <= radius**2
+        if density_radius is not None:
+            first = data[data["ReturnNumber"] == 1]
+            tree = cKDTree(np.column_stack((first["X"], first["Y"])))
+            support = tree.query_ball_point(
+                np.column_stack((data["X"][inside], data["Y"][inside])),
+                density_radius,
+                return_length=True,
+            )
+            density_weight = np.divide(1.0, support, out=np.zeros(len(support)), where=support > 0)
+        data = data[inside]
     n_pts = 0 if data is None else len(data["Z"])
     if data is None or n_pts < min_points:
         logger.debug(
@@ -563,19 +651,26 @@ def simulate_waveform(
 
     z = data["Z"].astype(np.float64)
 
+    slope_corrected = False
     # Slope correction: fit plane to ground points, subtract from all Z
     if slope_correction:
         gnd = data["Classification"] == 2
         if gnd.sum() >= 3:
-            x_gnd = data["X"][gnd].astype(np.float64)
-            y_gnd = data["Y"][gnd].astype(np.float64)
+            x_gnd = data["X"][gnd].astype(np.float64) - center_x
+            y_gnd = data["Y"][gnd].astype(np.float64) - center_y
             z_gnd = z[gnd]
             A = np.column_stack([x_gnd, y_gnd, np.ones(gnd.sum())])
-            coeffs, _, _, _ = np.linalg.lstsq(A, z_gnd, rcond=None)
+            coeffs, _, rank, _ = np.linalg.lstsq(A, z_gnd, rcond=None)
             a, b, c = coeffs
             slope_deg = float(np.degrees(np.arctan(np.sqrt(a**2 + b**2))))
-            plane_z = a * data["X"].astype(np.float64) + b * data["Y"].astype(np.float64) + c
-            z = z - plane_z + float(z_gnd.mean())
+            plane_z = (
+                a * (data["X"].astype(float) - center_x)
+                + b * (data["Y"].astype(float) - center_y)
+                + c
+            )
+            if rank == 3:
+                z = z - plane_z + float(z_gnd.mean())
+                slope_corrected = True
             logger.debug("Slope correction applied: θ=%.1f°", slope_deg)
         else:
             logger.debug("Slope correction skipped: only %d ground points (need ≥ 3)", gnd.sum())
@@ -593,21 +688,30 @@ def simulate_waveform(
     else:
         weights = beam_w
 
+    if return_weighting == "fractional":
+        returns = data["NumberOfReturns"]
+        weights = np.divide(weights, returns, out=np.zeros_like(weights), where=returns > 0)
+    if density_weight is not None:
+        weights *= density_weight
+    if not np.isfinite(weights).all() or (weights < 0).any():
+        raise ValueError("Waveform weights must be finite and nonnegative")
+    if weights.sum() <= 0:
+        return None
+
     # 1. Vertical histogram
     z_bins, hist = _build_histogram(z, weights, z_step)
 
-    # 2. Convolve with TX pulse kernel
+    # Retain convolution tails: trimming here biases ground and canopy energy.
     if beam_id is not None and beam_id in _BEAM_IDS:
-        kernel = _load_pulse(beam_id)
-        # np.convolve mode="same" returns max(len(hist), len(kernel)) elements.
-        # When the kernel is longer than the histogram the output is kernel-length
-        # and z_bins-indexing breaks.  Use mode="full" and centre-trim to
-        # histogram length so z_bins and waveform always align.
-        conv = np.convolve(hist, kernel, mode="full")
-        pad = (len(kernel) - 1) // 2
-        waveform = conv[pad : pad + len(hist)]
+        kernel = _load_pulse(beam_id, z_step)
     else:
-        waveform = gaussian_filter1d(hist, sigma=sigma / z_step)
+        radius_bins = max(1, int(np.ceil(4 * sigma / z_step)))
+        offsets = np.arange(-radius_bins, radius_bins + 1) * z_step
+        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+        kernel /= kernel.sum()
+    pad = (len(kernel) - 1) // 2
+    waveform = np.convolve(hist, kernel, mode="full")
+    z_bins = z_bins[0] + (np.arange(len(waveform)) - pad) * z_step
 
     # 3. Add noise
     if noise_std > 0.0:
@@ -621,6 +725,10 @@ def simulate_waveform(
 
     # 5. Ground detection + metrics
     z_ground = _detect_ground(waveform, z_bins)
+    ground = z[data["Classification"] == 2]
+    ground_reference = float(np.median(ground)) if len(ground) else np.nan
+    ground_offset = z_ground - ground_reference
+    ground_supported = bool(len(ground) >= 3 and abs(ground_offset) <= max(2 * sigma, z_step))
     rh = _rh_metrics(waveform, z_bins, z_ground, levels=rh_levels)
     cover = _canopy_cover(waveform, z_bins, z_ground, cover_threshold, rv_rg=rv_rg)
 
@@ -634,6 +742,9 @@ def simulate_waveform(
         n_points=len(z),
         center_x=center_x,
         center_y=center_y,
+        ground_supported=ground_supported,
+        ground_offset=ground_offset,
+        slope_corrected=slope_corrected,
     )
 
 
@@ -647,6 +758,7 @@ def simulate_batch(
     n_workers: int = 1,
     output_path: str | None = None,
     rng: np.random.Generator | None = None,
+    batch_tile_size: float = 100.0,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -677,8 +789,8 @@ def simulate_batch(
     rng : np.random.Generator, optional
         Random number generator forwarded to each :func:`simulate_waveform`
         call for reproducible noise.  Pass ``np.random.default_rng(seed)``.
-        Note: when ``n_workers > 1``, shots are processed concurrently and
-        the per-shot draw order is non-deterministic even with a fixed seed.
+        Independent per-position seeds make results reproducible across worker counts,
+        including when the input index contains duplicate labels.
     **kwargs
         Forwarded to :func:`simulate_waveform`.
 
@@ -689,58 +801,64 @@ def simulate_batch(
         ``n_points``, ``rh0`` … ``rh100``.
         Shots with insufficient ALS coverage have NaN metric values.
     """
-    has_beam_col = beam_col in shots.columns
+    from alsdb.processing._footprints import footprint_batches
 
-    def _run(row):
-        row_kwargs = dict(kwargs)
-        if has_beam_col:
-            row_kwargs["beam_id"] = str(row[beam_col])
-        return row.name, simulate_waveform(
-            provider,
-            center_x=float(row[x_col]),
-            center_y=float(row[y_col]),
-            year=year,
-            rng=rng,
-            **row_kwargs,
-        )
+    centers = shots[[x_col, y_col]].to_numpy(dtype=float)
+    random = rng if rng is not None else np.random.default_rng()
+    seeds = random.integers(0, np.iinfo(np.uint64).max, size=len(shots), dtype=np.uint64)
+    radius = _effective_query_radius(
+        kwargs.get("footprint_radius", _FOOTPRINT_RADIUS),
+        kwargs.get("gaussian_beam_weighting", True),
+        kwargs.get("sigma_beam"),
+        kwargs.get("beam_extent_sigma", _BEAM_EXTENT_SIGMA),
+    ) + (kwargs.get("density_radius") or 0)
+    results = [None] * len(shots)
+    attributes = ("Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "Withheld")
 
-    results: dict = {}
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        futures = {pool.submit(_run, row): row.name for _, row in shots.iterrows()}
-        for future in as_completed(futures):
-            idx, result = future.result()
-            results[idx] = result
+    def process(indices, points, neighborhoods):
+        output = []
+        for index, neighborhood in zip(indices, neighborhoods):
+            options = dict(kwargs)
+            if beam_col in shots.columns:
+                options["beam_id"] = str(shots.iloc[index][beam_col])
+            result = waveform_from_points(
+                points[neighborhood],
+                *centers[index],
+                year=year,
+                rng=np.random.default_rng(seeds[index]),
+                **options,
+            )
+            output.append((index, result.to_dict() if result is not None else None))
+        return output
 
-    n_total = len(shots)
-    n_ok = sum(1 for r in results.values() if r is not None)
-    n_skipped = n_total - n_ok
-    if n_skipped:
-        logger.warning(
-            "simulate_batch: %d/%d footprints skipped (insufficient points). "
-            "Run with logging.DEBUG for per-footprint details.",
-            n_skipped,
-            n_total,
-        )
-
-    _nan_metrics = {
-        "z_ground": np.nan,
-        "home": np.nan,
-        "cover": np.nan,
-        "n_points": 0,
-        **{f"rh{lv}": np.nan for lv in _RH_LEVELS},
-    }
-
+    for batch in footprint_batches(
+        provider,
+        centers,
+        radius,
+        year=year,
+        attributes=attributes,
+        batch_tile_size=batch_tile_size,
+        n_workers=n_workers,
+        process=process,
+    ):
+        for index, result in batch:
+            results[index] = result
+    nan_metrics = dict(
+        z_ground=np.nan,
+        home=np.nan,
+        cover=np.nan,
+        n_points=0,
+        ground_supported=False,
+        ground_offset=np.nan,
+        slope_corrected=False,
+        **{f"rh{lv}": np.nan for lv in kwargs.get("rh_levels", _RH_LEVELS)},
+    )
     records = []
-    for _, row in shots.iterrows():
-        rec = row.to_dict()
-        r = results.get(row.name)
-        rec.update(r.to_dict() if r is not None else _nan_metrics)
-        records.append(rec)
-
-    result_df = pd.DataFrame(records, index=shots.index)
-
+    for index, result in enumerate(results):
+        record = shots.iloc[index].to_dict()
+        record.update(result if result is not None else nan_metrics)
+        records.append(record)
+    result_df = pd.DataFrame(records, index=shots.index) if records else shots.copy()
     if output_path is not None:
         result_df.to_parquet(output_path, engine="pyarrow", index=False)
-        logger.info("simulate_batch: results saved to %s", output_path)
-
     return result_df

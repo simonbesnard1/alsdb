@@ -106,6 +106,16 @@ Full API documentation and a conceptual guide are on [Read the Docs](https://als
 
 ---
 
+## CHM methods and uncertainty
+
+See [the CHM guide](doc/chm_methods.md) for native constrained-Delaunay spike-free
+processing, terrain support and quality flags, reproducible benchmarks, and
+conditional uncertainty ensembles. The native backend is optional:
+
+```bash
+pixi run -e spikefree build-spikefree
+```
+
 ## CLI
 
 ```bash
@@ -149,7 +159,7 @@ TileDB array (local  /  s3://)
    ├── ALSProvider.query_bbox()          → pandas / xarray
    │
    ├── processing.chm / gap / biomass
-   │      │  PDAL hag_delaunay + scipy binned_statistic_2d
+   │      │  ground TIN normalization + CHM reconstruction
    │      ▼
    │   ALSZarrStore  (Zarr v3, local / s3://)
    │      ├── 1m/   chm, dtm, dsm          (T × ny × nx) float32
@@ -179,3 +189,7 @@ Each ingested tile becomes a new TileDB **fragment**. Fragments are consolidated
 EUPL-1.2 — see [LICENSE](LICENSE).
 
 © 2026 Simon Besnard, Helmholtz Centre Potsdam – GFZ German Research Centre for Geosciences.
+
+Forest processing now supports shared CHM/metrics/gap computation, selective and
+reusable biomass metrics, batched footprints and streamed tree segmentation.
+See [the forest processing guide](doc/forest_processing.md).

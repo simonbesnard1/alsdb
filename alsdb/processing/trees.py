@@ -5,8 +5,8 @@
 """
 Individual tree segmentation from ALS TileDB point clouds.
 
-Uses PDAL's ``filters.litree`` (Li et al. 2012 — graph-based minimum spanning
-tree algorithm) to assign a unique ``TreeID`` to each point.  Unassigned points
+Uses PDAL's ``filters.litree`` (Li et al. 2012) to segment points. PDAL
+``ClusterID`` output is exposed as ``TreeID`` for API compatibility.  Unassigned points
 (ground, noise, or sub-threshold clusters) receive ``TreeID = 0``.
 
 After segmentation, per-tree metrics are summarised into a :class:`pandas.DataFrame`:
@@ -24,8 +24,8 @@ Tiled processing
 ----------------
 For large areas, pass ``tile_size`` to split the bbox into sub-tiles processed
 in parallel.  A ``tile_buffer`` overlap ensures trees at tile boundaries are
-fully captured; only trees whose centroid falls within the non-buffered
-``crop_bbox`` are retained so each tree appears exactly once::
+fully captured; only trees whose apex falls within the non-buffered
+``crop_bbox`` are retained; matching apex coordinates are deduplicated::
 
     points, trees = segment_trees(
         provider,
@@ -48,17 +48,20 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import warnings
 
 import numpy as np
 import pandas as pd
 import pdal
-from scipy.spatial import ConvexHull
+from numpy.lib.recfunctions import rename_fields
+from scipy.spatial import ConvexHull, QhullError
 
+from alsdb.processing._surface import clean_points
+from alsdb.processing._terrain import normalize_points
 from alsdb.processing._tiling import (
     _filter_ground_outliers,
-    _hag_stage,
     array_data_bbox,
+    bounded_map,
     query_to_array,
     tile_bboxes,
 )
@@ -67,9 +70,6 @@ from alsdb.providers.tiledb_provider import TileDBProvider
 logger = logging.getLogger(__name__)
 
 _MIN_HULL_POINTS = 3
-# Each tile's TreeIDs are offset by tile_index × _TREE_ID_STRIDE so they are
-# globally unique before the final re-numbering step.
-_TREE_ID_STRIDE = 100_000
 
 
 # ---------------------------------------------------------------------------
@@ -78,15 +78,8 @@ _TREE_ID_STRIDE = 100_000
 
 
 def _hag_stages(arr: np.ndarray, min_height: float, voxel_size: float | None) -> list[dict]:
-    """HAG + pre-filter stages shared by all code paths (run before litree)."""
+    """Filter normalized heights and optionally sample before litree."""
     stages: list[dict] = [
-        _hag_stage(arr),
-        {
-            "type": "filters.assign",
-            "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
-        },
-        # Drop ground / low points before the graph build — single biggest
-        # speedup for filters.litree on dense ALS data.
         {"type": "filters.range", "limits": f"HeightAboveGround[{min_height / 2}:]"},
     ]
     if voxel_size is not None:
@@ -130,17 +123,19 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
     """
     if "TreeID" not in points.dtype.names:
         return []
-    tree_ids = np.unique(points["TreeID"])
-    tree_ids = tree_ids[tree_ids > 0]
+    selected = points[points["TreeID"] > 0]
+    selected = selected[np.argsort(selected["TreeID"], kind="stable")]
+    tree_ids, starts, counts = np.unique(selected["TreeID"], return_index=True, return_counts=True)
     records = []
-    for tid in tree_ids:
-        mask = points["TreeID"] == tid
-        pts = points[mask]
+    for tid, start, count in zip(tree_ids, starts, counts):
+        pts = selected[start : start + count]
         x = pts["X"].astype(np.float64)
         y = pts["Y"].astype(np.float64)
         hag = pts["HeightAboveGround"].astype(np.float64)
 
         tree_height = float(hag.max())
+        highest = np.flatnonzero(hag == tree_height)
+        apex = highest[np.lexsort((y[highest], x[highest]))[0]]
 
         crown_area = crown_radius = np.nan
         # Use only points in the upper crown to avoid understory inflation.
@@ -152,7 +147,7 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
                 hull = ConvexHull(np.column_stack([x_crown, y_crown]))
                 crown_area = float(hull.volume)  # scipy: volume = area in 2-D
                 crown_radius = float(np.sqrt(crown_area / np.pi))
-            except Exception as exc:  # noqa: BLE001 - degenerate hull geometry, fall back to NaN
+            except QhullError as exc:
                 logger.debug(
                     "Crown hull failed for tree %s (%s), leaving crown_area/crown_radius as NaN",
                     tid,
@@ -168,7 +163,9 @@ def _tree_metrics(points: np.ndarray, crown_fraction: float = 0.5) -> list[dict]
                 "min_point_height": float(hag.min()),
                 "crown_area": crown_area,
                 "crown_radius": crown_radius,
-                "n_points": int(mask.sum()),
+                "n_points": int(count),
+                "apex_x": float(x[apex]),
+                "apex_y": float(y[apex]),
             }
         )
     return records
@@ -186,19 +183,37 @@ def _process_tile(
     voxel_size: float | None,
     adaptive_radius: bool = False,
     crown_fraction: float = 0.5,
+    veg_classes: tuple[int, ...] = (3, 4, 5),
+    point_attributes: tuple[str, ...] | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame] | None:
     """
     Segment trees within one sub-tile.
 
-    Queries *query_bbox* (buffered) for HAG accuracy, then:
-    * crops the point array to *crop_bbox* (no buffer — avoids duplicate trees),
-    * offsets TreeIDs by ``tile_index × _TREE_ID_STRIDE`` for global uniqueness,
-    * discards trees whose centroid falls outside *crop_bbox*.
+    Normalize and segment the buffered points, compute complete crown metrics,
+    and retain crowns whose deterministic apex belongs to the half-open crop.
     """
-    arr = _filter_ground_outliers(query_to_array(provider, query_bbox, year=year))
+    arr = clean_points(
+        query_to_array(
+            provider,
+            query_bbox,
+            year=year,
+            attributes=None
+            if point_attributes is None
+            else tuple(
+                dict.fromkeys(
+                    ("Z", "Classification", "ReturnNumber", "Withheld", *point_attributes)
+                )
+            ),
+        )
+    )
+    arr = _filter_ground_outliers(arr)
     if arr.size == 0:
         return None
 
+    arr, _ = normalize_points(arr)
+    arr = arr[np.isfinite(arr["HeightAboveGround"]) & np.isin(arr["Classification"], veg_classes)]
+    if not len(arr):
+        return None
     try:
         p = pdal.Pipeline(json.dumps(_hag_stages(arr, min_height, voxel_size)), arrays=[arr])
         p.execute()
@@ -214,7 +229,13 @@ def _process_tile(
     r = _compute_adaptive_radius(hag_points) if adaptive_radius else radius
     try:
         p2 = pdal.Pipeline(
-            json.dumps([_litree_stage(min_height, min_points, r)]), arrays=[hag_points]
+            json.dumps(
+                [
+                    {"type": "filters.sort", "dimension": "HeightAboveGround", "order": "DESC"},
+                    _litree_stage(min_height, min_points, r),
+                ]
+            ),
+            arrays=[hag_points],
         )
         p2.execute()
         points = p2.arrays[0] if p2.arrays else hag_points[:0]
@@ -223,41 +244,23 @@ def _process_tile(
             return None
         raise
 
-    # Crop to non-buffered extent
+    # PDAL > 2.2 emits ClusterID; preserve alsdb's public TreeID name.
+    if "ClusterID" in points.dtype.names:
+        points = rename_fields(points, {"ClusterID": "TreeID"})
+    if len(points) and "TreeID" not in points.dtype.names:
+        raise RuntimeError("PDAL litree returned no ClusterID or TreeID dimension")
+
+    # Decide ownership from the complete buffered crown, then retain its points.
     cx0, cy0, cx1, cy1 = crop_bbox
-    in_crop = (
-        (points["X"] >= cx0) & (points["X"] <= cx1) & (points["Y"] >= cy0) & (points["Y"] <= cy1)
-    )
-    points = points[in_crop].copy()
-
-    if points.size == 0:
-        return None
-
-    # Guard against TreeID collision: litree IDs must fit within the stride window
-    raw_max_id = int(points["TreeID"].max()) if points.size > 0 else 0
-    if raw_max_id >= _TREE_ID_STRIDE:
-        raise RuntimeError(
-            f"Tile {tile_index}: filters.litree produced TreeID {raw_max_id}, which equals or "
-            f"exceeds _TREE_ID_STRIDE={_TREE_ID_STRIDE}. Increase _TREE_ID_STRIDE or reduce tile_size."
-        )
-
-    # Offset TreeIDs so they are unique across tiles
-    valid = points["TreeID"] > 0
-    points["TreeID"][valid] += tile_index * _TREE_ID_STRIDE
-
-    # Compute metrics and filter to trees whose centroid is inside crop_bbox
-    records = []
-    for rec in _tree_metrics(points, crown_fraction=crown_fraction):
-        if cx0 <= rec["centroid_x"] <= cx1 and cy0 <= rec["centroid_y"] <= cy1:
-            records.append(rec)
-        else:
-            # Centroid outside crop_bbox → this tree belongs to a neighbour tile
-            points["TreeID"][points["TreeID"] == rec["tree_id"]] = 0
-
+    records = [
+        rec
+        for rec in _tree_metrics(points, crown_fraction=crown_fraction)
+        if cx0 <= rec["apex_x"] < cx1 and cy0 < rec["apex_y"] <= cy1
+    ]
     if not records:
         return None
-
-    return points, pd.DataFrame(records)
+    owned = [rec["tree_id"] for rec in records]
+    return points[np.isin(points["TreeID"], owned)].copy(), pd.DataFrame(records)
 
 
 # ---------------------------------------------------------------------------
@@ -271,13 +274,16 @@ def segment_trees(
     year: int | None = None,
     min_points: int = 10,
     min_height: float = 3.0,
-    radius: float = 2.0,
+    radius: float = 100.0,
     adaptive_radius: bool = False,
     voxel_size: float | None = None,
     tile_size: float | None = None,
     tile_buffer: float = 30.0,
     n_workers: int = 1,
     crown_fraction: float = 0.5,
+    *,
+    veg_classes: tuple[int, ...] = (3, 4, 5),
+    point_attributes: tuple[str, ...] | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """
     Segment individual trees using ``filters.litree``.
@@ -296,12 +302,11 @@ def segment_trees(
     min_height:
         Minimum tree height in metres.
     radius:
-        ``filters.litree`` search radius (m).  Used when *adaptive_radius*
-        is ``False``.  Increase for sparser clouds or wider-crowned trees.
+        PDAL non-tree seed radius (m), default 100. This controls the competing
+        non-tree seed, not a crown search radius. Used when adaptive_radius=False.
     adaptive_radius:
-        If ``True``, compute the search radius per tile from P75 HAG using
-        ``wf(h) = 0.07 * h + 0.6`` (Murphy et al. lidar-forestry approach).
-        Overrides *radius*.
+        Deprecated legacy height-based radius heuristic. Overrides radius,
+        but has not been calibrated for PDAL non-tree seed insertion.
     voxel_size:
         Poisson disk sampling radius (m) applied before ``filters.litree``
         to speed up the graph build.  ``0.5`` m is a good starting point for
@@ -332,123 +337,131 @@ def segment_trees(
     trees : pd.DataFrame
         One row per tree, sorted by descending height.  Empty if none found.
     """
-    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
-
-    # ------------------------------------------------------------------ #
-    # Single-tile (no tiling) fast path                                   #
-    # ------------------------------------------------------------------ #
-    if tile_size is None:
-        logger.info(
-            "Segmenting trees  bbox=%s  year=%s  min_height=%.1f m  radius=%s  voxel_size=%s",
-            effective_bbox,
-            year,
-            min_height,
-            "adaptive" if adaptive_radius else f"{radius:.1f} m",
-            f"{voxel_size} m" if voxel_size else "none",
-        )
-        arr = _filter_ground_outliers(query_to_array(provider, effective_bbox, year=year))
-        if arr.size == 0:
-            logger.warning("segment_trees: no points in bbox %s", effective_bbox)
-            return arr, pd.DataFrame()
-
-        logger.info("  %d points queried — running filters.litree…", arr.size)
-        p = pdal.Pipeline(json.dumps(_hag_stages(arr, min_height, voxel_size)), arrays=[arr])
-        p.execute()
-        hag_points = p.arrays[0] if p.arrays else arr[:0]
-        r = _compute_adaptive_radius(hag_points) if adaptive_radius else radius
-        p2 = pdal.Pipeline(
-            json.dumps([_litree_stage(min_height, min_points, r)]), arrays=[hag_points]
-        )
-        p2.execute()
-        points = p2.arrays[0] if p2.arrays else hag_points[:0]
-
-        records = _tree_metrics(points, crown_fraction=crown_fraction)
-        if not records:
-            logger.warning("segment_trees: no trees found (try lowering min_points or min_height)")
-            return points, pd.DataFrame()
-
-        trees = pd.DataFrame(records).sort_values("height", ascending=False).reset_index(drop=True)
-        logger.info(
-            "  Done: %d trees  |  tallest %.1f m  |  mean crown %.0f m²",
-            len(trees),
-            trees["height"].max(),
-            trees["crown_area"].mean(),
-        )
-        return points, trees
-
-    # ------------------------------------------------------------------ #
-    # Tiled path                                                           #
-    # ------------------------------------------------------------------ #
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
-    n_tiles = len(tiles)
-    logger.info(
-        "Segmenting trees  bbox=%s  year=%s  "
-        "%d tile(s)  %.0f m tiles / %.0f m buffer  %d worker(s)  voxel_size=%s",
-        effective_bbox,
-        year,
-        n_tiles,
-        tile_size,
-        tile_buffer,
-        n_workers,
-        f"{voxel_size} m" if voxel_size else "none",
-    )
-
-    tile_results: list[tuple[np.ndarray, pd.DataFrame] | None] = [None] * n_tiles
-
-    def _worker(idx: int, qb, cb):
-        result = _process_tile(
+    parts = list(
+        iter_segment_trees(
             provider,
-            qb,
-            cb,
-            idx,
+            bbox,
+            year,
+            min_points,
+            min_height,
+            radius,
+            adaptive_radius,
+            voxel_size,
+            tile_size,
+            tile_buffer,
+            n_workers,
+            crown_fraction,
+            veg_classes=veg_classes,
+            point_attributes=point_attributes,
+        )
+    )
+    if not parts:
+        return np.array([]), pd.DataFrame()
+    points = np.concatenate([part[0] for part in parts])
+    trees = pd.concat([part[1] for part in parts], ignore_index=True)
+    return points, trees.sort_values("height", ascending=False).reset_index(drop=True)
+
+
+def iter_segment_trees(
+    provider,
+    bbox=None,
+    year=None,
+    min_points=10,
+    min_height=3.0,
+    radius=100.0,
+    adaptive_radius=False,
+    voxel_size=None,
+    tile_size=None,
+    tile_buffer=30.0,
+    n_workers=1,
+    crown_fraction=0.5,
+    *,
+    veg_classes=(3, 4, 5),
+    point_attributes=None,
+):
+    """Yield (points, trees) per tile with compact global IDs and bounded memory.
+
+    Ownership uses the full crown's highest point (XY breaks height ties).
+    Crowns crossing the output boundary retain their buffered points. Finite
+    buffers can still change segmentation; choose a buffer wider than crowns.
+    Optional Poisson sampling changes the points used for crown metrics.
+    """
+    if (
+        not np.isfinite([min_height, radius, tile_buffer, crown_fraction]).all()
+        or min_height <= 0
+        or radius <= 0
+        or min_points < 1
+        or tile_buffer < 0
+        or not 0 <= crown_fraction <= 1
+    ):
+        raise ValueError("Invalid tree segmentation parameters")
+    if adaptive_radius:
+        warnings.warn(
+            "adaptive_radius uses a legacy height-based heuristic for PDAL's non-tree seed radius; set radius explicitly instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    if voxel_size is not None and (not np.isfinite(voxel_size) or voxel_size <= 0):
+        raise ValueError("voxel_size must be finite and positive")
+    if tile_size is not None and (not np.isfinite(tile_size) or tile_size <= 0):
+        raise ValueError("tile_size must be finite and positive")
+    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
+    from alsdb.processing._grid import GridSpec
+
+    GridSpec.from_bbox(effective_bbox, 1.0)  # validate extent without changing it
+    if tile_size is None:
+        x0, y0, x1, y1 = effective_bbox
+        tiles = [
+            (
+                (x0 - tile_buffer, y0 - tile_buffer, x1 + tile_buffer, y1 + tile_buffer),
+                effective_bbox,
+            )
+        ]
+    else:
+        tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=tile_buffer)
+
+    def worker(item):
+        index, (query, crop) = item
+        return _process_tile(
+            provider,
+            query,
+            crop,
+            index,
             year,
             min_points,
             min_height,
             radius,
             voxel_size,
-            adaptive_radius=adaptive_radius,
-            crown_fraction=crown_fraction,
+            adaptive_radius,
+            crown_fraction,
+            veg_classes,
+            point_attributes,
         )
-        n = len(result[1]) if result is not None else 0
-        logger.debug("  tile %d/%d: %d trees", idx + 1, n_tiles, n)
-        return idx, result
 
-    if n_workers == 1:
-        for i, (qb, cb) in enumerate(tiles):
-            _, result = _worker(i, qb, cb)
-            tile_results[i] = result
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(_worker, i, qb, cb): i for i, (qb, cb) in enumerate(tiles)}
-            for future in as_completed(futures):
-                idx, result = future.result()
-                tile_results[idx] = result
-
-    valid = [r for r in tile_results if r is not None]
-    if not valid:
-        logger.warning("segment_trees: no trees found in any tile")
-        return np.array([]), pd.DataFrame()
-
-    all_points = np.concatenate([r[0] for r in valid])
-    all_trees = pd.concat([r[1] for r in valid], ignore_index=True)
-
-    # Re-number TreeIDs 1…N globally (tile offsets served their purpose).
-    # Use a lookup array for O(n_points) remapping instead of O(n_ids × n_points).
-    id_map = {old: new for new, old in enumerate(all_trees["tree_id"].values, start=1)}
-    all_trees["tree_id"] = all_trees["tree_id"].map(id_map)
-    max_id = int(all_points["TreeID"].max())
-    lookup = np.zeros(max_id + 1, dtype=all_points["TreeID"].dtype)
-    for old_id, new_id in id_map.items():
-        lookup[old_id] = new_id
-    all_points["TreeID"] = lookup[all_points["TreeID"]]
-
-    all_trees = all_trees.sort_values("height", ascending=False).reset_index(drop=True)
-    logger.info(
-        "  Done: %d trees from %d/%d tiles  |  tallest %.1f m  |  mean crown %.0f m²",
-        len(all_trees),
-        len(valid),
-        n_tiles,
-        all_trees["height"].max(),
-        all_trees["crown_area"].mean(),
-    )
-    return all_points, all_trees
+    offset = 0
+    seen = set()
+    for result in bounded_map(worker, enumerate(tiles), n_workers):
+        if result is None:
+            continue
+        points, trees = result
+        keep = []
+        for rec in trees.itertuples():
+            key = (rec.apex_x, rec.apex_y)
+            keep.append(key not in seen)
+            seen.add(key)
+        trees = trees.loc[keep].copy().sort_values("tree_id")
+        if trees.empty:
+            continue
+        ids = trees.tree_id.to_numpy()
+        points = points[np.isin(points["TreeID"], ids)]
+        dtype = [
+            (name, np.uint64 if name == "TreeID" else points.dtype[name])
+            for name in points.dtype.names
+        ]
+        output = np.empty(len(points), dtype=dtype)
+        for name in points.dtype.names:
+            output[name] = points[name]
+        output["TreeID"] = np.searchsorted(ids, points["TreeID"]) + offset + 1
+        trees["tree_id"] = np.arange(offset + 1, offset + 1 + len(ids), dtype=np.uint64)
+        offset += len(ids)
+        yield output, trees.reset_index(drop=True)

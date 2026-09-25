@@ -37,8 +37,9 @@ Concurrent tile writes
 Multiple threads may call :meth:`write_tile` simultaneously for different
 spatial regions (which the tiling guarantees are non-overlapping).  Zarr
 writes each chunk to a separate file atomically, so concurrent writes to
-different chunks are safe.  A threading lock protects the time-axis
-``resize`` + index look-up sequence, and group initialisation.
+different chunks are safe. A per-resolution threading lock currently protects
+the entire tile write, including time-axis resize and index lookup, to prevent
+partial-chunk and metadata races between tiles.
 
 Usage::
 
@@ -246,10 +247,12 @@ class ALSZarrStore:
         if root is None:
             root = self._root
 
-        min_x, min_y, max_x, max_y = bbox
+        min_x, _min_y, _max_x, max_y = bbox
         res = float(res_key.rstrip("m"))
-        ny = int(np.ceil((max_y - min_y) / res))
-        nx = int(np.ceil((max_x - min_x) / res))
+        from alsdb.processing._grid import GridSpec
+
+        grid = GridSpec.from_bbox(bbox, res)
+        ny, nx = grid.shape
         chunk_ny = min(ny, max(1, int(tile_size / res)))
         chunk_nx = min(nx, max(1, int(tile_size / res)))
 
@@ -288,6 +291,7 @@ class ALSZarrStore:
                     fill_value=np.nan,
                 )
                 arr.attrs["_FillValue"] = "NaN"
+                arr.attrs["data_years"] = []
 
         logger.info(
             "ALSZarrStore: initialised group '%s'  (%d×%d px, chunk %d×%d, vars: %s)",
@@ -336,6 +340,23 @@ class ALSZarrStore:
         """
         res_key = _res_str(resolution)
         with self._group_lock(res_key):
+            if res_key in self._root:
+                from alsdb.processing._grid import GridSpec
+
+                expected = GridSpec.from_bbox(bbox, resolution)
+                attrs = self._root[res_key].attrs
+                if (
+                    int(attrs["nx"]) != expected.nx
+                    or int(attrs["ny"]) != expected.ny
+                    or not np.allclose(
+                        [attrs["x_origin"], attrs["y_origin"]],
+                        [expected.x0, expected.y1],
+                        rtol=0,
+                        atol=resolution * 1e-8,
+                    )
+                    or attrs["crs_wkt"] != crs_wkt
+                ):
+                    raise ValueError("Requested grid/CRS differs from the existing store grid")
             if res_key not in self._root:
                 self._init_group(res_key, bbox, crs_wkt, [variable], tile_size)
             elif variable not in self._root[res_key]:
@@ -354,7 +375,74 @@ class ALSZarrStore:
                     fill_value=np.nan,
                 )
                 arr.attrs["_FillValue"] = "NaN"
+                arr.attrs["data_years"] = []
                 logger.info("ALSZarrStore: added variable '%s' to group '%s'", variable, res_key)
+
+    def check_run(self, variable, resolution, year, configuration, *, overwrite=False):
+        """Return True only for a completed run with identical provenance.
+
+        Existing untracked data cannot be silently reused. Failed/running runs
+        with the same configuration are restarted and their old slice cleared.
+        """
+        import hashlib
+        import json
+
+        encoded = json.dumps(configuration, sort_keys=True, allow_nan=False)
+        fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
+        key = _res_str(resolution)
+        if key not in self._root or variable not in self._root[key]:
+            return False
+        records = dict(self._root[key][variable].attrs.get("processing_runs", {}))
+        record = records.get(str(year))
+        if overwrite:
+            return False
+        if record is None:
+            if self.has_data(variable, resolution, year):
+                raise ValueError(
+                    f"{variable}/{year} has no processing provenance; use overwrite=True"
+                )
+            return False
+        if record["fingerprint"] != fingerprint:
+            raise ValueError(
+                f"{variable}/{year} has a different processing configuration; use overwrite=True"
+            )
+        return record["status"] == "complete"
+
+    def begin_run(self, variable, resolution, year, configuration, variables):
+        """Mark an attempt running and clear stale data, including quality layers."""
+        import hashlib
+        import json
+
+        key = _res_str(resolution)
+        configuration = json.loads(json.dumps(configuration, sort_keys=True, allow_nan=False))
+        fingerprint = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()
+        with self._group_lock(key):
+            group = self._root[key]
+            arr = group[variable]
+            records = dict(arr.attrs.get("processing_runs", {}))
+            records[str(year)] = {
+                "status": "running",
+                "fingerprint": fingerprint,
+                "configuration": configuration,
+            }
+            arr.attrs["processing_runs"] = records
+            years = np.asarray(group["time"][:])
+            found = np.flatnonzero(years == year)
+            if len(found):
+                for name in variables:
+                    if name in group and group[name].shape[0] > found[0]:
+                        group[name][int(found[0]), :, :] = np.nan
+                        group[name].attrs["data_years"] = [
+                            y for y in group[name].attrs.get("data_years", []) if y != year
+                        ]
+
+    def finish_run(self, variable, resolution, year, *, failed=False):
+        key = _res_str(resolution)
+        with self._group_lock(key):
+            arr = self._root[key][variable]
+            records = dict(arr.attrs["processing_runs"])
+            records[str(year)]["status"] = "failed" if failed else "complete"
+            arr.attrs["processing_runs"] = records
 
     # ------------------------------------------------------------------
     # Writing
@@ -423,12 +511,19 @@ class ALSZarrStore:
             logger.debug("write_tile: empty slice for %s, skipping", variable)
             return
 
-        with self._group_lock(res_key):
-            t_idx = self._upsert_year(grp, year)
-
         tile_ny = row1 - row0
         tile_nx = col1 - col0
-        grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(np.float32)
+        if row0 < 0 or col0 < 0 or data.shape[0] < tile_ny or data.shape[1] < tile_nx:
+            raise ValueError("Tile data/window does not fit the store grid")
+        # Serialize the complete read-modify-write operation: different tile
+        # sizes can share Zarr chunks even when pixel windows do not overlap.
+        with self._group_lock(res_key):
+            t_idx = self._upsert_year(grp, year)
+            grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(np.float32)
+            if np.isfinite(data[:tile_ny, :tile_nx]).any():
+                years = list(grp[variable].attrs.get("data_years", []))
+                if year not in years:
+                    grp[variable].attrs["data_years"] = sorted(years + [int(year)])
 
     def _upsert_year(self, grp, year: int) -> int:
         """Return the time index for *year*, appending a new slice if needed.
@@ -541,11 +636,11 @@ class ALSZarrStore:
     )
     def has_data(self, variable: str, resolution: float, year: int) -> bool:
         """
-        Return ``True`` if *variable* already has a time slice for *year*.
+        Return True if finite values have been written for this variable/year.
 
-        Used by compute functions to skip work that is already done.
-        The check is at the year level — it does not verify that every
-        spatial tile was written (e.g. after a partial run).
+        Legacy arrays without per-variable write metadata fall back to the time
+        axis. This does not prove completion; surface workflows use check_run
+        and processing provenance to distinguish complete and interrupted runs.
 
         Parameters
         ----------
@@ -565,7 +660,8 @@ class ALSZarrStore:
         time_arr = grp["time"]
         if time_arr.shape[0] == 0:
             return False
-        return bool(year in time_arr[:])
+        written = grp[variable].attrs.get("data_years")
+        return bool(year in written) if written is not None else bool(year in time_arr[:])
 
     @property
     def resolutions(self) -> list[float]:

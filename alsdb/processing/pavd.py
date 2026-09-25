@@ -34,18 +34,14 @@ Plant area volume density is its vertical derivative:
 
     PAVD(z) = -d(PAI_traversed)/dz
 
-This is the classic MacArthur & Horn (1969) canopy profile. Because it is
-built from the ALS point cloud's own many, largely-independent pulses
-(rather than one energy-limited pulse), it does not suffer the depth-
-dependent energy attenuation a real single-pulse full-waveform sensor
-does, so it serves as the physical "ground truth" PAVD profile a real GEDI
-L2A/L2B ``cp_pavd`` retrieval at the same footprint can be validated
-against -- see :func:`fit_transmittance_model`.
+This is a MacArthur-Horn-style return-count profile. Sampling, occlusion,
+classification, terrain and extinction assumptions affect the estimate. It can
+serve as a comparison reference for waveform retrievals, but it is not an
+independent measurement of true plant area density.
 
-Ground is the median height of ``Classification == 2`` (ground) first
-returns in the footprint -- matching ``gap.py``'s own ground convention --
-rather than the peak-detected ground ``waveform.py`` uses (there is no
-waveform here to peak-detect on).
+Heights are normalized pointwise against a buffered terrain TIN built from all
+classified ground returns. Unsupported canopy heights are excluded. Classified
+ground first returns are assigned zero height in the count profile.
 """
 
 from __future__ import annotations
@@ -86,6 +82,8 @@ class PAVDProfile:
     canopy_height: float
     n_points: int
     n_ground_points: int
+    n_unsupported: int = 0
+    n_extrapolated: int = 0
 
 
 def _pavd_profile_from_hag(
@@ -122,6 +120,15 @@ def _pavd_profile_from_hag(
         assuming the ASPRS default applies -- see the empty-mask warning
         below, which is the guard that should catch this in the future.
     """
+    if not np.isfinite([z_step, k]).all() or z_step <= 0 or k <= 0 or min_ground_points < 1:
+        raise ValueError("z_step, k and min_ground_points must be positive")
+    hag = np.asarray(hag, dtype=float).copy()
+    classification = np.asarray(classification)
+    if hag.shape != classification.shape or hag.ndim != 1:
+        raise ValueError("Heights and classification must be matching one-dimensional arrays")
+    hag[classification == _GROUND_CLASS] = 0
+    valid = np.isfinite(hag)
+    hag, classification = hag[valid], classification[valid]
     gnd_mask = classification == _GROUND_CLASS
     n_gnd = int(gnd_mask.sum())
     if n_gnd < min_ground_points:
@@ -145,7 +152,7 @@ def _pavd_profile_from_hag(
     if n_tot == 0:
         return None
 
-    above_ground = hag_cls[hag_cls > 0]
+    above_ground = hag[veg_mask & (hag > 0)]
     canopy_height = float(np.percentile(above_ground, 98)) if len(above_ground) else 0.0
     if canopy_height <= 0:
         return None
@@ -199,11 +206,14 @@ def compute_als_pavd_profile(
     min_points: int = _MIN_POINTS_DEFAULT,
     min_ground_points: int = _MIN_GROUND_POINTS_DEFAULT,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    terrain_buffer: float = 30.0,
+    max_ground_distance: float | None = None,
+    ground_extrapolation: bool = False,
 ) -> PAVDProfile | None:
     """
-    Vertical PAVD profile from real ALS returns in a circular footprint --
-    the "ALS truth" reference a real GEDI L2A/L2B PAVD retrieval at the same
-    footprint should be compared against (see :func:`fit_transmittance_model`).
+    Vertical return-count PAVD estimate in a circular footprint. Terrain,
+    classification, sampling and extinction assumptions affect this estimate;
+    it is a comparison reference rather than an independent ground truth.
 
     Parameters
     ----------
@@ -239,47 +249,126 @@ def compute_als_pavd_profile(
     -------
     PAVDProfile or None
     """
-    data = _query_footprint(provider, center_x, center_y, footprint_radius, year)
-    n_pts = 0 if data is None else len(data["Z"])
-    if data is None or n_pts < min_points:
-        logger.debug(
-            "compute_als_pavd_profile: only %d points at (%.0f, %.0f) year=%s "
-            "(min_points=%d) -- skipped",
-            n_pts,
-            center_x,
-            center_y,
-            year,
-            min_points,
-        )
+    options = dict(locals())
+    options.pop("provider")
+    if not np.isfinite(terrain_buffer) or terrain_buffer < 0:
+        raise ValueError("terrain_buffer must be finite and nonnegative")
+    data = _query_footprint(provider, center_x, center_y, footprint_radius + terrain_buffer, year)
+    return pavd_from_points(data, **options)
+
+
+def pavd_from_points(
+    data,
+    center_x,
+    center_y,
+    footprint_radius,
+    z_step=_Z_STEP_DEFAULT,
+    k=_LAI_K_DEFAULT,
+    year=None,
+    min_points=_MIN_POINTS_DEFAULT,
+    min_ground_points=_MIN_GROUND_POINTS_DEFAULT,
+    veg_classes=_VEG_CLASSES,
+    terrain_buffer=30.0,
+    max_ground_distance=None,
+    ground_extrapolation=False,
+):
+    """Compute a footprint profile using all buffered ground returns as terrain.
+
+    ``data`` must cover footprint_radius + terrain_buffer. Unsupported first
+    returns are reported in n_unsupported rather than treated as low canopy.
+    Ground counts still require first returns, matching the gap estimator.
+    """
+    from alsdb.processing._footprints import point_array
+    from alsdb.processing._surface import clean_points
+    from alsdb.processing._terrain import TerrainModel, normalize_points
+
+    if (
+        not np.isfinite([footprint_radius, terrain_buffer, z_step, k]).all()
+        or footprint_radius <= 0
+        or terrain_buffer < 0
+        or z_step <= 0
+        or k <= 0
+    ):
+        raise ValueError("Invalid footprint, terrain buffer or profile parameters")
+    if data is None:
         return None
-
-    fr = data["ReturnNumber"] == 1
-    z_fr = data["Z"][fr].astype(np.float64)
-    cls_fr = data["Classification"][fr]
-
-    gnd_mask = cls_fr == _GROUND_CLASS
-    if int(gnd_mask.sum()) < min_ground_points:
-        logger.debug(
-            "compute_als_pavd_profile: only %d ground returns at (%.0f, %.0f) "
-            "(need >= %d) -- skipped",
-            int(gnd_mask.sum()),
-            center_x,
-            center_y,
-            min_ground_points,
-        )
-        return None
-
-    z_ground = float(np.median(z_fr[gnd_mask]))
-    hag = z_fr - z_ground
-
-    return _pavd_profile_from_hag(
-        hag,
-        cls_fr,
-        z_step=z_step,
-        k=k,
-        min_ground_points=min_ground_points,
-        veg_classes=veg_classes,
+    points = clean_points(point_array(data))
+    distance = (points["X"] - center_x) ** 2 + (points["Y"] - center_y) ** 2
+    terrain = TerrainModel(
+        points[
+            (points["Classification"] == 2) & (distance <= (footprint_radius + terrain_buffer) ** 2)
+        ]
     )
+    inside = distance <= footprint_radius**2
+    if inside.sum() < min_points:
+        return None
+    first = points[inside & (points["ReturnNumber"] == 1)]
+    normalized, _ = normalize_points(
+        first, model=terrain, max_distance=max_ground_distance, extrapolate=ground_extrapolation
+    )
+    heights = normalized["HeightAboveGround"]
+    unsupported = int((~np.isfinite(heights) & (first["Classification"] != 2)).sum())
+    result = _pavd_profile_from_hag(
+        heights, first["Classification"], z_step, k, min_ground_points, veg_classes
+    )
+    if result is not None:
+        result.n_unsupported = unsupported
+        result.n_extrapolated = int(
+            (
+                normalized["GroundExtrapolated"].astype(bool)
+                & np.isfinite(heights)
+                & (first["Classification"] != 2)
+            ).sum()
+        )
+    return result
+
+
+def compute_als_pavd_batch(
+    provider,
+    shots,
+    x_col="center_x",
+    y_col="center_y",
+    *,
+    footprint_radius=12.5,
+    terrain_buffer=30.0,
+    year=None,
+    n_workers=1,
+    batch_tile_size=100.0,
+    **kwargs,
+):
+    """Return profiles in input row order, sharing queries for nearby footprints."""
+    from alsdb.processing._footprints import footprint_batches
+
+    centers = shots[[x_col, y_col]].to_numpy(dtype=float)
+    results = [None] * len(shots)
+
+    def process(indices, points, neighborhoods):
+        output = []
+        for index, neighborhood in zip(indices, neighborhoods):
+            result = pavd_from_points(
+                points[neighborhood],
+                *centers[index],
+                footprint_radius,
+                terrain_buffer=terrain_buffer,
+                year=year,
+                **kwargs,
+            )
+            output.append((index, result))
+        return output
+
+    for batch in footprint_batches(
+        provider,
+        centers,
+        footprint_radius + terrain_buffer,
+        year=year,
+        n_workers=n_workers,
+        batch_tile_size=batch_tile_size,
+        attributes=("Z", "ReturnNumber", "Classification", "Withheld"),
+        process=process,
+    ):
+        for index, result in batch:
+            results[index] = result
+    return results
 
 
 def fit_transmittance_model(

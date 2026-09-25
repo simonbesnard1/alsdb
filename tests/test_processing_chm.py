@@ -980,11 +980,11 @@ def test_gate_by_ground_distance_keeps_near_points():
     assert len(result) == 2
 
 
-def test_gate_by_ground_distance_empty_ground_returns_unchanged():
+def test_gate_by_ground_distance_empty_ground_rejects_unsupported_points():
     points = _veg_points([0.0, 100.0], [0.0, 100.0])
     ground = _ground_at([], [])
     result = _gate_by_ground_distance(points, ground, max_distance=5.0)
-    assert len(result) == len(points)
+    assert len(result) == 0
 
 
 # ---------------------------------------------------------------------------

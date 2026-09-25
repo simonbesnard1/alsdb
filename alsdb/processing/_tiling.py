@@ -16,7 +16,7 @@ import json
 import logging
 import math
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -44,6 +44,7 @@ def query_to_array(
     provider: TileDBProvider,
     bbox: tuple[float, float, float, float] | None,
     year: int | None = None,
+    attributes: tuple[str, ...] | None = None,
 ) -> np.ndarray:
     """
     Query the TileDB array and return a PDAL-compatible numpy structured array.
@@ -61,10 +62,14 @@ def query_to_array(
     Returns
     -------
     np.ndarray
-        Structured numpy array with X, Y and all LAS attribute fields.
+        Structured numpy array with X, Y and the selected LAS attribute fields.
+        ``attributes=None`` preserves the default of reading all attributes.
     """
     with provider.open("r") as arr:
-        attrs = list(LAS_ATTRIBUTES.keys())
+        attrs = list(LAS_ATTRIBUTES if attributes is None else dict.fromkeys(attributes))
+        unknown = set(attrs) - LAS_ATTRIBUTES.keys()
+        if unknown:
+            raise ValueError(f"Unknown LAS attributes: {sorted(unknown)}")
         yr_dim = arr.schema.domain.dim("Year")
         y0 = year if year is not None else int(yr_dim.domain[0])
         y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
@@ -77,9 +82,11 @@ def query_to_array(
     n = len(data["X"])
     logger.debug("Queried %d points from TileDB", n)
 
-    dtype = [(name, PDAL_DTYPES[name]) for name in PDAL_DTYPES]
+    fields = ["X", "Y", *attrs]
+    dtype = [(name, PDAL_DTYPES[name]) for name in fields]
     out = np.empty(n, dtype=dtype)
-    for name, np_dtype in PDAL_DTYPES.items():
+    for name in fields:
+        np_dtype = PDAL_DTYPES[name]
         if name in data:
             out[name] = data[name].astype(np_dtype)
         else:
@@ -248,7 +255,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
 
     Applied **only to Class-2 (ground) points** so vegetation and other
     classifications are untouched.  Ground outliers are reclassified to
-    Class 1 (unclassified) in the returned copy so that ``filters.hag_delaunay``
+    Class 7 (noise) in the returned copy so that ``filters.hag_delaunay``
     and ``filters.delaunay`` ignore them when building the terrain TIN.
 
     Two complementary strategies are applied in sequence on the ground subset:
@@ -280,7 +287,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Copy of *arr* with outlier ground points reclassified to Class 1.
+        Copy of *arr* with outlier ground points reclassified to Class 7.
         Returns *arr* unchanged if no outliers are found or if the PDAL
         pipeline raises an error (logged at DEBUG level).
     """
@@ -323,7 +330,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
 
     out = arr.copy()
     gnd_indices = np.where(gnd_mask)[0]
-    out["Classification"][gnd_indices[outlier_in_gnd]] = 1  # → unclassified
+    out["Classification"][gnd_indices[outlier_in_gnd]] = 7  # noise, never canopy
     logger.debug(
         "_filter_ground_outliers: reclassified %d/%d ground outliers (ELM + statistical)",
         n_out,
@@ -336,8 +343,8 @@ def _hag_stage(arr: np.ndarray) -> dict:
     """
     Return the most accurate available PDAL HAG stage for *arr*.
 
-    Prefers ``filters.hag_delaunay`` (TIN-based, gold-standard, consistent
-    with the DTM pipeline) when the tile contains at least
+    Legacy PDAL-based workers prefer ``filters.hag_delaunay`` when the
+    tile contains at least
     ``_HAG_DELAUNAY_MIN_GND`` ground-classified points.  Falls back to
     ``filters.hag_nn`` when the ground point count is too low to build a
     valid triangulation (sparse surveys, dense-canopy void tiles).
@@ -361,32 +368,14 @@ def _hag_stage(arr: np.ndarray) -> dict:
 
 
 def attach_hag(arr: np.ndarray) -> np.ndarray:
-    """
-    Attach ``HeightAboveGround`` to every point in *arr* and return the result.
+    """Normalize against a ground TIN; unsupported heights remain NaN.
 
-    Uses ``filters.hag_delaunay`` (Delaunay TIN, barycentric interpolation)
-    when enough ground points are available — the same triangulation method
-    as the DTM pipeline, ensuring CHM = DSM − DTM is self-consistent.
-    Falls back to ``filters.hag_nn`` for tiles with fewer than
-    ``_HAG_DELAUNAY_MIN_GND`` ground points.  Negative HAG values (edge
-    artefacts outside the convex hull) are clamped to zero.
-
-    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
-    and :mod:`alsdb.processing.biomass`.
+    Point-normalized CHM statistics do not in general equal DSM minus DTM.
+    Additional fields record ground distance, extrapolation and negative HAG.
     """
-    arr = _filter_ground_outliers(arr)
-    stages = [
-        _hag_stage(arr),
-        {
-            "type": "filters.assign",
-            "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
-        },
-    ]
-    p = pdal.Pipeline(json.dumps(stages), arrays=[arr])
-    p.execute()
-    result = p.arrays[0]
-    logger.debug("HAG attached: %d points", len(result))
-    return result
+    from alsdb.processing._terrain import normalize_points
+
+    return normalize_points(_filter_ground_outliers(arr))[0]
 
 
 def run_tiled(
@@ -438,21 +427,37 @@ def run_tiled(
         if completed % gc_every == 0:
             gc.collect()
 
+    def process(item):
+        idx, (query_bbox, crop_bbox) = item
+        return worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
+
+    for _ in bounded_map(process, enumerate(tiles), n_workers):
+        _note_progress()
+
+
+def bounded_map(fn, items, n_workers=1):
+    """Ordered results with at most two pending items per worker."""
+    from collections import deque
+
+    if n_workers < 1:
+        raise ValueError("n_workers must be positive")
     if n_workers == 1:
-        for idx, (query_bbox, crop_bbox) in enumerate(tiles):
-            worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
-            _note_progress()
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(
-                    worker_fn, provider, query_bbox, crop_bbox, store, idx, **kwargs
-                ): idx
-                for idx, (query_bbox, crop_bbox) in enumerate(tiles)
-            }
-            for future in as_completed(futures):
-                future.result()  # re-raise worker exceptions
-                _note_progress()
+        yield from map(fn, items)
+        return
+    items = iter(items)
+    sentinel = object()
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        pending = deque()
+        for _ in range(2 * n_workers):
+            item = next(items, sentinel)
+            if item is sentinel:
+                break
+            pending.append(executor.submit(fn, item))
+        while pending:
+            yield pending.popleft().result()
+            item = next(items, sentinel)
+            if item is not sentinel:
+                pending.append(executor.submit(fn, item))
 
 
 def flip_to_north_up(grid: np.ndarray, transpose: bool = False) -> np.ndarray:
@@ -489,14 +494,13 @@ def baba_neighbourhoods(
     """
     from scipy.spatial import cKDTree
 
-    x_min, y_min, x_max, y_max = bbox
-    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
-    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
+    from alsdb.processing._grid import GridSpec
 
-    cx_arr = x_min + (np.arange(nx) + 0.5) * resolution
-    cy_arr = y_min + (np.arange(ny) + 0.5) * resolution
-    CX, CY = np.meshgrid(cx_arr, cy_arr)
-    centres = np.column_stack([CX.ravel(), CY.ravel()])
+    grid = GridSpec.from_bbox(bbox, resolution)
+    nx, ny = grid.nx, grid.ny
+    cx, cy = grid.centers()
+    # Preserve this helper's historical south-up index order for its callers.
+    centres = np.column_stack((np.flipud(cx).ravel(), np.flipud(cy).ravel()))
 
     xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
     indices_list = cKDTree(xy).query_ball_point(centres, r=baba_radius)

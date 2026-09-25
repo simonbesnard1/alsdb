@@ -100,3 +100,16 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+# Optional compiled constrained-Delaunay backend.
+[tool.pixi.feature.spikefree.dependencies]
+cgal-cpp = ">=6,<7"
+pybind11 = ">=2.13"
+cxx-compiler = "*"
+
+[tool.pixi.feature.spikefree.tasks]
+build-spikefree = "python -m alsdb.processing._build_spikefree"
+
+[tool.pixi.environments]
+default = { features = [] }
+spikefree = { features = ["spikefree"] }

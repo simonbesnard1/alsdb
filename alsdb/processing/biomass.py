@@ -8,8 +8,8 @@ Above-Ground Biomass (AGB) estimation from TileDB ALS point clouds.
 Pipeline
 --------
 1. Query TileDB → numpy structured array.
-2. Run ``filters.hag_delaunay`` (or ``filters.hag_nn`` fallback) via PDAL
-   to attach ``HeightAboveGround``.
+2. Interpolate a buffered terrain TIN to attach ``HeightAboveGround``;
+   unsupported heights remain NaN unless extrapolation is explicitly enabled.
 3. Compute per-cell LiDAR metrics in Python/scipy:
 
    ========  ===============================================================
@@ -24,7 +24,7 @@ Pipeline
    ``cc`` and the height metrics are deliberately computed on different
    point populations, not an oversight: ``cc`` uses *first returns only*
    and *no classification filter* (any point with ``ReturnNumber == 1``
-   counts, matching the classic first-return-cover definition used in
+   with supported height counts, matching the first-return-cover definition used in
    Næsset-style ABA studies), while ``h50``/``h75``/``h95``/``hmean``/etc.
    use *all returns*, restricted to vegetation classes (see ``VEG_CLASSES``).
    This means ``cc`` and ``h95`` respond differently to point density -
@@ -80,17 +80,8 @@ from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
 )
 from alsdb.processing._tiling import (
-    _require_year,
-    array_crs,
-    array_data_bbox,
-    attach_hag,
     baba_neighbourhoods,
-    check_bbox_overlap,
-    check_year_exists,
     flip_to_north_up,
-    query_to_array,
-    run_tiled,
-    tile_bboxes,
 )
 
 if TYPE_CHECKING:
@@ -201,6 +192,7 @@ def _extract_metrics(
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     min_density: float = 0.0,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR structural metrics over *bbox*.
@@ -222,177 +214,78 @@ def _extract_metrics(
         ``np.unique(points["Classification"], return_counts=True)`` before
         trusting the default on a new array.
     """
-    x_min, y_min, x_max, y_max = bbox
-    nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
-    ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
-    # Actual per-axis cell width, not the nominal *resolution* argument -
-    # only identical to it when (x_max - x_min) happens to be an exact
-    # multiple of resolution (tile_size/resolution alignment isn't enforced
-    # here the way chm.py's _validate_grid_alignment enforces it for CHM).
-    # _bin below must derive bins from this, not the raw parameter, to stay
-    # correct for non-grid-aligned bbox/resolution combinations.
-    x_res = (x_max - x_min) / nx
-    y_res = (y_max - y_min) / ny
-    n_cells = nx * ny
+    from alsdb.processing._grid import GridSpec
 
-    x = points["X"]
-    y = points["Y"]
-    hag = points["HeightAboveGround"]
-    fr = points["ReturnNumber"] == 1
-    hag_fr = hag[fr]
-
-    veg = np.isin(points["Classification"], veg_classes) & (hag > 0)
-    hag_v = hag[veg]
-
-    def _bin(px: np.ndarray, py: np.ndarray) -> np.ndarray:
-        """Direct arithmetic instead of np.digitize (binary search) - bins
-        are uniform, so this is O(n) instead of O(n log nbins). Verified
-        against digitize on 5M purely random points with zero mismatches;
-        differs (by exactly one bin) only for a point landing *exactly* on
-        a computed bin edge to full float64 precision - a measure-zero event
-        for continuous real coordinates, not something that occurs with real
-        survey data."""
-        xi = np.clip(np.floor((px - x_min) / x_res).astype(np.int64), 0, nx - 1)
-        yi = np.clip(np.floor((py - y_min) / y_res).astype(np.int64), 0, ny - 1)
-        return xi * ny + yi
-
-    def _flip(g: np.ndarray) -> np.ndarray:
-        return flip_to_north_up(g, transpose=True)
-
-    # Bin all three point groups once — shared by every downstream metric.
-    cell_all = _bin(x, y)
-    cell_fr = _bin(x[fr], y[fr])
-    cell_v = _bin(x[veg], y[veg])
-
-    # --- Density ---
-    cell_area = resolution**2
-    density_grid = _flip(
-        (np.bincount(cell_all, minlength=n_cells).astype(np.float64) / cell_area).reshape(nx, ny)
-    )
-
-    # --- Canopy cover ---
-    n_fr_flat = np.bincount(cell_fr, minlength=n_cells).astype(np.float64)
-    n_above_flat = np.bincount(
-        cell_fr, weights=(hag_fr > cc_threshold).astype(np.float64), minlength=n_cells
-    )
-    with np.errstate(invalid="ignore", divide="ignore"):
-        cc = _flip(np.where(n_fr_flat > 0, n_above_flat / n_fr_flat, np.nan).reshape(nx, ny))
-
-    # --- Veg-point count (shared by hmean denominator and strata) ---
-    n_veg_flat = np.bincount(cell_v, minlength=n_cells).astype(np.float64)
-
-    # --- hmean via weighted bincount (pure C, one pass) ---
-    hag_sum_flat = np.bincount(cell_v, weights=hag_v.astype(np.float64), minlength=n_cells)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        hmean_flat = np.where(n_veg_flat > 0, hag_sum_flat / n_veg_flat, np.nan)
-
-    # --- Height strata proportions (six bincount calls, no Python per-bin work) ---
-    strata_grids: dict[str, np.ndarray] = {}
-    for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
-        indicator = ((hag_v > lo) & (hag_v <= hi)).astype(np.float64)
-        n_strata = np.bincount(cell_v, weights=indicator, minlength=n_cells)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            prop = np.where(n_veg_flat > 0, n_strata / n_veg_flat, np.nan)
-        strata_grids[name] = _flip(prop.reshape(nx, ny))
-
-    # --- h50/h75/h95 + hmin + hmax, fully vectorised (no per-cell Python loop) ---
-    # lexsort by (value, cell) - not just cell - so each cell's points are
-    # *also* sorted by value within the group, which the closed-form
-    # percentile step below depends on (a plain argsort(cell_v) only groups
-    # by cell, leaving value order within each group arbitrary).
-    order = np.lexsort((hag_v, cell_v))
-    sorted_cells_v = cell_v[order]
-    sorted_hag_v = hag_v[order].astype(np.float64)
-    unique_cells_v, first_idx_v = np.unique(sorted_cells_v, return_index=True)
-    ends_v = np.append(first_idx_v[1:], len(sorted_hag_v))
-    group_sizes = (ends_v - first_idx_v).astype(np.float64)
-
-    def _grouped_percentile(q: float) -> np.ndarray:
-        """np.percentile's 'linear' method, applied to every occupied cell's
-        pre-sorted group at once via index arithmetic instead of a per-cell
-        Python-level np.percentile call - profiled at ~55x faster than the
-        loop at 250k cells (11.0s -> 0.2s), the actual cost being the
-        thousands of individual per-cell function calls, not the sort
-        (pre-sorting once but still calling np.percentile per cell only
-        saves ~7%, confirmed). Computed in float64 to match np.percentile's
-        own internal promotion for array-form q - matching bit-for-bit
-        wasn't achievable without keeping the per-cell call (numpy promotes
-        to float64 internally regardless of input dtype for that form); this
-        differs from the exact per-cell result by ~1e-6 m, floating-point
-        rounding noise negligible next to real HAG measurement precision,
-        not a logic difference.
-        """
-        rank = (np.float64(q) / np.float64(100)) * (group_sizes - np.float64(1))
-        lower_offset = np.floor(rank).astype(np.int64)
-        upper_offset = np.ceil(rank).astype(np.int64)
-        frac = rank - lower_offset
-        lo = sorted_hag_v[first_idx_v + lower_offset]
-        hi = sorted_hag_v[first_idx_v + upper_offset]
-        out = np.full(n_cells, np.nan, dtype=np.float64)
-        out[unique_cells_v] = lo + frac * (hi - lo)
-        return out
-
-    h50_flat = _grouped_percentile(50)
-    h75_flat = _grouped_percentile(75)
-    h95_flat = _grouped_percentile(95)
-    hmin_flat = np.full(n_cells, np.nan, dtype=np.float64)
-    hmax_flat = np.full(n_cells, np.nan, dtype=np.float64)
-    hmin_flat[unique_cells_v] = sorted_hag_v[first_idx_v]
-    hmax_flat[unique_cells_v] = sorted_hag_v[ends_v - 1]
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        denom_flat = hmax_flat - hmin_flat
-        crr_flat = np.where(denom_flat > 0, (hmean_flat - hmin_flat) / denom_flat, np.nan)
-
-    # --- FHD via 3D histogram (x_cell × y_cell × hag_band): fully vectorised ---
-    xi_v = cell_v // ny
-    yi_v = cell_v % ny
-    fhd_mask = hag_v <= _FHD_MAX_H
-    hag_bin_v = np.minimum(
-        np.floor(hag_v[fhd_mask] / _FHD_BIN_SIZE).astype(np.intp), _FHD_N_BINS - 1
-    )
-    flat_fhd = np.ravel_multi_index(
-        (xi_v[fhd_mask], yi_v[fhd_mask], hag_bin_v), (nx, ny, _FHD_N_BINS)
-    )
-    counts_3d = (
-        np.bincount(flat_fhd, minlength=n_cells * _FHD_N_BINS)
-        .reshape(nx, ny, _FHD_N_BINS)
-        .astype(np.float64)
-    )
-    cell_totals = counts_3d.sum(axis=2, keepdims=True)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        p = np.where(cell_totals > 0, counts_3d / cell_totals, 0.0)
-        log_p = np.where(p > 0, np.log(p), 0.0)
-    fhd_raw = -(p * log_p).sum(axis=2)  # (nx, ny)
-    fhd_raw[cell_totals.squeeze(axis=2) == 0] = np.nan
-    fhd_grid = _flip(fhd_raw)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        vci_grid = np.where(_VCI_MAX_ENTROPY > 0, fhd_grid / _VCI_MAX_ENTROPY, np.nan).astype(
-            np.float32
+    requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
+    unknown = set(requested) - set(_METRIC_NAMES)
+    if unknown:
+        raise ValueError(f"Unknown metrics: {sorted(unknown)}")
+    grid = GridSpec.from_bbox(bbox, resolution)
+    inside, cells = grid.point_bins(points)
+    n = grid.nx * grid.ny
+    density = np.bincount(cells, minlength=n) / resolution**2
+    hag = points["HeightAboveGround"][inside]
+    valid = np.isfinite(hag)
+    vegetation = valid & np.isin(points["Classification"][inside], veg_classes) & (hag > 0)
+    cv, hv = cells[vegetation], hag[vegetation].astype(np.float64)
+    nv = np.bincount(cv, minlength=n)
+    out = {}
+    if "density" in requested:
+        out["density"] = density
+    if "cc" in requested:
+        first = valid & (points["ReturnNumber"][inside] == 1)
+        denominator = np.bincount(cells[first], minlength=n)
+        numerator = np.bincount(cells[first], weights=hag[first] > cc_threshold, minlength=n)
+        out["cc"] = np.divide(numerator, denominator, out=np.full(n, np.nan), where=denominator > 0)
+    if {"hmean", "crr"} & set(requested):
+        mean = np.divide(
+            np.bincount(cv, weights=hv, minlength=n), nv, out=np.full(n, np.nan), where=nv > 0
         )
-
-    metrics: dict[str, np.ndarray] = {
-        "h50": _flip(h50_flat.reshape(nx, ny)),
-        "h75": _flip(h75_flat.reshape(nx, ny)),
-        "h95": _flip(h95_flat.reshape(nx, ny)),
-        "hmax": _flip(hmax_flat.reshape(nx, ny)),
-        "hmean": _flip(hmean_flat.reshape(nx, ny)),
-        "cc": cc,
-        "density": density_grid,
-        "fhd": fhd_grid,
-        "vci": vci_grid,
-        "crr": _flip(crr_flat.reshape(nx, ny)),
-        **strata_grids,
-    }
-
-    # Mask all metrics in cells below the minimum density threshold (in-place
-    # to avoid 16 separate np.where copies).
-    if min_density > 0.0:
-        sparse = density_grid < min_density
-        for arr in metrics.values():
-            arr[sparse] = np.nan
-
-    return metrics
+        out["hmean"] = mean
+    for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
+        if name in requested:
+            counts = np.bincount(cv, weights=(hv > lo) & (hv <= hi), minlength=n)
+            out[name] = np.divide(counts, nv, out=np.full(n, np.nan), where=nv > 0)
+    if {"h50", "h75", "h95", "hmax", "crr"} & set(requested):
+        order = np.lexsort((hv, cv))
+        heights = hv[order]
+        occupied, starts, counts = np.unique(cv[order], return_index=True, return_counts=True)
+        for name, q in (("h50", 0.5), ("h75", 0.75), ("h95", 0.95), ("hmax", 1.0)):
+            if name in requested or (name == "hmax" and "crr" in requested):
+                rank = q * (counts - 1)
+                low = np.floor(rank).astype(int)
+                high = np.ceil(rank).astype(int)
+                values = np.full(n, np.nan)
+                values[occupied] = heights[starts + low] + (rank - low) * (
+                    heights[starts + high] - heights[starts + low]
+                )
+                out[name] = values
+        if "crr" in requested:
+            minimum = np.full(n, np.nan)
+            minimum[occupied] = heights[starts]
+            spread = out["hmax"] - minimum
+            out["crr"] = np.divide(mean - minimum, spread, out=np.full(n, np.nan), where=spread > 0)
+    if {"fhd", "vci"} & set(requested):
+        # Sparse occupied (cell, height-band) counts avoid a cells × bands cube.
+        keep = hv <= _FHD_MAX_H
+        bands = np.minimum((hv[keep] / _FHD_BIN_SIZE).astype(int), _FHD_N_BINS - 1)
+        keys, counts = np.unique(cv[keep] * _FHD_N_BINS + bands, return_counts=True)
+        cell = keys // _FHD_N_BINS
+        totals = np.bincount(cell, weights=counts, minlength=n)
+        probabilities = counts / totals[cell]
+        entropy = np.bincount(
+            cell, weights=-probabilities * np.log(probabilities), minlength=n
+        ).astype(float)
+        entropy[totals == 0] = np.nan
+        out["fhd"] = entropy
+        out["vci"] = entropy / _VCI_MAX_ENTROPY
+    result = {}
+    for name in requested:
+        values = out[name].astype(np.float32).reshape(grid.shape)
+        if min_density > 0:
+            values[density.reshape(grid.shape) < min_density] = np.nan
+        result[name] = values
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +333,7 @@ def naesset_model(
     cc = metrics["cc"]
     with np.errstate(invalid="ignore"):
         agb = np.where(
-            np.isnan(h95) | np.isnan(cc) | (h95 <= 0) | (cc == 0),
+            ~np.isfinite(h95) | ~np.isfinite(cc) | (h95 <= 0) | (cc <= 0) | (cc > 1),
             np.nan,
             a * np.power(h95, b) * np.power(cc, c),
         )
@@ -522,7 +415,15 @@ def calibrate_naesset(
     cc = np.asarray(cc, dtype=np.float64)
     agb_field = np.asarray(agb_field, dtype=np.float64)
 
-    valid = ~(np.isnan(h95) | np.isnan(cc) | np.isnan(agb_field) | (cc <= 0) | (h95 <= 0))
+    valid = (
+        np.isfinite(h95)
+        & np.isfinite(cc)
+        & np.isfinite(agb_field)
+        & (cc > 0)
+        & (cc <= 1)
+        & (h95 > 0)
+        & (agb_field > 0)
+    )
     n_valid = int(valid.sum())
 
     if n_valid < 20:
@@ -615,12 +516,16 @@ def wrap_sklearn_model(
         shape = metrics[feat[0]].shape
         # Stack into (n_pixels, n_features); ravel preserves north-up order
         X = np.column_stack([metrics[k].ravel() for k in feat])
-        valid = ~np.any(np.isnan(X), axis=1)
+        valid = np.isfinite(X).all(axis=1)
         result = np.full(X.shape[0], np.nan, dtype=np.float32)
         if valid.any():
             result[valid] = estimator.predict(X[valid]).astype(np.float32)
         return result.reshape(shape)
 
+    _model.required_metrics = tuple(feat)
+    import joblib
+
+    _model.model_id = joblib.hash((estimator, feat))
     return _model
 
 
@@ -637,6 +542,7 @@ def _extract_metrics_baba(
     cc_threshold: float = _DEFAULT_CC_THRESHOLD,
     min_density: float = 0.0,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
     """
     Compute per-cell LiDAR metrics using a circular neighbourhood of radius
@@ -656,160 +562,54 @@ def _extract_metrics_baba(
         Minimum point density (pts m⁻²) for a neighbourhood to receive metric
         values.  Cells below this threshold are set to ``np.nan``.
     """
-    nx, ny, indices_list, neighbourhood_area = baba_neighbourhoods(
-        points, resolution, bbox, baba_radius
-    )
-    shape = (ny, nx)
-
-    # Pre-allocate all output grids
-    h50 = np.full(shape, np.nan, dtype=np.float64)
-    h75 = np.full(shape, np.nan, dtype=np.float64)
-    h95 = np.full(shape, np.nan, dtype=np.float64)
-    hmax = np.full(shape, np.nan, dtype=np.float64)
-    hmean = np.full(shape, np.nan, dtype=np.float64)
-    cc = np.full(shape, np.nan, dtype=np.float64)
-    density = np.full(shape, np.nan, dtype=np.float64)
-    fhd = np.full(shape, np.nan, dtype=np.float64)
-    vci = np.full(shape, np.nan, dtype=np.float64)
-    crr = np.full(shape, np.nan, dtype=np.float64)
-    strata = {n: np.full(shape, np.nan, dtype=np.float64) for n in _HEIGHT_STRATA_NAMES}
-
-    hag_all = points["HeightAboveGround"]
-    ret_all = points["ReturnNumber"]
-    # Precomputed once over all points rather than re-running np.isin (and
-    # the > 0 comparison) inside the loop for every one of nx*ny output
-    # cells - veg_classes is tiny and fixed per call, so there's nothing
-    # per-cell about this test.
-    veg_all = np.isin(points["Classification"], veg_classes) & (hag_all > 0)
-
-    for k, idxs in enumerate(indices_list):
-        if not idxs:
+    requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
+    if set(requested) - set(_METRIC_NAMES):
+        raise ValueError("Unknown structural metric")
+    nx, ny, neighborhoods, area = baba_neighbourhoods(points, resolution, bbox, baba_radius)
+    out = {name: np.full(nx * ny, np.nan, np.float32) for name in requested}
+    hag = points["HeightAboveGround"]
+    veg = np.isfinite(hag) & (hag > 0) & np.isin(points["Classification"], veg_classes)
+    first = np.isfinite(hag) & (points["ReturnNumber"] == 1)
+    for cell, idx in enumerate(neighborhoods):
+        density = len(idx) / area
+        if density < min_density:
             continue
-        row, col = divmod(k, nx)
-        hag_k = hag_all[idxs]
-        ret_k = ret_all[idxs]
-
-        cell_density = len(idxs) / neighbourhood_area
-        density[row, col] = cell_density
-        if min_density > 0.0 and cell_density < min_density:
+        if "density" in out:
+            out["density"][cell] = density
+        if not len(idx):
             continue
-
-        hag_v = hag_k[veg_all[idxs]]
-        if hag_v.size > 0:
-            # Single sort for all three percentiles; cache min/max/mean to
-            # avoid redundant passes when computing crr.
-            h50[row, col], h75[row, col], h95[row, col] = np.percentile(hag_v, [50, 75, 95])
-            hmin_k = float(hag_v.min())
-            hmax_k = float(hag_v.max())
-            hmean_k = float(hag_v.mean())
-            hmax[row, col] = hmax_k
-            hmean[row, col] = hmean_k
-            denom_k = hmax_k - hmin_k
-            if denom_k > 0:
-                crr[row, col] = (hmean_k - hmin_k) / denom_k
-
-            # Compute FHD once; derive VCI from it to avoid a second
-            # _fhd_from_hag call inside _vci_from_hag.
-            fhd_k = _fhd_from_hag(hag_v)
-            fhd[row, col] = fhd_k
-            vci[row, col] = (
-                float(fhd_k / _VCI_MAX_ENTROPY)
-                if not np.isnan(fhd_k) and _VCI_MAX_ENTROPY > 0
-                else np.nan
-            )
-
-            n_v = hag_v.size
-            for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
-                strata[name][row, col] = float(((hag_v > lo) & (hag_v <= hi)).sum()) / n_v
-
-        fr = ret_k == 1
-        n_fr = int(fr.sum())
-        if n_fr > 0:
-            cc[row, col] = float((hag_k[fr] > cc_threshold).sum()) / n_fr
-
-    _flip = flip_to_north_up
-
-    return {
-        "h50": _flip(h50),
-        "h75": _flip(h75),
-        "h95": _flip(h95),
-        "hmax": _flip(hmax),
-        "hmean": _flip(hmean),
-        "cc": _flip(cc),
-        "density": _flip(density),
-        "fhd": _flip(fhd),
-        "vci": _flip(vci),
-        "crr": _flip(crr),
-        **{n: _flip(strata[n]) for n in _HEIGHT_STRATA_NAMES},
-    }
+        h = hag[idx]
+        if "cc" in out and first[idx].any():
+            out["cc"][cell] = np.mean(h[first[idx]] > cc_threshold)
+        hv = h[veg[idx]]
+        if not len(hv):
+            continue
+        quantiles = [
+            (name, q) for name, q in (("h50", 50), ("h75", 75), ("h95", 95)) if name in out
+        ]
+        if quantiles:
+            for (name, _), value in zip(quantiles, np.percentile(hv, [q for _, q in quantiles])):
+                out[name][cell] = value
+        if "hmean" in out:
+            out["hmean"][cell] = hv.mean()
+        if "hmax" in out:
+            out["hmax"][cell] = hv.max()
+        if "crr" in out and hv.max() > hv.min():
+            out["crr"][cell] = (hv.mean() - hv.min()) / (hv.max() - hv.min())
+        if {"fhd", "vci"} & set(out):
+            entropy = _fhd_from_hag(hv)
+            if "fhd" in out:
+                out["fhd"][cell] = entropy
+            if "vci" in out:
+                out["vci"][cell] = entropy / _VCI_MAX_ENTROPY
+        for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
+            if name in out:
+                out[name][cell] = np.mean((hv > lo) & (hv <= hi))
+    return {name: flip_to_north_up(values.reshape(ny, nx)) for name, values in out.items()}
 
 
 # ---------------------------------------------------------------------------
 # Per-tile workers
-# ---------------------------------------------------------------------------
-
-
-def _process_tile_metrics(
-    provider: TileDBProvider,
-    query_bbox: tuple[float, float, float, float],
-    crop_bbox: tuple[float, float, float, float],
-    store: ALSZarrStore,
-    tile_index: int,
-    resolution: float,
-    year: int | None,
-    cc_threshold: float,
-    baba_radius: float = 0.0,
-    min_density: float = 0.0,
-    model_fn: Callable | None = None,
-    veg_classes: tuple[int, ...] = _VEG_CLASSES,
-) -> None:
-    """
-    Extract per-cell metrics and either write them all (``model_fn=None``,
-    used by :func:`compute_metrics`) or apply *model_fn* and write the
-    resulting AGB grid (used by :func:`compute_biomass`).
-    """
-    arr = query_to_array(provider, query_bbox, year=year)
-    if arr.size == 0:
-        logger.debug("Tile %d: no points, skipping", tile_index)
-        return
-
-    points = attach_hag(arr)
-    if baba_radius > 0:
-        metrics = _extract_metrics_baba(
-            points,
-            resolution,
-            bbox=crop_bbox,
-            baba_radius=baba_radius,
-            cc_threshold=cc_threshold,
-            min_density=min_density,
-            veg_classes=veg_classes,
-        )
-    else:
-        metrics = _extract_metrics(
-            points,
-            resolution,
-            bbox=crop_bbox,
-            cc_threshold=cc_threshold,
-            min_density=min_density,
-            veg_classes=veg_classes,
-        )
-
-    if model_fn is None:
-        for name, grid in metrics.items():
-            store.write_tile(name, resolution, year, grid, crop_bbox)
-        logger.debug("Metrics tile %d written", tile_index)
-        return
-
-    agb = model_fn(metrics)
-    if np.all(np.isnan(agb)):
-        logger.debug("AGB tile %d: all NaN, skipping", tile_index)
-        return
-    store.write_tile("biomass", resolution, year, agb, crop_bbox)
-    logger.debug("AGB tile %d written", tile_index)
-
-
-# ---------------------------------------------------------------------------
-# Public API
 # ---------------------------------------------------------------------------
 
 
@@ -828,6 +628,10 @@ def compute_metrics(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    metrics: tuple[str, ...] | None = None,
+    ground_outlier_removal: bool = True,
+    max_ground_distance: float | None = None,
+    ground_extrapolation: bool = False,
 ) -> None:
     """
     Compute LiDAR structural metrics and write them into *store*.
@@ -866,49 +670,30 @@ def compute_metrics(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+        Overlap buffer for terrain interpolation (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
-    _require_year(year)
-    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
-    if bbox is not None and not check_bbox_overlap(bbox, provider):
-        return
-    if not check_year_exists(year, provider):
-        return
-    if not overwrite and all(store.has_data(v, resolution, year) for v in _METRIC_NAMES):
-        logger.info(
-            "LiDAR metrics already present for year %d at %.0f m — skipping",
-            year,
-            resolution,
-        )
-        return
-    crs = array_crs(provider)
-    for var in _METRIC_NAMES:
-        store.ensure_group(var, resolution, effective_bbox, crs, tile_size)
-    effective_buffer = max(tile_buffer, baba_radius)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
-    logger.info(
-        "Extracting LiDAR metrics  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
-        resolution,
-        len(tiles),
-        n_workers,
-        year,
-        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
-        f", min_density={min_density:.1f}" if min_density > 0 else "",
-    )
-    run_tiled(
-        _process_tile_metrics,
+    from alsdb.processing.forest import compute_forest_products
+
+    compute_forest_products(
         provider,
-        tiles,
         store,
-        n_workers,
-        resolution=resolution,
-        year=year,
+        resolution,
+        bbox,
+        year,
         cc_threshold=cc_threshold,
         baba_radius=baba_radius,
         min_density=min_density,
         veg_classes=veg_classes,
+        overwrite=overwrite,
+        tile_size=tile_size,
+        tile_buffer=tile_buffer,
+        n_workers=n_workers,
+        ground_outlier_removal=ground_outlier_removal,
+        max_ground_distance=max_ground_distance,
+        ground_extrapolation=ground_extrapolation,
+        metrics=metrics,
     )
 
 
@@ -928,6 +713,11 @@ def compute_biomass(
     n_workers: int = 1,
     min_density: float = 0.0,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    model_features: tuple[str, ...] | None = None,
+    model_id: str | None = None,
+    ground_outlier_removal: bool = True,
+    max_ground_distance: float | None = None,
+    ground_extrapolation: bool = False,
 ) -> None:
     """
     Estimate Above-Ground Biomass (AGB) and write into *store*.
@@ -962,69 +752,76 @@ def compute_biomass(
     tile_size:
         Sub-tile width and height in metres (default 500 m).
     tile_buffer:
-        Overlap buffer for ``filters.hag_delaunay`` accuracy (default 50 m).
+        Overlap buffer for terrain interpolation (default 50 m).
     n_workers:
         Parallel workers (default 1 = sequential).
     """
-    import warnings
+    from alsdb.processing.forest import compute_forest_products
 
-    _require_year(year)
-    using_default_model = model_fn is None
-    model_fn = model_fn or naesset_model
-    effective_bbox = bbox if bbox is not None else array_data_bbox(provider)
-    if bbox is not None and not check_bbox_overlap(bbox, provider):
-        return
-    if not check_year_exists(year, provider):
-        return
-    if not overwrite and store.has_data("biomass", resolution, year):
-        logger.info("Biomass already present for year %d at %.0f m — skipping", year, resolution)
-        return
-    store.ensure_group("biomass", resolution, effective_bbox, array_crs(provider), tile_size)
-    effective_buffer = max(tile_buffer, baba_radius)
-    tiles = tile_bboxes(effective_bbox, tile_size=tile_size, buffer=effective_buffer)
-    logger.info(
-        "Computing AGB  (%.0f m, %d tile(s), %d worker(s), year=%s%s%s)",
+    compute_forest_products(
+        provider,
+        store,
         resolution,
-        len(tiles),
-        n_workers,
+        bbox,
         year,
-        f", BABA r={baba_radius:.0f} m" if baba_radius > 0 else "",
-        f", min_density={min_density:.1f}" if min_density > 0 else "",
+        cc_threshold=cc_threshold,
+        baba_radius=baba_radius,
+        min_density=min_density,
+        veg_classes=veg_classes,
+        overwrite=overwrite,
+        tile_size=tile_size,
+        tile_buffer=tile_buffer,
+        n_workers=n_workers,
+        ground_outlier_removal=ground_outlier_removal,
+        max_ground_distance=max_ground_distance,
+        ground_extrapolation=ground_extrapolation,
+        metrics=(),
+        biomass=True,
+        model_fn=model_fn,
+        model_features=model_features,
+        model_id=model_id,
     )
-    if using_default_model:
-        # naesset_model's own per-call warning already only prints once per
-        # process (Python dedupes identical (message, category, lineno)
-        # warnings by default, and run_tiled's ThreadPoolExecutor workers
-        # share one process) - but relying on that implicitly, buried inside
-        # a tile worker's call stack, is easy to miss. Warn explicitly once,
-        # here, and suppress naesset_model's own internal warning for the
-        # run so the message doesn't appear to come from deep inside a tile
-        # callback with a confusing stacklevel.
-        warnings.warn(
-            "compute_biomass is using naesset_model with uncalibrated placeholder "
-            "coefficients (a=0.8, b=1.8, c=0.5). Results are not scientifically valid "
-            "without calibration. Call calibrate_naesset(h95, cc, agb_field) with field "
-            "inventory data and pass model_fn=lambda m: naesset_model(m, a=a, b=b, c=c) "
-            "with the returned coefficients.",
-            UserWarning,
-            stacklevel=2,
-        )
-    with warnings.catch_warnings():
-        if using_default_model:
-            warnings.filterwarnings(
-                "ignore", message="naesset_model is using uncalibrated.*", category=UserWarning
-            )
-        run_tiled(
-            _process_tile_metrics,
-            provider,
-            tiles,
-            store,
-            n_workers,
-            resolution=resolution,
-            year=year,
-            cc_threshold=cc_threshold,
-            model_fn=model_fn,
-            baba_radius=baba_radius,
-            min_density=min_density,
-            veg_classes=veg_classes,
-        )
+
+
+def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
+    """Spatially grouped cross-validation of the three-parameter biomass model.
+
+    Entire supplied spatial blocks are held out together. Returns out-of-fold
+    predictions, residual RMSE/bias and empirical residual quantiles in biomass
+    units. These describe predictive error on the supplied plots, not just
+    coefficient uncertainty; they are not calibrated pixel confidence intervals.
+    The caller must choose blocks larger than the relevant spatial dependence.
+    """
+    h95, cc, agb = (np.asarray(a, dtype=float) for a in (h95, cc, agb_field))
+    groups = np.asarray(spatial_groups)
+    if not (h95.shape == cc.shape == agb.shape == groups.shape) or h95.ndim != 1:
+        raise ValueError("Plot inputs must have matching one-dimensional shapes")
+    valid = (
+        np.isfinite(h95)
+        & np.isfinite(cc)
+        & np.isfinite(agb)
+        & (h95 > 0)
+        & (cc > 0)
+        & (cc <= 1)
+        & (agb > 0)
+    )
+    unique = np.unique(groups[valid])
+    if not isinstance(n_splits, int) or n_splits < 2 or len(unique) < n_splits:
+        raise ValueError("Need at least n_splits distinct spatial groups and n_splits >= 2")
+    prediction = np.full(len(h95), np.nan)
+    folds = np.full(len(h95), -1, dtype=int)
+    for fold, held_out in enumerate(np.array_split(unique, n_splits)):
+        test = valid & np.isin(groups, held_out)
+        train = valid & ~test
+        a, b, c = calibrate_naesset(h95[train], cc[train], agb[train])
+        prediction[test] = a * h95[test] ** b * cc[test] ** c
+        folds[test] = fold
+    residual = agb[valid] - prediction[valid]
+    return {
+        "prediction": prediction,
+        "fold": folds,
+        "n_valid": int(valid.sum()),
+        "rmse": float(np.sqrt(np.mean(residual**2))),
+        "bias": float(np.mean(prediction[valid] - agb[valid])),
+        "residual_quantiles": np.quantile(residual, [0.025, 0.5, 0.975]),
+    }
