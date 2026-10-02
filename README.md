@@ -16,6 +16,7 @@
   <a href="https://codecov.io/gh/simonbesnard1/alsdb"><img src="https://codecov.io/gh/simonbesnard1/alsdb/branch/main/graph/badge.svg?flag=unittests" alt="Code coverage"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
   <a href="https://alsdb.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/alsdb/badge/?version=latest" alt="Docs"></a>
+  <a href="https://doi.org/10.5281/zenodo.23103178"><img src="https://zenodo.org/badge/1192695247.svg" alt="DOI"></a>
 </p>
 
 ---
