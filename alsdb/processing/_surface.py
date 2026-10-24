@@ -135,6 +135,23 @@ def clean_points(arr, *, drop_noise=True):
     return arr[keep]
 
 
+def canopy_mask(arr, config):
+    """Returns that are CHM candidates under *config* (vegetation, maybe first-only).
+
+    Spike-free variants use all returns by definition. Callers that prepare
+    normalized points for :func:`reconstruct_chm` only need to normalize this
+    subset - the CHM never reads HAG of ground or non-canopy returns.
+    """
+    mask = np.isin(arr["Classification"], config.veg_classes)
+    if config.first_returns_only and config.method not in (
+        "spikefree",
+        "highest_subcell_tin",
+        "lastools",
+    ):
+        mask &= arr["ReturnNumber"] == 1
+    return mask
+
+
 DEFAULT_CHM_CONFIG = CHMConfig()
 
 
@@ -170,14 +187,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
         extrapolate=config.ground_extrapolation,
     )
     supported = np.isfinite(ground_z).reshape(grid.shape)
-    canopy = np.isin(normalized["Classification"], config.veg_classes)
-    if config.first_returns_only and config.method not in (
-        "spikefree",
-        "highest_subcell_tin",
-        "lastools",
-    ):
-        canopy &= normalized["ReturnNumber"] == 1
-    candidates = normalized[canopy]
+    candidates = normalized[canopy_mask(normalized, config)]
     points = candidates[np.isfinite(candidates["HeightAboveGround"])]
     if config.remove_outliers and len(points) > 2:
         points = _run(

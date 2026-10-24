@@ -21,12 +21,31 @@ class TerrainModel:
             except QhullError:
                 pass  # Collinear/sparse support is explicitly marked extrapolated.
 
+    def _find_simplex(self, xy, cell=2.0):
+        """``tin.find_simplex`` in a spatially coherent order, results unsorted back.
+
+        Qhull walks from the previously found simplex, so cost depends on how
+        far consecutive query points are apart. TileDB returns points sorted
+        by X within each space tile, i.e. each step jumps across the whole
+        tile in Y: on a real dense tile that was 68 s for 469k points vs 4.7 s
+        after this serpentine sort over *cell*-sized bins.
+        """
+        if len(xy) < 2:
+            return self.tin.find_simplex(xy)
+        ix = np.floor((xy[:, 0] - xy[:, 0].min()) / cell).astype(np.int64)
+        iy = np.floor((xy[:, 1] - xy[:, 1].min()) / cell).astype(np.int64)
+        ix = np.where(iy % 2 == 0, ix, ix.max() - ix)  # serpentine rows
+        order = np.lexsort((ix, iy))
+        simplex = np.empty(len(xy), dtype=np.intp)
+        simplex[order] = self.tin.find_simplex(xy[order])
+        return simplex
+
     def slope(self, xy):
         """Local TIN slope in degrees; undefined outside nondegenerate support."""
         result = np.full(len(xy), np.nan)
         if self.tin is None:
             return result
-        simplex = self.tin.find_simplex(xy)
+        simplex = self._find_simplex(np.asarray(xy, dtype=float))
         inside = simplex >= 0
         z = self.z[self.tin.simplices[simplex[inside]]]
         gradient = np.einsum(
@@ -47,7 +66,7 @@ class TerrainModel:
         if self.tree is None or not len(xy):
             return z, distance, extrapolated
         distance, nearest = self.tree.query(xy)
-        simplex = self.tin.find_simplex(xy) if self.tin is not None else np.full(len(xy), -1)
+        simplex = self._find_simplex(xy) if self.tin is not None else np.full(len(xy), -1)
         inside = simplex >= 0
         extrapolated = ~inside
         if method == "tin":

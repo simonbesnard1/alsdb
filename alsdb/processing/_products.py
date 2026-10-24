@@ -6,7 +6,13 @@ from importlib.metadata import PackageNotFoundError, version
 import numpy as np
 
 from alsdb.processing._grid import GridSpec
-from alsdb.processing._surface import QUALITY_FLAGS, CHMConfig, clean_points, reconstruct_chm
+from alsdb.processing._surface import (
+    QUALITY_FLAGS,
+    CHMConfig,
+    canopy_mask,
+    clean_points,
+    reconstruct_chm,
+)
 from alsdb.processing._terrain import TerrainModel, normalize_points
 from alsdb.processing._tiling import (
     _filter_ground_outliers,
@@ -118,10 +124,14 @@ def _worker(
 
     prepared = None
     if "chm" in products:
+        cleaned = clean_points(arr)
+        # Only canopy candidates get a height: on a dense DE-Hai tile that's
+        # ~23% of the returns, and the TIN lookup dominated tile time.
         prepared = normalize_points(
-            clean_points(arr),
+            cleaned[canopy_mask(cleaned, config)],
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
+            model=TerrainModel(cleaned[cleaned["Classification"] == 2]),
         )
     if "dtm" in products:
         ground = arr[arr["Classification"] == 2]
