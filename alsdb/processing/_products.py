@@ -158,6 +158,10 @@ def _worker(
         for name, data in result.items():
             if name == "chm" or quality:
                 store.write_tile(name, resolution, year, data, crop_bbox)
+    # Only after every write for this tile succeeded, so a crash mid-tile
+    # leaves it unmarked and a resumed run redoes it.
+    for product in products:
+        store.mark_tile_complete(product, resolution, year, tile_index)
 
 
 def compute_products(provider, store, products, options):
@@ -229,6 +233,11 @@ def compute_products(provider, store, products, options):
     if not needed:
         return
     crs = array_crs(provider)
+    # check_run already refused a mismatched configuration (without
+    # overwrite), so a surviving non-complete record here is an interrupted
+    # or failed attempt of this exact run: resume it instead of redoing tiles.
+    resume = not options.get("overwrite", False)
+    skip = None
     for product in needed:
         names = CHM_VARIABLES if product == "chm" and quality else (product,)
         for name in names:
@@ -238,13 +247,17 @@ def compute_products(provider, store, products, options):
 
             store._root[_res_str(resolution)]["chm_quality"].attrs["flag_masks"] = QUALITY_FLAGS
         # Clear old diagnostics even when quality has been disabled for this run.
-        store.begin_run(
+        resumed = store.begin_run(
             product,
             resolution,
             year,
             configurations[product],
             CHM_VARIABLES if product == "chm" else names,
+            resume=resume,
         )
+        # A tile is skippable only if every product being computed finished it.
+        done = store.completed_tiles(product, resolution, year) if resumed else set()
+        skip = done if skip is None else skip & done
     try:
         run_tiled(
             _worker,
@@ -252,6 +265,7 @@ def compute_products(provider, store, products, options):
             tiles,
             store,
             options.get("n_workers", 1),
+            skip=skip or frozenset(),
             resolution=resolution,
             year=year,
             products=needed,

@@ -177,6 +177,16 @@ class ALSZarrStore:
         # concurrently (e.g. CHM and DTM in parallel) without blocking each other.
         self._group_locks: dict[str, threading.Lock] = {}
         self._group_locks_create = threading.Lock()  # protects the dict itself
+        # Per-instance caches for write_tile. On S3 every group/array open is a
+        # zarr.json GET; uncached, one write_tile cost ~25 store round trips
+        # (23 of them metadata reads), all inside the group lock. Grid attrs are
+        # immutable after _init_group; the rest are invalidated by begin_run.
+        self._grid_attrs: dict[str, tuple[float, float, int, int]] = {}
+        self._time_index: dict[tuple[str, int], int] = {}
+        self._arrays: dict[tuple[str, str, int], object] = {}  # (res, var, t) -> sized handle
+        self._years_recorded: set[tuple[str, str, int]] = set()
+        self._var_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._tile_group_ready = False
 
     # ------------------------------------------------------------------
     # Internal lock management
@@ -188,6 +198,17 @@ class ALSZarrStore:
             if res_key not in self._group_locks:
                 self._group_locks[res_key] = threading.Lock()
             return self._group_locks[res_key]
+
+    def _var_lock(self, res_key: str, variable: str) -> threading.Lock:
+        """Lock for chunk read-modify-write on one array (unaligned windows only)."""
+        with self._group_locks_create:
+            return self._var_locks.setdefault((res_key, variable), threading.Lock())
+
+    def _invalidate_caches(self, res_key: str) -> None:
+        """Drop cached handles/indices for *res_key* (caller holds its group lock)."""
+        self._time_index = {k: v for k, v in self._time_index.items() if k[0] != res_key}
+        self._arrays = {k: v for k, v in self._arrays.items() if k[0] != res_key}
+        self._years_recorded = {k for k in self._years_recorded if k[0] != res_key}
 
     # ------------------------------------------------------------------
     # Factory
@@ -408,8 +429,17 @@ class ALSZarrStore:
             )
         return record["status"] == "complete"
 
-    def begin_run(self, variable, resolution, year, configuration, variables):
-        """Mark an attempt running and clear stale data, including quality layers."""
+    def begin_run(self, variable, resolution, year, configuration, variables, *, resume=False):
+        """Mark an attempt running; clear stale data unless resuming the same run.
+
+        With ``resume=True`` and an existing record carrying the same
+        configuration fingerprint (an interrupted or failed attempt), written
+        tiles and their completion markers are kept so the caller can skip
+        them via :meth:`completed_tiles`. Otherwise the year slice of every
+        name in *variables* and the run's tile markers are cleared.
+
+        Returns ``True`` if the run is resumed, ``False`` if started fresh.
+        """
         import hashlib
         import json
 
@@ -417,24 +447,99 @@ class ALSZarrStore:
         configuration = json.loads(json.dumps(configuration, sort_keys=True, allow_nan=False))
         fingerprint = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()
         with self._group_lock(key):
+            self._invalidate_caches(key)
             group = self._root[key]
             arr = group[variable]
             records = dict(arr.attrs.get("processing_runs", {}))
+            previous = records.get(str(year))
+            resumed = bool(resume and previous and previous["fingerprint"] == fingerprint)
             records[str(year)] = {
                 "status": "running",
                 "fingerprint": fingerprint,
                 "configuration": configuration,
             }
             arr.attrs["processing_runs"] = records
+            if resumed:
+                return True
+            self._delete_prefix(self._tiles_prefix(key, variable, year))
             years = np.asarray(group["time"][:])
             found = np.flatnonzero(years == year)
             if len(found):
+                t = int(found[0])
                 for name in variables:
-                    if name in group and group[name].shape[0] > found[0]:
-                        group[name][int(found[0]), :, :] = np.nan
+                    if name in group and group[name].shape[0] > t:
+                        self._clear_time_slice(group[name], t)
                         group[name].attrs["data_years"] = [
                             y for y in group[name].attrs.get("data_years", []) if y != year
                         ]
+            return False
+
+    # ------------------------------------------------------------------
+    # Raw store helpers (chunk sweep, tile completion markers)
+    # ------------------------------------------------------------------
+
+    def _store_key(self, *parts) -> str:
+        base = self._root.path
+        return "/".join(([base] if base else []) + [str(p) for p in parts])
+
+    def _list_prefix(self, prefix: str) -> list[str]:
+        from zarr.core.sync import sync
+
+        async def collect():
+            return [k async for k in self._root.store.list_prefix(prefix)]
+
+        return sync(collect())
+
+    def _delete_prefix(self, prefix: str) -> None:
+        from zarr.core.sync import sync
+
+        for k in self._list_prefix(prefix):
+            sync(self._root.store.delete(k))
+
+    def _clear_time_slice(self, arr, t: int) -> None:
+        """Remove the stored chunks of time slice *t* (reads back as NaN fill).
+
+        Writing NaN over the whole slice made zarr visit every chunk of the
+        grid - one S3 DELETE per possible chunk (~58k per variable for zone 31
+        at 1 m), whether or not it held data. Listing c/<t>/ touches only the
+        chunks that exist (one LIST per 1000 keys).
+        """
+        from zarr.core.chunk_key_encodings import DefaultChunkKeyEncoding
+
+        encoding = arr.metadata.chunk_key_encoding
+        if not isinstance(encoding, DefaultChunkKeyEncoding) or encoding.separator != "/":
+            arr[t, :, :] = np.nan  # unknown key layout: safe, slow fallback
+            return
+        self._delete_prefix(self._store_key(arr.path, "c", t) + "/")
+
+    def _tiles_prefix(self, res_key: str, variable: str, year: int) -> str:
+        return self._store_key("_alsdb_tiles", res_key, variable, int(year)) + "/"
+
+    def mark_tile_complete(self, variable, resolution, year, tile_index) -> None:
+        """Record that *tile_index* of the current run of *variable*/*year* is written.
+
+        One empty object per tile (independent keys, so concurrent workers
+        never contend). Stored under a root-level ``_alsdb_tiles`` zarr group
+        so hierarchy listings don't warn about unrecognised objects.
+        """
+        from zarr.core.buffer import default_buffer_prototype
+        from zarr.core.sync import sync
+
+        self._ensure_tile_group()
+        key = self._tiles_prefix(_res_str(resolution), variable, year) + str(int(tile_index))
+        sync(self._root.store.set(key, default_buffer_prototype().buffer.from_bytes(b"")))
+
+    def _ensure_tile_group(self) -> None:
+        if not self._tile_group_ready:
+            with self._group_locks_create:
+                if not self._tile_group_ready:
+                    self._root.require_group("_alsdb_tiles")
+                    self._tile_group_ready = True
+
+    def completed_tiles(self, variable, resolution, year) -> set[int]:
+        """Tile indices marked complete for the current run of *variable*/*year*."""
+        prefix = self._tiles_prefix(_res_str(resolution), variable, year)
+        return {int(k.rsplit("/", 1)[1]) for k in self._list_prefix(prefix)}
 
     def finish_run(self, variable, resolution, year, *, failed=False):
         key = _res_str(resolution)
@@ -488,12 +593,15 @@ class ALSZarrStore:
                 "All processing functions that write to a store must receive an explicit year."
             )
         res_key = _res_str(resolution)
-        grp = self._root[res_key]
-        attrs = dict(grp.attrs)
-        x_origin = float(attrs["x_origin"])
-        y_origin = float(attrs["y_origin"])
-        ny_store = int(attrs["ny"])
-        nx_store = int(attrs["nx"])
+        if res_key not in self._grid_attrs:
+            attrs = dict(self._root[res_key].attrs)
+            self._grid_attrs[res_key] = (
+                float(attrs["x_origin"]),
+                float(attrs["y_origin"]),
+                int(attrs["ny"]),
+                int(attrs["nx"]),
+            )
+        x_origin, y_origin, ny_store, nx_store = self._grid_attrs[res_key]
 
         cx0, cy0, cx1, cy1 = crop_bbox
 
@@ -515,15 +623,50 @@ class ALSZarrStore:
         tile_nx = col1 - col0
         if row0 < 0 or col0 < 0 or data.shape[0] < tile_ny or data.shape[1] < tile_nx:
             raise ValueError("Tile data/window does not fit the store grid")
-        # Serialize the complete read-modify-write operation: different tile
-        # sizes can share Zarr chunks even when pixel windows do not overlap.
-        with self._group_lock(res_key):
-            t_idx = self._upsert_year(grp, year)
-            grp[variable][t_idx, row0:row1, col0:col1] = data[:tile_ny, :tile_nx].astype(np.float32)
-            if np.isfinite(data[:tile_ny, :tile_nx]).any():
-                years = list(grp[variable].attrs.get("data_years", []))
+        year = int(year)
+        window = data[:tile_ny, :tile_nx].astype(np.float32)
+        arr = self._sized_array(res_key, variable, year)
+        t_idx = self._time_index[(res_key, year)]
+        # Metadata (time axis, resizes, data_years) is serialized by the group
+        # lock above/below; the chunk write itself only needs a lock when the
+        # window doesn't cover whole chunks, since only then can two tiles
+        # read-modify-write the same chunk. Tiles from GridSpec.tiles() with
+        # tile_size == chunk size are always aligned - the common case runs
+        # fully in parallel.
+        cy, cx = arr.chunks[1], arr.chunks[2]
+        aligned = (
+            row0 % cy == 0
+            and col0 % cx == 0
+            and (row1 % cy == 0 or row1 == ny_store)
+            and (col1 % cx == 0 or col1 == nx_store)
+        )
+        if aligned:
+            arr[t_idx, row0:row1, col0:col1] = window
+        else:
+            with self._var_lock(res_key, variable):
+                arr[t_idx, row0:row1, col0:col1] = window
+        if (res_key, variable, year) not in self._years_recorded and np.isfinite(window).any():
+            with self._group_lock(res_key):
+                years = list(arr.attrs.get("data_years", []))
                 if year not in years:
-                    grp[variable].attrs["data_years"] = sorted(years + [int(year)])
+                    arr.attrs["data_years"] = sorted(years + [year])
+                self._years_recorded.add((res_key, variable, year))
+
+    def _sized_array(self, res_key: str, variable: str, year: int):
+        """Array handle whose time axis already covers *year* (cached per instance)."""
+        cached = self._arrays.get((res_key, variable, year))
+        if cached is not None:
+            return cached
+        with self._group_lock(res_key):
+            cached = self._arrays.get((res_key, variable, year))
+            if cached is None:
+                grp = self._root[res_key]
+                self._time_index[(res_key, year)] = self._upsert_year(grp, year)
+                # Re-open after _upsert_year: a handle opened before a resize
+                # keeps the old shape and rejects writes to the new slice.
+                cached = grp[variable]
+                self._arrays[(res_key, variable, year)] = cached
+            return cached
 
     def _upsert_year(self, grp, year: int) -> int:
         """Return the time index for *year*, appending a new slice if needed.

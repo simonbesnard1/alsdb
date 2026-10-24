@@ -386,6 +386,7 @@ def run_tiled(
     n_workers: int,
     progress_every: int = 500,
     gc_every: int = 100,
+    skip: set[int] | frozenset[int] = frozenset(),
     **kwargs,
 ) -> None:
     """
@@ -413,11 +414,23 @@ def run_tiled(
     versus climbing into the hundreds of GB without it - so this isn't
     optional cleanup, it's the actual fix for that failure mode.
 
+    Tile indices in *skip* (already written by an interrupted run being
+    resumed) are not processed but keep their original index, so a worker's
+    ``tile_index`` always identifies the same tile across attempts.
+
+    Tiles are consumed as they finish, not in submission order: with ordered
+    consumption one slow (dense) tile idles every other worker once the
+    bounded window behind it fills - measured 3x slower on a synthetic mix
+    with 1 in 25 tiles slow.
+
     Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
     and :mod:`alsdb.processing.biomass`.
     """
     total = len(tiles)
     completed = 0
+    if skip:
+        completed = sum(1 for i in range(total) if i in skip)
+        logger.info("run_tiled: resuming, %d/%d tiles already complete", completed, total)
 
     def _note_progress() -> None:
         nonlocal completed
@@ -431,8 +444,41 @@ def run_tiled(
         idx, (query_bbox, crop_bbox) = item
         return worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
 
-    for _ in bounded_map(process, enumerate(tiles), n_workers):
+    todo = (item for item in enumerate(tiles) if item[0] not in skip)
+    for _ in bounded_map_unordered(process, todo, n_workers):
         _note_progress()
+
+
+def bounded_map_unordered(fn, items, n_workers=1):
+    """Like :func:`bounded_map` but yields results as soon as each finishes.
+
+    Keeps at most ``2 * n_workers`` items in flight and refills from whichever
+    task completes first, so a slow item never blocks the rest of the pool.
+    Use when result order doesn't matter.
+    """
+    from concurrent.futures import FIRST_COMPLETED, wait
+
+    if n_workers < 1:
+        raise ValueError("n_workers must be positive")
+    if n_workers == 1:
+        yield from map(fn, items)
+        return
+    items = iter(items)
+    sentinel = object()
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        pending = set()
+        for item in items:
+            pending.add(executor.submit(fn, item))
+            if len(pending) >= 2 * n_workers:
+                break
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                result = future.result()  # re-raise worker exceptions
+                item = next(items, sentinel)
+                if item is not sentinel:
+                    pending.add(executor.submit(fn, item))
+                yield result
 
 
 def bounded_map(fn, items, n_workers=1):
