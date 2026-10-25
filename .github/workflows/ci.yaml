@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup pixi
-        uses: prefix-dev/setup-pixi@v0.10.2
+        uses: prefix-dev/setup-pixi@v0.11.2
         with:
           pixi-version: latest
           cache: true
@@ -92,7 +92,7 @@ jobs:
     if: needs.detect-ci-trigger.outputs.triggered == 'false'
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           pixi-version: latest
           environments: spikefree
