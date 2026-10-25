@@ -13,11 +13,21 @@ class TerrainModel:
         # Duplicate XY ground returns have no unique TIN elevation. Use mean Z.
         self.xy, inverse = np.unique(xy, axis=0, return_inverse=True)
         self.z = np.bincount(inverse, weights=z) / np.bincount(inverse) if len(z) else np.empty(0)
-        self.tree = cKDTree(self.xy) if len(self.xy) else None
+        # Triangulate in coordinates centred on the data, not absolute UTM.
+        # Qhull lifts points to x^2 + y^2; at x ~ 6e5 m that's ~4e11, so
+        # returns centimetres apart become numerically coplanar. On a real
+        # dense DE-Hai tile, absolute coordinates kept only 19% of 3.46M
+        # ground points as TIN vertices (the rest silently dropped), produced
+        # a triangulation matplotlib rejects as invalid (overlapping
+        # triangles), and made point location ~40x slower. Centred: 100% of
+        # points are vertices and ~2N triangles, as a planar Delaunay should.
+        self._origin = self.xy.mean(axis=0) if len(self.xy) else np.zeros(2)
+        local = self.xy - self._origin
+        self.tree = cKDTree(local) if len(local) else None
         self.tin = None
-        if len(self.xy) >= 3:
+        if len(local) >= 3:
             try:
-                self.tin = Delaunay(self.xy)
+                self.tin = Delaunay(local)
             except QhullError:
                 pass  # Collinear/sparse support is explicitly marked extrapolated.
 
@@ -45,7 +55,7 @@ class TerrainModel:
         result = np.full(len(xy), np.nan)
         if self.tin is None:
             return result
-        simplex = self._find_simplex(np.asarray(xy, dtype=float))
+        simplex = self._find_simplex(np.asarray(xy, dtype=float) - self._origin)
         inside = simplex >= 0
         z = self.z[self.tin.simplices[simplex[inside]]]
         gradient = np.einsum(
@@ -59,7 +69,7 @@ class TerrainModel:
             raise ValueError("max_distance must be finite and positive")
         if method not in ("tin", "idw"):
             raise ValueError("Terrain interpolation must be tin or idw")
-        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+        xy = np.asarray(xy, dtype=float).reshape(-1, 2) - self._origin  # TIN/tree frame
         z = np.full(len(xy), np.nan)
         distance = np.full(len(xy), np.inf)
         extrapolated = np.ones(len(xy), dtype=bool)

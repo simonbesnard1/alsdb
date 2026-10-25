@@ -39,3 +39,33 @@ def test_sorted_tin_lookup_matches_scipy_on_scattered_points():
     model = TerrainModel(ground)
     xy = rng.uniform(-5, 105, (20000, 2))  # includes points outside the hull
     np.testing.assert_array_equal(model._find_simplex(xy), model.tin.find_simplex(xy))
+
+
+def test_tin_keeps_all_ground_points_at_utm_coordinates():
+    """Dense ground at real UTM offsets must not lose vertices to roundoff.
+
+    Triangulating absolute coordinates (x ~ 6e5, y ~ 5.6e6) made Qhull treat
+    most centimetre-spaced returns as coplanar and drop them, and returned an
+    overlapping (invalid) triangulation.
+    """
+    rng = np.random.default_rng(7)
+    n = 200_000
+    dtype = [("X", "f8"), ("Y", "f8"), ("Z", "f8")]
+    ground = np.zeros(n, dtype=dtype)
+    # ~10 points/m2 on a 140 m square, quantised to 1 cm like LAS coordinates
+    ground["X"] = np.round(601_500 + rng.uniform(0, 140, n), 2)
+    ground["Y"] = np.round(5_659_500 + rng.uniform(0, 140, n), 2)
+    ground["Z"] = 350 + 0.05 * (ground["X"] - 601_500) - 0.02 * (ground["Y"] - 5_659_500)
+    model = TerrainModel(ground)
+    assert len(np.unique(model.tin.simplices)) == len(model.xy)
+
+    q = np.column_stack(
+        (601_500 + rng.uniform(5, 135, 5000), 5_659_500 + rng.uniform(5, 135, 5000))
+    )
+    z, _, outside = model.evaluate(q)
+    assert not outside.any()
+    expected = 350 + 0.05 * (q[:, 0] - 601_500) - 0.02 * (q[:, 1] - 5_659_500)
+    np.testing.assert_allclose(z, expected, atol=1e-6)
+    np.testing.assert_allclose(
+        model.slope(q), np.degrees(np.arctan(np.hypot(0.05, 0.02))), atol=1e-6
+    )
