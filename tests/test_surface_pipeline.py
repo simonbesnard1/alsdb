@@ -408,3 +408,36 @@ def test_auto_freeze_distance_is_three_pulse_spacings_of_first_returns():
     assert CHMConfig(method="spikefree").freeze_distance == "auto"
     with pytest.raises(ValueError, match="freeze_distance"):
         CHMConfig(method="spikefree", freeze_distance=-1.0)
+
+
+def _canopy_with_emergent_tree_and_bird():
+    """1 pt/m2 canopy at ~12 m, a conical crown to 22 m at (20.3, 20.3), a bird at 72 m."""
+    rng = np.random.default_rng(1)
+    dtype = [
+        ("X", "f8"),
+        ("Y", "f8"),
+        ("Z", "f8"),
+        ("Classification", "u1"),
+        ("ReturnNumber", "u1"),
+    ]
+    gx, gy = np.meshgrid(np.arange(-4, 45, 2.0), np.arange(-4, 45, 2.0))
+    cx, cy = rng.uniform(0, 40, (2, 1600))
+    r = np.hypot(cx - 20.3, cy - 20.3)
+    cz = 12 + rng.normal(0, 0.5, 1600)
+    cz = np.where(r < 3, np.maximum(cz, 22 - 10 * r / 3), cz)
+    arr = np.zeros(gx.size + 1602, dtype=dtype)
+    arr["X"] = np.r_[gx.ravel(), cx, 20.3, 8.5]
+    arr["Y"] = np.r_[gy.ravel(), cy, 20.3, 30.5]
+    arr["Z"] = np.r_[np.zeros(gx.size), cz, 22.0, 72.0]
+    arr["Classification"] = np.r_[np.full(gx.size, 2), np.full(1602, 5)]
+    arr["ReturnNumber"] = 1
+    return arr
+
+
+def test_default_outlier_removal_keeps_emergent_crown_and_drops_bird():
+    arr = _canopy_with_emergent_tree_and_bird()
+    chm = reconstruct_chm(arr, (0, 0, 40, 40), 1.0, CHMConfig(remove_outliers=True))["chm"]
+    assert chm[19, 20] == pytest.approx(22.0)  # apex survives
+    assert np.nanmax(chm) == pytest.approx(22.0)  # bird at 72 m removed
+    strict = CHMConfig(remove_outliers=True, outlier_multiplier=2.0)  # the old default
+    assert np.isnan(reconstruct_chm(arr[:-1], (0, 0, 40, 40), 1.0, strict)["chm"][19, 20])

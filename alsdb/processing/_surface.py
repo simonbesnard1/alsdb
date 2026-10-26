@@ -45,7 +45,9 @@ class CHMConfig:
     max_height: float | None = None
     remove_outliers: bool = False
     outlier_mean_k: int = 8
-    outlier_multiplier: float = 2.0
+    # 6, as lasR's classify_with_sor: at 2 the filter removed the apex of an
+    # emergent crown (isolated by nature); 6 still drops returns far above canopy.
+    outlier_multiplier: float = 6.0
     spikefree_subcell_resolution: float | None = None
     freeze_distance: float | str = "auto"
     height_buffer: float = 0.5

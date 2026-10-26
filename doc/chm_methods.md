@@ -103,7 +103,9 @@ lidR and LAStools. The former second, statistical (isolation) stage removed 2–
 of mostly valid ground on Barcelona windows and moved steep-terrain DTMs by
 more than 0.5 m on 9–23% of cells, so it was dropped. Disable it for controlled comparisons to
 already cleaned inputs. The separate canopy `remove_outliers` option remains
-available. Negative normalized values are clamped to zero and flagged.
+available (statistical outlier removal, `outlier_mean_k=8`,
+`outlier_multiplier=6` as in lasR; at 2 it removed the apex of emergent crowns).
+Negative normalized values are clamped to zero and flagged.
 
 `pit_fill=False` is now the default. Enabling it fills only enclosed holes of at
 most `fill_max_cells` pixels, using neighbouring observed heights. It never uses a
