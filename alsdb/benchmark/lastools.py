@@ -223,18 +223,21 @@ def run(
         raise ValueError(f"products must be among {PRODUCTS}")
     out_dir = Path(out_dir)
     classes = " ".join(map(str, surface_classes(veg_classes, ground_classes)))
-    lasheight, env = _tool("lasheight64", lastools_dir)
+    lasheight, env = _tool("lasheight64", lastools_dir)  # products=() runs only lasheight
     las2dem, _ = _tool("las2dem64", lastools_dir) if "spikefree" in products else (None, None)
     lascanopy, _ = _tool("lascanopy64", lastools_dir) if "max" in products else (None, None)
     for sub in ("hag", *products):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
     files = list_tiles(laz_dir, tiles)
-    record = {"version": executable_version(las2dem or lascanopy, env=env), "params": []}
+    record = {
+        "version": executable_version(las2dem or lascanopy or lasheight, env=env),
+        "params": [],
+    }
 
     def tile(path):
         stem = path.stem
         targets = {p: out_dir / p / f"{stem}.tif" for p in products}
-        if all(t.is_file() for t in targets.values()):
+        if targets and all(t.is_file() for t in targets.values()):
             return None
         hag = Path(hag_dir) / f"{stem}.laz" if hag_dir is not None else None
         if hag is None or not hag.is_file():

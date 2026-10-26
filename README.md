@@ -82,7 +82,7 @@ alsdb.setup_logging()
 # Ingest
 db = ALSDatabase(storage_type="local", uri="my_array")
 db.ingest("path/to/tile.laz")  # year, CRS, bbox from LAZ header
-db.ingest_many(paths, max_workers=8)  # batch — already-ingested files skipped
+db.ingest_many(paths, n_workers=8)  # batch — already-ingested files skipped
 
 # Query
 reader = ALSProvider(storage_type="local", uri="my_array")

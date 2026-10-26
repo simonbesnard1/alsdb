@@ -59,6 +59,37 @@ any tiling but must share the candidates' resolution and pixel lattice.
 Statistics are bias, MAE, RMSE, R² and r overall and per reference height class.
 The first run indexes each reference folder into `.alsdb_index.json`.
 
+## Compute performance
+
+`python -m alsdb.benchmark timing <laz_dir> <work_dir>` times all three tools
+doing the same work (the same tiles to the same 1 m CHMs with the same
+settings), each step in its own process pinned to N cores with `taskset`.
+One-off preparation and per-run work are kept apart:
+
+| Tool | setup (one-off) | run (per product run) |
+|---|---|---|
+| alsdb | ingest into TileDB | `compute_chm` pitfree + spikefree |
+| LAStools | `lasheight` | `las2dem -spike_free` + `lascanopy -max` |
+| lasR | – | normalization + pitfree + spikefree |
+
+Factors are area (nested square blocks of tiles near the survey centre,
+`--areas 1 4 16`), cores (`--cores 1 4 8`), storage (`--storage local` copies
+the input to `--local-dir`; `network` reads it in place) and `--repeats`.
+Each step adds a CSV row with wall time, user/system CPU and peak memory of
+the whole process tree. Rerunning skips finished steps. `--dry-run` shows the
+selected tiles and the number of runs first.
+
+`python -m alsdb.benchmark timing-report <work_dir>/timings.csv` summarises
+medians, throughput (km² per core-hour of the run stage), end-to-end time and
+the alsdb break-even: the number of product runs after which alsdb's ingest
+plus N runs is faster than the other tool's setup plus N runs. alsdb's store
+also serves other products, years and areas; that benefit is real but is not
+part of these timings.
+
+Process start-up (pixi, Python imports, R) is a few seconds per step and is
+included for every tool; it matters only for very small areas. Run on a
+quiet node: other jobs on the pinned cores show up as slower timings.
+
 ## What agreement to expect
 
 On a Barcelona PNOA tile (inner 1 km², same auto parameters), alsdb pitfree

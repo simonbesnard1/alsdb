@@ -28,15 +28,22 @@ def main(argv=None):
         from alsdb.benchmark.points import main as points_main
 
         return points_main(argv[1:])
+    if argv and argv[0] in ("timing", "timing-report"):
+        from alsdb.benchmark.timing import main as timing_main
+
+        return timing_main(argv[1:] if argv[0] == "timing" else ["report", *argv[1:]])
 
     parser = argparse.ArgumentParser(prog="python -m alsdb.benchmark")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("points", help="all alsdb methods on one prepared point set (see points --help)")
+    sub.add_parser("timing", help="compute-performance benchmark (see timing --help)")
+    sub.add_parser("timing-report", help="summarise a timing CSV: timing-report <timings.csv>")
 
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
-    p.add_argument("--products", nargs="+", default=["spikefree", "max"])
+    p.add_argument("--products", nargs="*", default=["spikefree", "max"],
+                   help="none given: only lasheight normalization")  # fmt: skip
     p.add_argument("--veg", type=_classes, default=(3, 4, 5), help="e.g. 3,4,5")
     p.add_argument("--freeze", type=_number_or_auto, default="auto")
     p.add_argument("--lastools-dir", help="folder with las2dem64/lasheight64/lascanopy64")
