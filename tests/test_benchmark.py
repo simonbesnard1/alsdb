@@ -299,3 +299,46 @@ def test_points_cli_runs_tin_methods(tmp_path):
           "--methods", "max", "pitfree", "highest_subcell_tin"])  # fmt: skip
     report = json.loads((tmp_path / "r.json").read_text())
     assert set(report["methods"]) == {"max", "pitfree", "highest_subcell_tin"}
+
+
+def test_lastools_failure_reports_exit_code_and_stray_outputs(tmp_path, monkeypatch):
+    from alsdb.benchmark import lastools
+
+    target = tmp_path / "tile.tif"
+    (tmp_path / "tile_1.tif").write_bytes(b"x")  # output written under another name
+    monkeypatch.setattr(
+        lastools.subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr="WARNING: something"),
+    )  # fmt: skip
+    with pytest.raises(RuntimeError) as err:
+        lastools._call(["las2dem64", "-o", str(target)], {}, target)
+    message = str(err.value)
+    assert "exit code 0" in message and "output missing" in message
+    assert "tile_1.tif" in message and "command: las2dem64 -o" in message
+
+
+@pytest.mark.parametrize(
+    ("code", "text", "ok"),
+    [
+        (0, "", True),
+        (1, "WARNING: there were 500 duplicate rasters", True),  # real las2dem 260123
+        (1, "ERROR: cannot understand argument '-x'", False),
+        (2, "WARNING: something", False),
+    ],
+)
+def test_lastools_exit_code_one_with_only_warnings_is_success(
+    tmp_path, monkeypatch, code, text, ok
+):
+    from alsdb.benchmark import lastools
+
+    target = tmp_path / "tile.tif"
+    target.write_bytes(b"x")
+    monkeypatch.setattr(
+        lastools.subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=code, stdout="", stderr=text),
+    )  # fmt: skip
+    if ok:
+        lastools._call(["las2dem64"], {}, target)
+    else:
+        with pytest.raises(RuntimeError, match=f"exit code {code}"):
+            lastools._call(["las2dem64"], {}, target)

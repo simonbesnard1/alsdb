@@ -116,7 +116,7 @@ def rasterize_lastools(
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout, check=False
         )
-        if result.returncode or not target.is_file():
+        if not _succeeded(result, target):
             raise RuntimeError("LAStools failed: " + (result.stderr + result.stdout)[-4000:])
         with rasterio.open(target) as dataset:
             expected = from_origin(grid.x0, grid.y1, resolution, resolution)
@@ -153,11 +153,33 @@ def _tool(name, lastools_dir):
     return resolved, env
 
 
+def _succeeded(result, target):
+    """LAStools exits with 1 whenever it printed warnings, output intact.
+
+    Seen with licensed las2dem 260123 on PNOA: duplicate-raster / precision
+    warnings, valid GeoTIFF, exit code 1 with and without ``-fail``. So exit
+    code 1 counts as success when the output exists and no ERROR was printed.
+    """
+    text = result.stderr + result.stdout
+    ok = result.returncode == 0 or (result.returncode == 1 and "ERROR" not in text)
+    if ok and result.returncode and Path(target).is_file():
+        logger.debug("LAStools warnings for %s: %s", target, text.strip()[-500:])
+    return ok and Path(target).is_file()
+
+
 def _call(command, env, target):
     result = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
-    if result.returncode or not Path(target).is_file():
+    target = Path(target)
+    if not _succeeded(result, target):
+        # LAStools often prints only warnings; say which check failed and what
+        # did appear, so a renamed or missing output is distinguishable from a crash.
+        siblings = sorted(p.name for p in target.parent.glob(target.stem + "*"))
         raise RuntimeError(
-            f"LAStools failed for {target}: " + (result.stderr + result.stdout)[-2000:]
+            f"LAStools failed for {target}: exit code {result.returncode}, "
+            f"output {'exists' if target.is_file() else 'missing'}, "
+            f"files named {target.stem}* in {target.parent}: {siblings}\n"
+            f"command: {' '.join(map(str, command))}\n"
+            f"output:\n" + (result.stderr + result.stdout)[-3000:]
         )
 
 
