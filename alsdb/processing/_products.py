@@ -65,7 +65,7 @@ def backend_versions(config):
 
         return {"native_spikefree": require_backend().algorithm_version}
     if config.method == "lastools":
-        from alsdb.processing.lastools import executable_version
+        from alsdb.benchmark.lastools import executable_version
 
         return {"lastools": executable_version(config.lastools_executable)}
     return {}

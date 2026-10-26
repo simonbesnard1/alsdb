@@ -225,11 +225,15 @@ be reported as method sensitivity separately from these intervals.
 
 ## Benchmarking and LAStools reference adapter
 
+Full-region reference CHMs (lasR, LAStools) and matched scoring of stores are
+described in [benchmarking.md](benchmarking.md). This section covers the
+single point-set benchmark.
+
 Prepare one buffered, normalized, eligible point set as a structured `.npy` file
 with X/Y/Z/HeightAboveGround. All benchmark methods receive exactly that set:
 
 ```bash
-pixi run -e spikefree python -m alsdb.processing.benchmark \
+pixi run -e spikefree python -m alsdb.benchmark points \
   --input normalized.npy --bbox 0 0 100 100 --resolution 1 \
   --tile-size 50 --tile-buffer 20 --output comparison.json
 ```

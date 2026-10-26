@@ -267,7 +267,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
                 max_edge=config.max_triangle_edge,
             )
         elif config.method == "lastools":
-            from alsdb.processing.lastools import rasterize_lastools
+            from alsdb.benchmark.lastools import rasterize_lastools
 
             out = rasterize_lastools(
                 points,

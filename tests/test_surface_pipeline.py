@@ -13,7 +13,7 @@ from alsdb.processing._surface import (
     reconstruct_chm,
 )
 from alsdb.processing._terrain import TerrainModel, normalize_points
-from alsdb.processing.benchmark import compare_rasters, interval_coverage
+from alsdb.benchmark.points import compare_rasters, interval_coverage
 from alsdb.processing.chm import _fill_pits, compute_chm
 from alsdb.processing.uncertainty import (
     CHMErrorModel,
@@ -345,7 +345,7 @@ def test_lastools_adapter_passes_freezing_parameters_and_checks_grid(monkeypatch
     import rasterio
     from rasterio.transform import from_origin
 
-    from alsdb.processing import lastools
+    from alsdb.benchmark import lastools
 
     points, _ = normalize_points(scene())
     points = points[points["Classification"] == 5]

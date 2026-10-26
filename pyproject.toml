@@ -110,6 +110,24 @@ cxx-compiler = "*"
 [tool.pixi.feature.spikefree.tasks]
 build-spikefree = "python -m alsdb.processing._build_spikefree"
 
+# Optional R + lasR (r-lidar, GPL-3) for the alsdb.benchmark.lasr reference.
+# lasR is compiled from r-universe into the env: pixi run -e lasr install-lasr
+[tool.pixi.feature.lasr.dependencies]
+python = "3.14.*"  # tiledb 0.35.2 has no 3.15 wheel
+r-base = "4.4.*"
+r-terra = "*"
+r-codetools = "*"
+libgdal = "*"
+geos = "*"
+proj = "*"
+cxx-compiler = "*"
+make = "*"
+pkg-config = "*"
+
+[tool.pixi.feature.lasr.tasks]
+install-lasr = "Rscript -e \"install.packages('lasR', repos = c('https://r-lidar.r-universe.dev', 'https://cloud.r-project.org'), Ncpus = 4)\""
+
 [tool.pixi.environments]
 default = { features = [] }
 spikefree = { features = ["spikefree"] }
+lasr = { features = ["lasr"] }

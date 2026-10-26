@@ -33,7 +33,8 @@ def main():
         [
             sys.executable,
             "-m",
-            "alsdb.processing.benchmark",
+            "alsdb.benchmark",
+            "points",
             "--input",
             str(directory / "points.npy"),
             "--reference",
