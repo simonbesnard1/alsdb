@@ -174,6 +174,7 @@ def run(
     height_buffer=0.5,
     max_triangle_edge=100.0,
     lastools_dir=None,
+    hag_dir=None,
     n_workers=1,
     tiles=None,
 ):
@@ -192,6 +193,8 @@ def run(
     and logs the values in ``params.csv``. Tiles are processed independently,
     without neighbour buffers, so a few metres at tile edges can differ from
     alsdb's buffered tiles. Finished outputs are skipped, so rerunning resumes.
+    *hag_dir* reuses existing ``lasheight -replace_z`` outputs named like the
+    input tiles; tiles missing there are normalized into ``<out_dir>/hag/``.
     """
     products = tuple(products)
     if not set(products) <= set(PRODUCTS):
@@ -211,7 +214,9 @@ def run(
         targets = {p: out_dir / p / f"{stem}.tif" for p in products}
         if all(t.is_file() for t in targets.values()):
             return None
-        hag = out_dir / "hag" / f"{stem}.laz"
+        hag = Path(hag_dir) / f"{stem}.laz" if hag_dir is not None else None
+        if hag is None or not hag.is_file():
+            hag = out_dir / "hag" / f"{stem}.laz"
         if not hag.is_file():
             _call(
                 [lasheight, "-i", str(path), "-replace_z", "-olaz", "-o", str(hag), "-fail"],
@@ -252,6 +257,7 @@ def run(
         write_params(out_dir, rows, ["tile", "freeze_distance"])
     record["params"] = {
         "laz_dir": str(laz_dir),
+        "hag_dir": None if hag_dir is None else str(hag_dir),
         "products": products,
         "surface_classes": classes,
         "resolution": resolution,

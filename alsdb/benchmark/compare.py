@@ -226,7 +226,9 @@ class Comparison:
         return out
 
     def summary(self):
-        lines = [f"Tiles compared: {self.tiles_compared} (finished in every candidate)"]
+        lines = [
+            f"Tiles compared: {self.tiles_compared} (finished in every candidate, with valid pixels)"
+        ]
         for ref, by_cand in self.stats().items():
             lines.append(f"\nvs {ref} (reference = x, candidate - reference):")
             for cand, s in by_cand.items():
@@ -314,6 +316,8 @@ def compare(
             valid = finished.copy()
             for v in values.values():
                 valid &= np.isfinite(v)
+            if not valid.any():  # e.g. bounding-box corners outside the survey
+                continue
             bounds = (
                 x_origin + col0 * resolution,
                 y_origin - row1 * resolution,

@@ -181,6 +181,23 @@ def test_lastools_run_builds_commands_with_auto_freeze_and_resumes(tmp_path, mon
     assert [c for c in calls if c[-1] != "-version"] == []  # finished tiles are skipped
 
 
+def test_lastools_run_reuses_existing_hag(tmp_path, monkeypatch):
+    from alsdb.benchmark import lastools
+
+    laz = tmp_path / "laz"
+    laz.mkdir()
+    _write_las(laz / "tile.las")
+    hag = tmp_path / "HAG_classfixed"
+    hag.mkdir()
+    (hag / "tile.laz").write_bytes(b"x")
+    tools, calls = _fake_lastools(tmp_path, monkeypatch)
+    lastools.run(laz, tmp_path / "out", lastools_dir=tools, hag_dir=hag, products=("spikefree",))
+    names = [Path(c[0]).name for c in calls if c[-1] != "-version"]
+    assert names == ["las2dem64"]
+    dem = calls[-1]
+    assert dem[dem.index("-i") + 1] == str(hag / "tile.laz")
+
+
 def test_auto_parameters_match_alsdb_rules(tmp_path):
     from alsdb.benchmark._common import auto_parameters
     from alsdb.processing._surface import auto_freeze_distance

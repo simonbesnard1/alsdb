@@ -40,6 +40,7 @@ def main(argv=None):
     p.add_argument("--veg", type=_classes, default=(3, 4, 5), help="e.g. 3,4,5")
     p.add_argument("--freeze", type=_number_or_auto, default="auto")
     p.add_argument("--lastools-dir", help="folder with las2dem64/lasheight64/lascanopy64")
+    p.add_argument("--hag-dir", help="reuse existing lasheight -replace_z outputs")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--tiles", type=int, help="only the first N tiles (pilot)")
 
@@ -67,7 +68,7 @@ def main(argv=None):
 
         lastools.run(
             args.laz_dir, args.out_dir, products=args.products, veg_classes=args.veg,
-            freeze_distance=args.freeze, lastools_dir=args.lastools_dir,
+            freeze_distance=args.freeze, lastools_dir=args.lastools_dir, hag_dir=args.hag_dir,
             n_workers=args.workers, tiles=args.tiles,
         )  # fmt: skip
     elif args.command == "lasr":
