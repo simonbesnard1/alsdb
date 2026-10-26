@@ -61,7 +61,7 @@ def run(
 
     Each tile is read with a 50 m buffer from its neighbours. Finished tiles
     are skipped, so rerunning resumes; ``tiles`` limits a run to the first N
-    unfinished tiles (pilot). ``normalized=True`` treats Z as height above
+    tiles (pilot), as in :func:`alsdb.benchmark.lastools.run`. ``normalized=True`` treats Z as height above
     ground already (lasR's normalization is skipped). Per-tile parameters go
     to ``params.csv``, the run record (lasR version, settings) to
     ``runs.json``.

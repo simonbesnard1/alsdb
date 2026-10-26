@@ -70,8 +70,10 @@ if (!length(files)) stop("no .las/.laz files in ", laz_dir)
 stem <- tools::file_path_sans_ext(basename(files))
 todo <- !(file.exists(file.path(out_dir, "spikefree", paste0(stem, ".tif"))) &
           file.exists(file.path(out_dir, "pitfree", paste0(stem, ".tif"))))
-targets <- files[todo]
-if (!is.na(n_tiles)) targets <- head(targets, n_tiles)
+# --tiles N = the first N tiles (as the LAStools runner), finished ones skipped,
+# so repeating a pilot does not move on to new tiles.
+selected <- if (is.na(n_tiles)) rep(TRUE, length(files)) else seq_along(files) <= n_tiles
+targets <- files[todo & selected]
 message(sprintf("%d tiles, %d to process (freeze %s, edge %s, veg %s, %d cores, %s input)",
                 length(files), length(targets), FREEZE, EDGE, paste(veg, collapse = ","),
                 ncores, if (NORMALIZED) "normalized" else "raw"))

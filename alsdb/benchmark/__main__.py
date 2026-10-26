@@ -51,7 +51,7 @@ def main(argv=None):
     p.add_argument("--freeze", default="auto")
     p.add_argument("--edge", default="auto")
     p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--tiles", type=int, help="only the first N unfinished tiles (pilot)")
+    p.add_argument("--tiles", type=int, help="only the first N tiles (pilot)")
     p.add_argument("--normalized", action="store_true", help="input Z is already height")
 
     p = sub.add_parser("compare", help="score alsdb stores against reference tile folders")
