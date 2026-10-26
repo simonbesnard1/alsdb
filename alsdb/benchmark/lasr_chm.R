@@ -31,11 +31,10 @@
 # --veg: vegetation classes (alsdb veg_classes); e.g. --veg=20 for DE-Hai.
 # --freeze=0 selects lasR's locally adaptive spike-free (Fischer et al. 2024).
 # --normalized: input Z is already height above ground (e.g. LAStools
-#   HAG_classfixed/), so step 2 is skipped. Caveat: PNOA headers use tiny
-#   scale factors (~5e-07); when lasR merges neighbour headers for the tile
-#   buffer it rescales, which overflows on the HAG files and spikefree fails
-#   ("Point are not inserted in Z order"). Raw LAZ rescales fine. Works one
-#   HAG tile at a time without buffer. Prefer the raw LAZ.
+#   HAG_classfixed/), so step 2 is skipped. Prefer the raw LAZ (lasR then
+#   normalizes itself).
+# All inputs are read at a fixed 1 mm scale (-rescale, -auto_reoffset): PNOA's tiny header
+# scale factors otherwise overflow when neighbour headers are merged.
 # Raw LAZ without .lax spatial indexes works but buffered reads are slower;
 # lasR's write_lax() can create them (it writes next to the input files).
 # Writes <out_dir>/spikefree/<tile>.tif and <out_dir>/pitfree/<tile>.tif.
@@ -110,8 +109,17 @@ write.table(transform(params, tile = basename(file), file = NULL), log_file, sep
             row.names = FALSE, append = file.exists(log_file), col.names = !file.exists(log_file))
 
 make_pipeline <- function(freeze, edge) {
-  p <- delete_points(keep_noise())
+  # PNOA headers use scale factors down to ~4e-08 m. Merging neighbour tiles
+  # for the buffer makes LASlib enlarge them 10x, after which Z above ~894 m
+  # overflows the 32-bit integers and spikefree fails ("Point are not
+  # inserted in Z order"). A fixed 1 mm scale, set on read, avoids that;
+  # -auto_reoffset keeps coordinates in range for files with zero offsets.
+  p <- reader(filter = "-rescale 0.001 0.001 0.001 -auto_reoffset") + delete_points(keep_noise())
   if (!NORMALIZED) p <- p + normalize()
+  # Points beyond the ground TIN (e.g. at the survey edge) get no valid ground
+  # from lasR's normalize and come out at around -1e6 m. Drop them so those
+  # cells are NoData, as alsdb leaves cells without ground support.
+  p <- p + delete_points("Z < -5")
   p <- p +
     spikefree(RES, freeze, 0.5, filter = SURFACE, ofile = file.path(out_dir, "spikefree", "*.tif")) +
     # Everything after this sees the thinned cloud: highest first return per cell.
