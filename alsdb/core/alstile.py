@@ -97,8 +97,9 @@ class ALSTile:
         - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016).
           Good general-purpose choice; handles gentle-to-moderate terrain well.
         - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003),
-          PDAL's ``filters.pmf``.  More robust on steep or complex terrain
-          (analogous to Axelsson 2000 PTD).
+          PDAL's ``filters.pmf``.  More robust on steep or complex terrain.
+          Morphological opening, not TIN densification: neither option is
+          Axelsson's (2000) PTD used by TerraScan/lasground.
     denoise:
         If ``True``, run noise detection before reclassification:
 

@@ -463,7 +463,8 @@ class ALSDatabase(TileDBProvider):
         overwrite:
             Re-ingest even if the file is already in the manifest as ``"ok"``.
         reclassify:
-            If ``True``, run SMRF + HAG during ingestion to assign ground (2)
+            If ``True``, run ground classification (``ground_classifier``:
+            CSF or PMF) + HAG during ingestion to assign ground (2)
             and vegetation (3/4/5) classes to unclassified (class 1) points.
             Use this for surveys delivered with minimal classification (e.g.
             USGS LPC files where non-ground returns are all class 1).
