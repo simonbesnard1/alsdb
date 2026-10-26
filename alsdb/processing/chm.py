@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pdal
 
+from alsdb.processing._terrain import GROUND_CLASSES
 from alsdb.processing._tiling import (
     VEG_CLASSES as _VEG_CLASSES,
 )
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 _GROUND_CLASS = 2
 _PITFREE_THRESHOLDS = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
+_PITFREE_EDGE_SPACINGS = 3.0  # auto upper-layer edge limit, in pulse spacings
 _NOISE_CLASSES = (7, 18)  # ASPRS LAS: 7 = low noise, 18 = high noise
 
 
@@ -179,13 +181,14 @@ def _thin_highest_per_subcell(
     points: np.ndarray,
     subcell_resolution: float,
     value_field: str = "HeightAboveGround",
+    origin: tuple[float, float] = (0.0, 0.0),
 ) -> np.ndarray:
-    """Keep the highest point per globally aligned subcell; this is a thinning approximation."""
+    """Keep the highest point per subcell of a grid anchored at *origin* (x, y)."""
     if len(points) == 0:
         return points
 
-    col = np.floor(points["X"] / subcell_resolution).astype(np.int64)
-    row = np.floor(points["Y"] / subcell_resolution).astype(np.int64)
+    col = np.floor((points["X"] - origin[0]) / subcell_resolution).astype(np.int64)
+    row = np.floor((points["Y"] - origin[1]) / subcell_resolution).astype(np.int64)
     # A packed 1-D key (row * col_range + col) identifies each (row, col)
     # subcell just as uniquely as np.unique(stack([row, col]), axis=0) did,
     # without going through numpy's much slower void-type row comparison:
@@ -248,9 +251,14 @@ def _delaunay_raster(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     value_field: str = "Z",
+    max_edge: float | None = None,
 ) -> np.ndarray:
     """
     TIN interpolation via PDAL ``filters.delaunay`` + ``filters.faceraster``.
+
+    *max_edge* drops triangles with any horizontal edge longer than it
+    (faceraster's ``max_triangle_edge_length``, measured in XY); their cells
+    stay NaN.
 
     Triangulates *arr* and rasterises to *crop_bbox*.  *arr* is passed in
     without pre-cropping so that points beyond *crop_bbox* still contribute
@@ -317,6 +325,7 @@ def _delaunay_raster(
                 "origin_y": cy0,
                 "width": nx,
                 "height": ny,
+                **({"max_triangle_edge_length": max_edge} if max_edge is not None else {}),
             },
             {"type": "writers.raster", "gdaldriver": "GTiff", "filename": memfile.name},
         ]
@@ -372,85 +381,16 @@ def _dtm_tin(
     return grid
 
 
-def _mask_by_point_distance(
-    grid: np.ndarray,
-    points: np.ndarray,
-    crop_bbox: tuple[float, float, float, float],
-    resolution: float,
-    max_distance: float,
-) -> np.ndarray:
+def _pulse_spacing(points: np.ndarray, cell: float = 5.0) -> float:
+    """Mean point spacing, 1 / sqrt(density), over *cell*-sized cells that hold points.
+
+    Counting only occupied cells keeps empty tile margins and data voids out
+    of the density, like lidR's locally adaptive spike-free spacing grid.
     """
-    Null out (set NaN) cells in *grid* whose nearest point in *points* is
-    farther than *max_distance* (metres).
-
-    Delaunay triangulation interpolates across the full interior of a point
-    set's convex hull, including long triangles spanning genuine gaps
-    between distant, sparse clusters with nothing supporting the surface in
-    between.
-
-    Complements :func:`_gate_by_ground_distance` (which drops vegetation
-    points before rasterisation, based on distance to *ground* points) -
-    this instead masks the rasterised cells themselves, based on distance to
-    the same layer's own points, after triangulation.
-    """
-    from scipy.spatial import cKDTree
-
-    valid_mask = ~np.isnan(grid)
-    if not valid_mask.any() or len(points) == 0:
-        return grid
-
-    cx0, _, _, cy1 = crop_bbox
-    row_idx, col_idx = np.where(valid_mask)
-    # north-up: row 0 = top → actual Y = cy1 - (row + 0.5) * resolution
-    qx = cx0 + (col_idx + 0.5) * resolution
-    qy = cy1 - (row_idx + 0.5) * resolution
-
-    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
-
-    out = grid.copy()
-    too_far = dist > max_distance
-    out[row_idx[too_far], col_idx[too_far]] = np.nan
-    return out
-
-
-def _adaptive_max_distance(
-    points: np.ndarray,
-    percentile: float = 95.0,
-    multiplier: float = 2.0,
-) -> float:
-    """
-    Derive a masking distance for :func:`_mask_by_point_distance` from
-    *points*' own nearest-neighbour spacing, instead of requiring a fixed
-    metres value tuned (or guessed) for one specific survey's point density.
-
-    ``pitfree_max_distance``/``spikefree_max_distance`` previously required a
-    single constant - confirmed (this project's own Barcelona benchmark) to
-    vary a lot even within one region depending on point density (median
-    nearest-neighbour spacing measured at 0.7-1.05 m across three sample
-    windows, P95 1.4-1.86 m) - let alone across the very different surveys
-    the all-Spain phase will cover. Khosravipour et al.'s own "freeze"
-    distance isn't a fixed constant either - it's derived from the point
-    cloud's edge-length distribution (99th percentile, per the LAStools
-    reference script this project benchmarks against). This is the same
-    idea applied to nearest-neighbour spacing rather than triangle edge
-    length (the quantity :func:`_mask_by_point_distance` actually works
-    with).
-
-    Returns ``multiplier * percentile(self nearest-neighbour distance)``.
-    Requires at least 2 points; callers (:func:`_pitfree_rasterise`,
-    :func:`_spikefree_rasterise`) already guard smaller point sets before
-    reaching this (pitfree's per-threshold-layer ``len(layer_pts) < 3``
-    check in particular is what makes computing this *per layer* - not once
-    per tile - meaningful, since point density drops sharply as the
-    threshold rises).
-    """
-    from scipy.spatial import cKDTree
-
-    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(xy).query(xy, k=2)
-    nn_dist = dist[:, 1]  # column 0 is each point matched to itself (distance 0)
-    return float(multiplier * np.percentile(nn_dist, percentile))
+    col = np.floor(points["X"] / cell).astype(np.int64)
+    row = np.floor(points["Y"] / cell).astype(np.int64)
+    occupied = len(np.unique(row * (col.max() - col.min() + 1) + col))
+    return float(np.sqrt(occupied * cell * cell / len(points)))
 
 
 def _dtm_idw(
@@ -561,82 +501,56 @@ def _pitfree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    max_distance: float | str | None = None,
-    max_distance_percentile: float = 95.0,
-    max_distance_multiplier: float = 2.0,
+    max_edge: float | str = "auto",
+    base_max_edge: float | None = None,
 ) -> np.ndarray:
     """
-    Pit-free CHM rasterisation (Khosravipour et al., 2014), adapted to
-    per-point ``HeightAboveGround`` instead of raw elevation.
+    Pit-free CHM (Khosravipour et al., 2014) on per-point ``HeightAboveGround``,
+    following lidR's ``pitfree()``.
 
-    Parameters
-    ----------
-    points:
-        HAG-normalised, already classification-filtered (and optionally
-        ground-distance-gated) vegetation points — the same input that
-        would otherwise go straight into ``_rasterise(..., statistic="max")``.
-        Not pre-cropped to *crop_bbox*: each threshold layer's triangulation
-        benefits from the same buffered-context handling as
-        :func:`_delaunay_raster`/:func:`_dtm_tin`.
-    thresholds:
-        Increasing sequence of height cutoffs in metres (default
-        ``(0, 2, 5, 10, 15, 20)``). Not adaptive to point density — the same
-        limitation LAStools' own ``-spike_free`` defaults have; tune for a
-        specific survey's point density if needed.
-    max_distance:
-        Maximum distance (metres) from a cell to that layer's nearest point
-        before the cell is masked out instead of trusted. ``None`` (default)
-        disables masking; set it to bound extrapolation across genuine
-        vegetation gaps (see above). Applied to every threshold layer
-        including the base layer (``thresholds[0]``, all vegetation points
-        regardless of height) — deliberately, unlike the ground/DTM layer in
-        the original Khosravipour formulation this is adapted from: here the
-        base layer's own convex hull already spans the *entire* vegetated
-        extent, so exempting it from masking would let it alone reproduce
-        the exact over-extrapolation this parameter exists to prevent
-        (confirmed empirically: doing so silently restores ~100% coverage
-        across genuine gaps, the specific failure mode this masking fixed).
-        Pass the string ``"auto"`` instead of a metres value to derive the
-        distance from each threshold layer's *own* nearest-neighbour point
-        spacing (see :func:`_adaptive_max_distance`) rather than one fixed
-        constant for every layer — computed per layer specifically because
-        point density drops sharply as the threshold rises, the exact gap
-        a single fixed value can't account for.
-    max_distance_percentile, max_distance_multiplier:
-        Only used when ``max_distance == "auto"`` — see
-        :func:`_adaptive_max_distance`.
+    *points* are the surface returns (vegetation **and** ground, first
+    returns) with buffer context, not pre-cropped. They are thinned to the
+    highest return per output cell. Each threshold layer triangulates the
+    returns at or above it, and the output is the per-cell maximum.
 
-    Returns
-    -------
-    A ``(ny, nx)`` float32 north-up array. NaN wherever no threshold layer
-    covers a cell (equivalent to a prior "no data" cell).
+    The base layer (``thresholds[0]``) contains the ground returns, so crown
+    gaps fall to ~0 without any masking; only *base_max_edge* (None = keep all
+    triangles) trims it, e.g. across data voids. Every higher layer drops
+    triangles with a horizontal edge longer than *max_edge*: those span gaps
+    between crowns, and keeping them inflated mean CHM by ~2 m on Barcelona
+    NFI plots. ``"auto"`` uses three times the pulse spacing of the thinned
+    returns, the rapidlasso pit-free rule of thumb for the ``-kill`` length.
+    Measuring it after thinning matters: on dense surveys the raw spacing is
+    far below the cell size and would trim every upper-layer triangle.
+
+    Returns a ``(ny, nx)`` float32 north-up array, NaN where no layer covers
+    a cell.
     """
     cx0, cy0, cx1, cy1 = crop_bbox
     nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
     ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
-    stacked = np.full((len(thresholds), ny, nx), np.nan, dtype=np.float32)
-
-    for i, t in enumerate(thresholds):
+    grid = np.full((ny, nx), np.nan, dtype=np.float32)
+    points = _thin_highest_per_subcell(points, resolution, origin=(cx0, cy0))
+    if len(points) < 3:
+        return grid
+    if max_edge == "auto":
+        # Thinned returns are at most one per cell; 5x5-cell spacing bins (5 m
+        # at 1 m resolution, as lidR) always hold several of them.
+        max_edge = _PITFREE_EDGE_SPACINGS * _pulse_spacing(points, cell=5 * resolution)
+    for i, t in enumerate(sorted(thresholds)):
         layer_pts = points[points["HeightAboveGround"] >= t]
         if len(layer_pts) < 3:
-            continue
-        layer_grid = _delaunay_raster(
-            layer_pts, crop_bbox, resolution, value_field="HeightAboveGround"
+            break  # higher layers are subsets
+        layer = _delaunay_raster(
+            layer_pts,
+            crop_bbox,
+            resolution,
+            value_field="HeightAboveGround",
+            max_edge=base_max_edge if i == 0 else max_edge,
         )
-        if max_distance is not None:
-            eff_distance = (
-                _adaptive_max_distance(layer_pts, max_distance_percentile, max_distance_multiplier)
-                if max_distance == "auto"
-                else max_distance
-            )
-            layer_grid = _mask_by_point_distance(
-                layer_grid, layer_pts, crop_bbox, resolution, eff_distance
-            )
-        stacked[i] = layer_grid
-
-    # fmax ignores missing layers and preserves all-missing pixels without
-    # mutating process-wide warning filters (safe in threaded workers).
-    grid = np.fmax.reduce(stacked, axis=0).astype(np.float32)
+        # fmax ignores missing layers and keeps all-missing pixels NaN without
+        # touching process-wide warning filters (safe in threaded workers).
+        grid = np.fmax(grid, layer)
     return grid
 
 
@@ -650,19 +564,17 @@ def _spikefree_rasterise(
     crop_bbox: tuple[float, float, float, float],
     resolution: float,
     subcell_resolution: float,
-    max_distance: float | str,
-    max_distance_percentile: float = 95.0,
-    max_distance_multiplier: float = 2.0,
+    max_edge: float | None = None,
 ) -> np.ndarray:
-    """Legacy highest-subcell TIN approximation. For genuine freezing use spikefree.rasterize_spikefree."""
+    """Legacy highest-subcell TIN approximation. For genuine freezing use spikefree.rasterize_spikefree.
+
+    *points* include ground returns, so gaps triangulate down to ~0; *max_edge*
+    optionally trims long triangles (data voids).
+    """
     thinned = _thin_highest_per_subcell(points, subcell_resolution, value_field="HeightAboveGround")
-    grid = _delaunay_raster(thinned, crop_bbox, resolution, value_field="HeightAboveGround")
-    eff_distance = (
-        _adaptive_max_distance(thinned, max_distance_percentile, max_distance_multiplier)
-        if max_distance == "auto"
-        else max_distance
+    return _delaunay_raster(
+        thinned, crop_bbox, resolution, value_field="HeightAboveGround", max_edge=max_edge
     )
-    return _mask_by_point_distance(grid, thinned, crop_bbox, resolution, eff_distance)
 
 
 # ---------------------------------------------------------------------------
@@ -759,20 +671,16 @@ def compute_chm(
     pit_fill: bool = False,
     max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    ground_classes: tuple[int, ...] = GROUND_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: float | str | None = None,
-    pitfree_max_distance_percentile: float = 95.0,
-    pitfree_max_distance_multiplier: float = 2.0,
+    pitfree_max_edge: float | str = "auto",
     max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: float | None = None,
-    spikefree_max_distance: float | str | None = None,
-    spikefree_max_distance_percentile: float = 95.0,
-    spikefree_max_distance_multiplier: float = 2.0,
     overwrite: bool = False,
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
@@ -781,7 +689,7 @@ def compute_chm(
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
     method: str | None = None,
-    freeze_distance: float = 1.5,
+    freeze_distance: float | str = "auto",
     height_buffer: float = 0.5,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",
@@ -833,6 +741,7 @@ def compute_dtm(
     source_version: str | None = None,
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
+    ground_classes: tuple[int, ...] = GROUND_CLASSES,
 ) -> None:
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
@@ -916,20 +825,16 @@ def compute_all(
     pit_fill: bool = False,
     max_ground_distance: float | None = None,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    ground_classes: tuple[int, ...] = GROUND_CLASSES,
     pitfree: bool = False,
     pitfree_thresholds: tuple[float, ...] = _PITFREE_THRESHOLDS,
-    pitfree_max_distance: float | str | None = None,
-    pitfree_max_distance_percentile: float = 95.0,
-    pitfree_max_distance_multiplier: float = 2.0,
+    pitfree_max_edge: float | str = "auto",
     max_height: float | None = None,
     remove_outliers: bool = False,
     outlier_mean_k: int = 8,
     outlier_multiplier: float = 2.0,
     spikefree: bool = False,
     spikefree_subcell_resolution: float | None = None,
-    spikefree_max_distance: float | str | None = None,
-    spikefree_max_distance_percentile: float = 95.0,
-    spikefree_max_distance_multiplier: float = 2.0,
     dsm_exclude_classes: tuple[int, ...] = _NOISE_CLASSES,
     overwrite: bool = False,
     dtm_method: str = "tin",
@@ -937,7 +842,7 @@ def compute_all(
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
     method: str | None = None,
-    freeze_distance: float = 1.5,
+    freeze_distance: float | str = "auto",
     height_buffer: float = 0.5,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",

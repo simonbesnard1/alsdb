@@ -16,6 +16,7 @@ from alsdb.processing._products import (
     surface_tile,
 )
 from alsdb.processing._surface import DEFAULT_CHM_CONFIG, clean_points
+from alsdb.processing._terrain import GROUND_CLASSES
 from alsdb.processing._tiling import (
     _filter_ground_outliers,
     _require_year,
@@ -106,7 +107,7 @@ def perturb_points(arr, model, *, seed, realization):
         out["X"] += model.strip_xy_sigma * _normal(strips, int(salts[1]))
         out["Y"] += model.strip_xy_sigma * _normal(strips, int(salts[2]))
     if model.terrain_sigma:
-        ground = arr["Classification"] == 2
+        ground = np.isin(arr["Classification"], GROUND_CLASSES)
         xy = np.column_stack((arr["X"][ground], arr["Y"][ground]))
         # Random Fourier field approximating a squared-exponential covariance.
         frequencies = rng.normal(size=(64, 2)) / model.terrain_correlation_length

@@ -8,17 +8,17 @@ import numpy as np
 import pytest
 
 from alsdb.processing.chm import (
-    _adaptive_max_distance,
     _cap_height,
     _classification_ranges,
     _delaunay_raster,
     _dtm_idw,
     _exclude_classes_stages,
+    _fill_pits,
     _gate_by_ground_distance,
     _nn_fill,
-    _fill_pits,
     _outlier_removal_stages,
     _pitfree_rasterise,
+    _pulse_spacing,
     _rasterise,
     _run,
     _spikefree_rasterise,
@@ -154,11 +154,12 @@ def test_compute_dsm_tile_size_not_multiple_of_resolution_raises(provider, store
         compute_dsm(provider, store, resolution=3.0, bbox=BBOX, year=YEAR, tile_size=250.0)
 
 
-def test_compute_chm_veg_classes_nonexistent_class_yields_no_data(provider, store):
-    """A class that doesn't occur in the tile should behave like 'no vegetation points'."""
+def test_compute_chm_veg_classes_nonexistent_class_yields_bare_ground(provider, store):
+    """No vegetation points: ground returns still give a zero-height surface."""
     store.ensure_group("chm", RES, BBOX, "EPSG:25830")
     compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, veg_classes=(31,))
-    assert not store.has_data("chm", RES, YEAR)
+    chm = store._root["10m"]["chm"][0]
+    assert np.isfinite(chm).any() and np.nanmax(chm) == pytest.approx(0, abs=0.05)
 
 
 def test_compute_chm_pitfree_still_writes_data(provider, store):
@@ -170,27 +171,6 @@ def test_compute_chm_pitfree_still_writes_data(provider, store):
         bbox=BBOX,
         year=YEAR,
         pitfree=True,
-        pitfree_max_distance=20.0,
-    )
-    assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_chm_pitfree_without_max_distance_raises(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    with pytest.raises(ValueError, match="pitfree_max_distance"):
-        compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
-
-
-def test_compute_chm_pitfree_max_distance_still_writes_data(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    compute_chm(
-        provider,
-        store,
-        resolution=RES,
-        bbox=BBOX,
-        year=YEAR,
-        pitfree=True,
-        pitfree_max_distance=20.0,
     )
     assert store.has_data("chm", RES, YEAR)
 
@@ -203,16 +183,10 @@ def test_compute_all_pitfree_still_writes_all_three(provider, store):
         bbox=BBOX,
         year=YEAR,
         pitfree=True,
-        pitfree_max_distance=20.0,
     )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
     assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_all_pitfree_without_max_distance_raises(provider, store):
-    with pytest.raises(ValueError, match="pitfree_max_distance"):
-        compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, pitfree=True)
 
 
 def test_compute_chm_spikefree_still_writes_data(provider, store):
@@ -224,15 +198,8 @@ def test_compute_chm_spikefree_still_writes_data(provider, store):
         bbox=BBOX,
         year=YEAR,
         spikefree=True,
-        spikefree_max_distance=20.0,
     )
     assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_chm_spikefree_without_max_distance_raises(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    with pytest.raises(ValueError, match="spikefree_max_distance"):
-        compute_chm(provider, store, resolution=RES, bbox=BBOX, year=YEAR, spikefree=True)
 
 
 def test_compute_chm_pitfree_and_spikefree_together_raises(provider, store):
@@ -245,9 +212,7 @@ def test_compute_chm_pitfree_and_spikefree_together_raises(provider, store):
             bbox=BBOX,
             year=YEAR,
             pitfree=True,
-            pitfree_max_distance=20.0,
             spikefree=True,
-            spikefree_max_distance=20.0,
         )
 
 
@@ -259,16 +224,10 @@ def test_compute_all_spikefree_still_writes_all_three(provider, store):
         bbox=BBOX,
         year=YEAR,
         spikefree=True,
-        spikefree_max_distance=20.0,
     )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
     assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_all_spikefree_without_max_distance_raises(provider, store):
-    with pytest.raises(ValueError, match="spikefree_max_distance"):
-        compute_all(provider, store, resolution=RES, bbox=BBOX, year=YEAR, spikefree=True)
 
 
 def test_compute_all_writes_all_three(provider, store):
@@ -278,7 +237,7 @@ def test_compute_all_writes_all_three(provider, store):
     assert store.has_data("chm", RES, YEAR)
 
 
-def test_compute_chm_pitfree_max_distance_auto_still_writes_data(provider, store):
+def test_compute_chm_pitfree_fixed_max_edge_still_writes_data(provider, store):
     store.ensure_group("chm", RES, BBOX, "EPSG:25830")
     compute_chm(
         provider,
@@ -287,26 +246,12 @@ def test_compute_chm_pitfree_max_distance_auto_still_writes_data(provider, store
         bbox=BBOX,
         year=YEAR,
         pitfree=True,
-        pitfree_max_distance="auto",
+        pitfree_max_edge=30.0,
     )
     assert store.has_data("chm", RES, YEAR)
 
 
-def test_compute_chm_spikefree_max_distance_auto_still_writes_data(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    compute_chm(
-        provider,
-        store,
-        resolution=RES,
-        bbox=BBOX,
-        year=YEAR,
-        spikefree=True,
-        spikefree_max_distance="auto",
-    )
-    assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_all_pitfree_max_distance_auto_still_writes_all_three(provider, store):
+def test_compute_all_pitfree_default_auto_edge_writes_all_three(provider, store):
     compute_all(
         provider,
         store,
@@ -314,7 +259,6 @@ def test_compute_all_pitfree_max_distance_auto_still_writes_all_three(provider, 
         bbox=BBOX,
         year=YEAR,
         pitfree=True,
-        pitfree_max_distance="auto",
     )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
@@ -539,74 +483,72 @@ def _two_clusters_far_apart() -> np.ndarray:
     return _hag_points(xs, ys, hs)
 
 
-def test_pitfree_rasterise_no_max_distance_extrapolates_across_gap():
-    """Sanity check: without max_distance, the gap is filled in (the failure
-    mode max_distance exists to fix)."""
+def test_pitfree_rasterise_base_layer_without_edge_limit_spans_gap():
+    """The base layer keeps every triangle unless base_max_edge is given."""
     points = _two_clusters_far_apart()
     grid = _pitfree_rasterise(points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,))
-    assert not np.isnan(grid[2, 10]), "middle of the gap should be interpolated without a mask"
-
-
-def test_pitfree_rasterise_max_distance_masks_extrapolated_gap():
-    points = _two_clusters_far_apart()
-    grid = _pitfree_rasterise(
-        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,), max_distance=20.0
+    assert not np.isnan(grid[2, 10])
+    trimmed = _pitfree_rasterise(
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,), base_max_edge=30.0
     )
-    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
-    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+    assert np.isnan(trimmed[2, 10]) and not np.isnan(trimmed[2, 2])
 
 
-def test_pitfree_rasterise_max_distance_auto_masks_extrapolated_gap():
-    """ "auto" should behave like a well-chosen fixed value on this fixture:
-    the within-cluster spacing is small relative to the ~130 m gap, so the
-    derived distance should mask the gap without touching near-cluster cells."""
-    points = _two_clusters_far_apart()
-    grid = _pitfree_rasterise(
-        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, thresholds=(0.0,), max_distance="auto"
+def _crowns_with_ground_gap(gap_ground=True):
+    """Two 15 m crowns on a 1 m lattice, x < 10 and x >= 16, with a 6 m gap."""
+    rng = np.random.default_rng(2)
+    xs, ys, hs = [], [], []
+    for x in np.arange(0.5, 26.0):
+        for y in np.arange(0.5, 20.0):
+            in_gap = 10 <= x < 16
+            if in_gap and not gap_ground:
+                continue
+            jx, jy = rng.uniform(-0.2, 0.2, 2)
+            xs.append(x + jx)
+            ys.append(y + jy)
+            hs.append(0.0 if in_gap else 15.0)
+    return _hag_points(xs, ys, hs)
+
+
+def test_pitfree_upper_layers_do_not_bridge_crown_gap():
+    """Regression: the 10/15 m layers must not triangulate across a ground gap.
+
+    Point-distance masking kept those bridging triangles and inflated mean
+    CHM ~2 m on real plots; edge trimming (lidR/Khosravipour) drops them.
+    """
+    points = _crowns_with_ground_gap()
+    bbox = (0.0, 0.0, 26.0, 20.0)
+    grid = _pitfree_rasterise(points, bbox, resolution=1.0)
+    gap = grid[5:15, 11:15]
+    assert np.nanmax(gap) < 1.0
+    assert np.nanmin(grid[5:15, 2:8]) == pytest.approx(15.0)
+    untrimmed = _pitfree_rasterise(points, bbox, resolution=1.0, max_edge=100.0)
+    assert np.nanmin(untrimmed[5:15, 11:15]) == pytest.approx(15.0)
+
+
+def test_pitfree_rasterise_keeps_highest_return_per_cell():
+    # A 1 m and a 9 m return share cell (0, 0); the hull corners lie outside the bbox.
+    points = _hag_points(
+        xs=[0.5, 0.6, -1, 5, -1, 5], ys=[0.5, 0.4, -1, -1, 5, 5], heights=[1, 9, 9, 9, 9, 9]
     )
-    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
-    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
+    grid = _pitfree_rasterise(points, (0.0, 0.0, 4.0, 4.0), resolution=1.0, thresholds=(0.0,))
+    assert grid[3, 0] == pytest.approx(9.0)
 
 
 # ---------------------------------------------------------------------------
-# _adaptive_max_distance — unit tests (pure numpy/scipy)
+# _pulse_spacing — unit tests (pure numpy)
 # ---------------------------------------------------------------------------
 
 
-def test_adaptive_max_distance_matches_known_grid_spacing():
+def test_pulse_spacing_matches_regular_grid_and_ignores_empty_area():
     dtype = [("X", np.float64), ("Y", np.float64)]
-    xs, ys = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
+    xs, ys = np.meshgrid(np.arange(0.25, 40.0, 0.5), np.arange(0.25, 40.0, 0.5))
     points = np.zeros(xs.size, dtype=dtype)
     points["X"], points["Y"] = xs.ravel(), ys.ravel()
-    d = _adaptive_max_distance(points, percentile=95.0, multiplier=2.0)
-    assert d == pytest.approx(4.0, abs=0.2)
-
-
-def test_adaptive_max_distance_scales_with_density():
-    """Sparser points must give a proportionally larger distance - confirms
-    this actually adapts to point spacing rather than returning a constant."""
-    dtype = [("X", np.float64), ("Y", np.float64)]
-    xs_dense, ys_dense = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
-    dense = np.zeros(xs_dense.size, dtype=dtype)
-    dense["X"], dense["Y"] = xs_dense.ravel(), ys_dense.ravel()
-
-    xs_sparse, ys_sparse = np.meshgrid(np.arange(0.0, 100.0, 5.0), np.arange(0.0, 100.0, 5.0))
-    sparse = np.zeros(xs_sparse.size, dtype=dtype)
-    sparse["X"], sparse["Y"] = xs_sparse.ravel(), ys_sparse.ravel()
-
-    d_dense = _adaptive_max_distance(dense)
-    d_sparse = _adaptive_max_distance(sparse)
-    assert d_sparse > d_dense
-
-
-def test_adaptive_max_distance_multiplier_scales_linearly():
-    dtype = [("X", np.float64), ("Y", np.float64)]
-    xs, ys = np.meshgrid(np.arange(0.0, 40.0, 2.0), np.arange(0.0, 40.0, 2.0))
-    points = np.zeros(xs.size, dtype=dtype)
-    points["X"], points["Y"] = xs.ravel(), ys.ravel()
-    d1 = _adaptive_max_distance(points, multiplier=1.0)
-    d3 = _adaptive_max_distance(points, multiplier=3.0)
-    assert d3 == pytest.approx(3.0 * d1)
+    assert _pulse_spacing(points) == pytest.approx(0.5)
+    far = np.zeros(1, dtype=dtype)
+    far["X"], far["Y"] = 500.0, 500.0  # a lone point does not dilute density
+    assert _pulse_spacing(np.concatenate([points, far])) == pytest.approx(0.5, rel=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -658,40 +600,16 @@ def test_thin_highest_per_subcell_absolute_grid_not_relative_to_input_extent():
 def test_spikefree_rasterise_output_shape_and_dtype():
     points = _two_clusters_far_apart()
     grid = _spikefree_rasterise(
-        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0
     )
     assert grid.shape == (5, 20)
     assert grid.dtype == np.float32
 
 
-def test_spikefree_rasterise_masks_extrapolated_gap():
-    """Same gap-protection contract as pitfree's max_distance, since
-    _spikefree_rasterise reuses _mask_by_point_distance directly."""
-    points = _two_clusters_far_apart()
-    grid = _spikefree_rasterise(
-        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
-    )
-    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
-    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
-
-
-def test_spikefree_rasterise_max_distance_auto_masks_extrapolated_gap():
-    points = _two_clusters_far_apart()
-    grid = _spikefree_rasterise(
-        points,
-        (0.0, 0.0, 200.0, 50.0),
-        resolution=10.0,
-        subcell_resolution=3.0,
-        max_distance="auto",
-    )
-    assert np.isnan(grid[2, 10]), "middle of the gap should be masked out, far from either cluster"
-    assert not np.isnan(grid[2, 2]), "cells near a real cluster should still be kept"
-
-
 def test_spikefree_rasterise_too_few_points_returns_all_nan():
     points = _hag_points([1.0, 2.0], [1.0, 2.0], [10.0, 12.0])
     grid = _spikefree_rasterise(
-        points, (0.0, 0.0, 100.0, 100.0), resolution=10.0, subcell_resolution=3.0, max_distance=20.0
+        points, (0.0, 0.0, 100.0, 100.0), resolution=10.0, subcell_resolution=3.0
     )
     assert np.all(np.isnan(grid))
 

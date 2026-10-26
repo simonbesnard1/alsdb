@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from alsdb.processing._grid import GridSpec
-from alsdb.processing._terrain import normalize_points
+from alsdb.processing._terrain import GROUND_CLASSES, normalize_points
 
 # Bit flags stored as exactly representable float32 integers in ALSZarrStore.
 OBSERVED = 1
@@ -39,19 +39,15 @@ class CHMConfig:
     max_ground_distance: float | None = None
     ground_extrapolation: bool = False
     veg_classes: tuple = (3, 4, 5)
+    ground_classes: tuple = GROUND_CLASSES
     pitfree_thresholds: tuple = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
-    pitfree_max_distance: float | str | None = None
-    pitfree_max_distance_percentile: float = 95.0
-    pitfree_max_distance_multiplier: float = 2.0
+    pitfree_max_edge: float | str = "auto"
     max_height: float | None = None
     remove_outliers: bool = False
     outlier_mean_k: int = 8
     outlier_multiplier: float = 2.0
     spikefree_subcell_resolution: float | None = None
-    spikefree_max_distance: float | str | None = None
-    spikefree_max_distance_percentile: float = 95.0
-    spikefree_max_distance_multiplier: float = 2.0
-    freeze_distance: float = 1.5
+    freeze_distance: float | str = "auto"
     height_buffer: float = 0.5
     max_triangle_edge: float | None = None
     lastools_executable: str = "las2dem64"
@@ -65,7 +61,6 @@ class CHMConfig:
             "max_ground_distance",
             "max_height",
             "spikefree_subcell_resolution",
-            "freeze_distance",
             "max_triangle_edge",
             "outlier_multiplier",
             "freeze_interval",
@@ -73,28 +68,18 @@ class CHMConfig:
             value = getattr(self, name)
             if value is not None and (not np.isfinite(value) or value <= 0):
                 raise ValueError(name + " must be finite and positive")
+        for name in ("pitfree_max_edge", "freeze_distance"):
+            value = getattr(self, name)
+            if value != "auto" and (
+                not isinstance(value, (float, int)) or not np.isfinite(value) or value <= 0
+            ):
+                raise ValueError(name + " must be positive or 'auto'")
         if not np.isfinite(self.height_buffer) or self.height_buffer < 0:
             raise ValueError("height_buffer must be finite and nonnegative")
         for name in ("fill_max_cells", "outlier_mean_k"):
             value = getattr(self, name)
             if not isinstance(value, (int, np.integer)) or isinstance(value, bool) or value < 1:
                 raise ValueError(name + " must be a positive integer")
-        for prefix in ("pitfree", "spikefree"):
-            value = getattr(self, prefix + "_max_distance")
-            if (
-                value is not None
-                and value != "auto"
-                and (not isinstance(value, (float, int)) or not np.isfinite(value) or value <= 0)
-            ):
-                raise ValueError(prefix + "_max_distance must be positive or 'auto'")
-            percentile = getattr(self, prefix + "_max_distance_percentile")
-            multiplier = getattr(self, prefix + "_max_distance_multiplier")
-            if not 0 < percentile <= 100 or not np.isfinite(multiplier) or multiplier <= 0:
-                raise ValueError("Invalid adaptive distance parameters")
-        if self.method == "pitfree" and self.pitfree_max_distance is None:
-            raise ValueError("pitfree requires pitfree_max_distance")
-        if self.method == "highest_subcell_tin" and self.spikefree_max_distance is None:
-            raise ValueError("highest_subcell_tin requires spikefree_max_distance")
         thresholds = np.asarray(self.pitfree_thresholds)
         if (
             not len(thresholds)
@@ -102,8 +87,10 @@ class CHMConfig:
             or np.any(np.diff(thresholds) <= 0)
         ):
             raise ValueError("pitfree_thresholds must be finite and strictly increasing")
-        if not self.veg_classes or any(not 0 <= c <= 255 for c in self.veg_classes):
-            raise ValueError("veg_classes must contain LAS classification codes")
+        for name in ("veg_classes", "ground_classes"):
+            classes = getattr(self, name)
+            if not classes or any(not 0 <= c <= 255 for c in classes):
+                raise ValueError(name + " must contain LAS classification codes")
 
     @classmethod
     def from_options(cls, options):
@@ -135,14 +122,17 @@ def clean_points(arr, *, drop_noise=True):
     return arr[keep]
 
 
-def canopy_mask(arr, config):
-    """Returns that are CHM candidates under *config* (vegetation, maybe first-only).
+def surface_mask(arr, config):
+    """Returns that build the CHM surface under *config*: vegetation and ground.
 
-    Spike-free variants use all returns by definition. Callers that prepare
-    normalized points for :func:`reconstruct_chm` only need to normalize this
-    subset - the CHM never reads HAG of ground or non-canopy returns.
+    Ground returns (HAG ~0) belong in the surface, as in lidR and LAStools:
+    they pin the CHM to zero in crown gaps. With vegetation only, a TIN
+    bridges every gap from crown to crown; on Barcelona NFI plots that
+    inflated mean pitfree height by ~2 m. Spike-free variants use all
+    returns by definition. Callers that prepare normalized points for
+    :func:`reconstruct_chm` only need to normalize this subset.
     """
-    mask = np.isin(arr["Classification"], config.veg_classes)
+    mask = np.isin(arr["Classification"], (*config.veg_classes, *config.ground_classes))
     if config.first_returns_only and config.method not in (
         "spikefree",
         "highest_subcell_tin",
@@ -150,6 +140,21 @@ def canopy_mask(arr, config):
     ):
         mask &= arr["ReturnNumber"] == 1
     return mask
+
+
+def auto_freeze_distance(points):
+    """Spike-free freeze distance: three pulse spacings, as lidR recommends.
+
+    Pulses are first returns. The old fixed 1.5 m default suits ~4+ pulses/m2;
+    on ~1 pulse/m2 PNOA data it froze too little and left pits (mean CHM
+    1.8 m below LAStools on Barcelona NFI plots, vs 0.5 m at 3 m).
+    """
+    from alsdb.processing.chm import _pulse_spacing
+
+    if "ReturnNumber" in points.dtype.names:
+        first = points[points["ReturnNumber"] == 1]
+        points = first if len(first) else points
+    return 3.0 * _pulse_spacing(points)
 
 
 DEFAULT_CHM_CONFIG = CHMConfig()
@@ -177,7 +182,10 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
         prepared
         if prepared is not None
         else normalize_points(
-            arr, max_distance=config.max_ground_distance, extrapolate=config.ground_extrapolation
+            arr,
+            max_distance=config.max_ground_distance,
+            extrapolate=config.ground_extrapolation,
+            ground_classes=config.ground_classes,
         )
     )
     gx, gy = grid.centers()
@@ -187,7 +195,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
         extrapolate=config.ground_extrapolation,
     )
     supported = np.isfinite(ground_z).reshape(grid.shape)
-    candidates = normalized[canopy_mask(normalized, config)]
+    candidates = normalized[surface_mask(normalized, config)]
     points = candidates[np.isfinite(candidates["HeightAboveGround"])]
     if config.remove_outliers and len(points) > 2:
         points = _run(
@@ -226,9 +234,16 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
 
     raw_count = raster(candidates, candidates["Z"], "count")
     count = raster(points, points["Z"], "count")
-    ground = arr[arr["Classification"] == 2]
+    canopy = points[np.isin(points["Classification"], config.veg_classes)]
+    canopy_count = raster(canopy, canopy["Z"], "count")
+    is_veg = np.isin(candidates["Classification"], config.veg_classes)
+    raw_canopy_count = raster(candidates[is_veg], candidates["Z"][is_veg], "count")
+    ground = arr[np.isin(arr["Classification"], config.ground_classes)]
     ground_count = raster(ground, ground["Z"], "count")
     out = np.full(grid.shape, np.nan, np.float32)
+    freeze_distance = config.freeze_distance
+    if freeze_distance == "auto" and len(points):
+        freeze_distance = auto_freeze_distance(points)
     if len(points):
         if config.method == "max":
             out = raster(points, points["HeightAboveGround"], config.height_statistic)
@@ -238,9 +253,8 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
                 bbox,
                 resolution,
                 thresholds=config.pitfree_thresholds,
-                max_distance=config.pitfree_max_distance,
-                max_distance_percentile=config.pitfree_max_distance_percentile,
-                max_distance_multiplier=config.pitfree_max_distance_multiplier,
+                max_edge=config.pitfree_max_edge,
+                base_max_edge=config.max_triangle_edge,
             )
         elif config.method == "highest_subcell_tin":
             out = _spikefree_rasterise(
@@ -248,9 +262,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
                 bbox,
                 resolution,
                 subcell_resolution=config.spikefree_subcell_resolution or resolution / 3,
-                max_distance=config.spikefree_max_distance,
-                max_distance_percentile=config.spikefree_max_distance_percentile,
-                max_distance_multiplier=config.spikefree_max_distance_multiplier,
+                max_edge=config.max_triangle_edge,
             )
         elif config.method == "lastools":
             from alsdb.processing.lastools import rasterize_lastools
@@ -260,7 +272,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
                 bbox,
                 resolution,
                 executable=config.lastools_executable,
-                freeze_distance=config.freeze_distance,
+                freeze_distance=freeze_distance,
                 height_buffer=config.height_buffer,
                 freeze_interval=config.freeze_interval,
                 demo=config.lastools_demo,
@@ -273,7 +285,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
                 points,
                 bbox,
                 resolution,
-                freeze_distance=config.freeze_distance,
+                freeze_distance=freeze_distance,
                 height_buffer=config.height_buffer,
                 max_triangle_edge=config.max_triangle_edge,
             )
@@ -296,7 +308,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
     flags[before & ((count == 0) | (config.method != "max"))] |= INTERPOLATED
     flags[filled] |= FILLED
     flags[~supported | (invalid > 0)] |= UNSUPPORTED
-    flags[raw_count == 0] |= NO_OBSERVATIONS
+    flags[raw_canopy_count == 0] |= NO_OBSERVATIONS
     flags[extrapolated.reshape(grid.shape)] |= EXTRAPOLATED
     negative = raster(candidates, candidates["NegativeHAG"].astype(float))
     flags[negative > 0] |= NEGATIVE_HAG
@@ -304,7 +316,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
     return {
         "chm": out,
         "chm_quality": flags.astype(np.float32),
-        "chm_canopy_count": count,
+        "chm_canopy_count": canopy_count,
         "chm_ground_count": ground_count,
         "chm_ground_distance": np.where(np.isfinite(ground_distance), ground_distance, np.nan)
         .reshape(grid.shape)

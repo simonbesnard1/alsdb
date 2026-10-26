@@ -244,52 +244,28 @@ def check_bbox_overlap(
 
 _HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
 
-# filters.outlier statistical parameters for ground-point cleaning
-_OUTLIER_MEAN_K: int = 12  # k nearest neighbours for mean-distance computation
-_OUTLIER_MULTIPLIER: float = 2.2  # std-dev multiplier; tighter than default (2.0) for ground
-
 
 def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     """
-    Reclassify ground-point outliers using PDAL ``filters.elm`` + ``filters.outlier``.
+    Reclassify low ground outliers to Class 7 with PDAL ``filters.elm``.
 
-    Applied **only to Class-2 (ground) points** so vegetation and other
-    classifications are untouched.  Ground outliers are reclassified to
-    Class 7 (noise) in the returned copy so that ``filters.hag_delaunay``
-    and ``filters.delaunay`` ignore them when building the terrain TIN.
+    Applied **only to Class-2 (ground) points**. ELM (Extended Local Minimum,
+    10 m cells, 1 m threshold) flags the lowest returns of a cell while they
+    sit >= 1 m below the next one: multipath/water returns and other
+    below-ground noise, which pull the TIN down and inflate heights above it.
+    Within-cell spacing also grows with slope, so on clean synthetic ground
+    at 0.25 pts/m2 it flags 0.08% of points at 35 degrees and 0.4% at 45.
 
-    Two complementary strategies are applied in sequence on the ground subset:
+    There used to be a second, ``filters.outlier`` statistical stage. It flags
+    *isolated* points (3-D mean neighbour distance), not points off the
+    surface: on Barcelona windows it removed 2-5% of ground, on flat land 93%
+    of those within 0.5 m of a local plane, and on steep slopes it moved the
+    DTM by > 0.5 m on 9-23% of 1 m cells. Like lidR and LAStools, high points
+    in Class 2 are now trusted to the classification.
 
-    ``filters.elm`` (Extended Local Minimum)
-        Detects *below-ground* outliers — water-surface multipath returns,
-        systematic scan-line artefacts, and misclassified points that sit
-        anomalously low relative to neighbouring ground returns.  These are
-        the most damaging for TIN interpolation because they pull triangles
-        downward and generate large positive HAG errors for nearby vegetation.
-
-    ``filters.outlier`` (statistical mode)
-        Detects *above-ground* spikes — misclassified vegetation or building
-        returns in Class 2 — by comparing each point's mean distance to its
-        k nearest ground neighbours against the neighbourhood mean ± multiplier
-        × std.  More spatially aware than a global elevation fence, so it
-        remains effective on steep slopes where the tile elevation range is large.
-
-    Both PDAL filters work in-place: they reclassify outliers to Class 7
-    (noise) without reordering or removing points, so the index correspondence
-    between the ground subset and the original array is preserved.
-
-    Parameters
-    ----------
-    arr:
-        Point array as returned by :func:`query_to_array`.  Operates on a
-        copy; the original array is never modified.
-
-    Returns
-    -------
-    np.ndarray
-        Copy of *arr* with outlier ground points reclassified to Class 7.
-        Returns *arr* unchanged if no outliers are found or if the PDAL
-        pipeline raises an error (logged at DEBUG level).
+    Points are reclassified in place in a copy (order preserved), so callers'
+    index correspondence holds. Returns *arr* unchanged when nothing is
+    flagged or the PDAL pipeline fails (logged at DEBUG level).
     """
     gnd_mask = arr["Classification"] == 2
     n_gnd = int(gnd_mask.sum())
@@ -297,18 +273,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
         return arr
 
     gnd_arr = arr[gnd_mask].copy()
-
-    # Cap mean_k so it never exceeds the available number of neighbours
-    mean_k = min(_OUTLIER_MEAN_K, n_gnd - 1)
-    stages = [
-        {"type": "filters.elm"},
-        {
-            "type": "filters.outlier",
-            "method": "statistical",
-            "mean_k": mean_k,
-            "multiplier": _OUTLIER_MULTIPLIER,
-        },
-    ]
+    stages = [{"type": "filters.elm"}]
 
     try:
         p = pdal.Pipeline(json.dumps(stages), arrays=[gnd_arr])
@@ -332,7 +297,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     gnd_indices = np.where(gnd_mask)[0]
     out["Classification"][gnd_indices[outlier_in_gnd]] = 7  # noise, never canopy
     logger.debug(
-        "_filter_ground_outliers: reclassified %d/%d ground outliers (ELM + statistical)",
+        "_filter_ground_outliers: reclassified %d/%d low ground outliers (ELM)",
         n_out,
         n_gnd,
     )

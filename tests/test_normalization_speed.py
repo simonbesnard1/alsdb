@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from alsdb.processing._surface import CHMConfig, canopy_mask, reconstruct_chm
+from alsdb.processing._surface import CHMConfig, reconstruct_chm, surface_mask
 from alsdb.processing._terrain import TerrainModel, normalize_points
 
 
@@ -16,15 +16,11 @@ def _scene():
 @pytest.mark.parametrize("method", ["max", "pitfree", "highest_subcell_tin"])
 def test_candidate_only_normalization_matches_full(method):
     arr = _scene()
-    extra = {
-        "pitfree": {"pitfree_max_distance": "auto"},
-        "highest_subcell_tin": {"spikefree_max_distance": "auto"},
-    }.get(method, {})
-    config = CHMConfig(method=method, **extra)
+    config = CHMConfig(method=method)
     bbox = (0.0, 0.0, 10.0, 10.0)
     full = reconstruct_chm(arr, bbox, 1.0, config)
-    model = TerrainModel(arr[arr["Classification"] == 2])
-    subset = normalize_points(arr[canopy_mask(arr, config)], model=model)
+    model = TerrainModel(arr[np.isin(arr["Classification"], config.ground_classes)])
+    subset = normalize_points(arr[surface_mask(arr, config)], model=model)
     fast = reconstruct_chm(arr, bbox, 1.0, config, prepared=subset)
     for name in full:
         np.testing.assert_array_equal(full[name], fast[name], err_msg=name)

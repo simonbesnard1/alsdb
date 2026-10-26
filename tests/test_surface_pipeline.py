@@ -96,12 +96,16 @@ def test_extrapolation_is_explicit_and_distance_bounded():
     assert np.isnan(model.evaluate(xy, extrapolate=True, max_distance=2)[0]).all()
 
 
-def test_no_canopy_observation_is_not_zero_height():
+def test_ground_returns_are_zero_and_unobserved_cells_stay_missing():
+    """Observed ground is zero canopy; cells without any return are not."""
     arr = scene()
     arr = arr[arr["Classification"] == 2]
     result = reconstruct_chm(arr, (0, 0, 10, 10), 1)
-    assert np.isnan(result["chm"]).all()
+    chm = result["chm"]
+    assert np.nanmax(np.abs(chm)) < 1e-9
+    assert np.isnan(chm).any()  # max binning: cells between 2 m ground spacing
     assert (result["chm_quality"].astype(int) & NO_OBSERVATIONS).all()
+    assert (result["chm_canopy_count"] == 0).all()
 
 
 def test_filling_preserves_masks_edges_and_uses_local_values():
@@ -120,10 +124,11 @@ def test_filling_preserves_masks_edges_and_uses_local_values():
 
 def test_filled_cell_has_quality_flag():
     arr = scene()
-    arr = arr[~((arr["Classification"] == 5) & (arr["X"] == 4.5) & (arr["Y"] == 5.5))]
+    # (5.5, 5.5): a cell without a ground return, so removing the canopy return empties it.
+    arr = arr[~((arr["Classification"] == 5) & (arr["X"] == 5.5) & (arr["Y"] == 5.5))]
     result = reconstruct_chm(arr, (0, 0, 10, 10), 1, CHMConfig(pit_fill=True))
-    assert result["chm"][4, 4] == pytest.approx(10)
-    assert int(result["chm_quality"][4, 4]) & FILLED
+    assert result["chm"][4, 5] == pytest.approx(10)
+    assert int(result["chm_quality"][4, 5]) & FILLED
 
 
 def test_tiling_with_fill_and_boundary_points_matches_whole_scene():
@@ -267,10 +272,11 @@ def test_all_missing_recomputation_clears_old_values(provider, store):
     opts = {"resolution": 10.0, "year": 2021, "bbox": (308000.0, 4688000.0, 309000.0, 4689000.0)}
     compute_chm(provider, store, **opts)
     assert store.has_data("chm", 10.0, 2021)
-    compute_chm(provider, store, veg_classes=(31,), overwrite=True, **opts)
+    absent = {"veg_classes": (31,), "ground_classes": (31,)}
+    compute_chm(provider, store, overwrite=True, **absent, **opts)
     assert np.isnan(store._root["10m"]["chm"][0]).all()
     assert not store.has_data("chm", 10.0, 2021)
-    compute_chm(provider, store, veg_classes=(31,), **opts)  # completed empty output is reusable
+    compute_chm(provider, store, **absent, **opts)  # completed empty output is reusable
 
 
 def test_failed_run_restarts_and_finishes(provider, store, monkeypatch):
@@ -388,3 +394,17 @@ def test_partial_edge_store_matches_pixel_coordinates(store):
         store.write_tile("chm", 1.0, 2021, (2 * x + 3 * y).astype(np.float32), crop)
     x, y = grid.centers()
     np.testing.assert_allclose(store._root["1m"]["chm"][0], 2 * x + 3 * y, atol=2e-6)
+
+
+def test_auto_freeze_distance_is_three_pulse_spacings_of_first_returns():
+    from alsdb.processing._surface import auto_freeze_distance
+
+    arr = scene()  # first returns on a 1 m (canopy) and 2 m (ground) lattice
+    x, y = np.meshgrid(np.arange(0.5, 10.0, 0.5), np.arange(0.5, 10.0, 0.5))
+    later = np.zeros(x.size, dtype=arr.dtype)
+    later["X"], later["Y"], later["ReturnNumber"] = x.ravel(), y.ravel(), 2
+    first_only = auto_freeze_distance(arr)
+    assert auto_freeze_distance(np.concatenate([arr, later])) == first_only  # pulses, not returns
+    assert CHMConfig(method="spikefree").freeze_distance == "auto"
+    with pytest.raises(ValueError, match="freeze_distance"):
+        CHMConfig(method="spikefree", freeze_distance=-1.0)

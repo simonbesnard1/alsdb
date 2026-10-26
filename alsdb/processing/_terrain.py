@@ -3,6 +3,10 @@
 import numpy as np
 from scipy.spatial import Delaunay, QhullError, cKDTree
 
+# ASPRS ground (2) and water (9): water returns are the terrain surface over
+# water bodies, as in lidR's normalize_height/rasterize_terrain defaults.
+GROUND_CLASSES = (2, 9)
+
 
 class TerrainModel:
     def __init__(self, ground):
@@ -104,10 +108,17 @@ class TerrainModel:
 
 
 def normalize_points(
-    arr, *, max_distance=None, extrapolate=False, terrain_method="tin", model=None
+    arr,
+    *,
+    max_distance=None,
+    extrapolate=False,
+    terrain_method="tin",
+    model=None,
+    ground_classes=GROUND_CLASSES,
 ):
     """Return a copy with HAG plus support fields; invalid HAG remains NaN."""
-    model = model if model is not None else TerrainModel(arr[arr["Classification"] == 2])
+    if model is None:
+        model = TerrainModel(arr[np.isin(arr["Classification"], ground_classes)])
     xy = np.column_stack((arr["X"], arr["Y"]))
     ground_z, distance, extrapolated = model.evaluate(
         xy, max_distance=max_distance, extrapolate=extrapolate, method=terrain_method

@@ -246,13 +246,18 @@ def test_filter_ground_outliers_preserves_point_count():
     assert len(result) == len(arr)
 
 
-def test_filter_ground_outliers_spike_reclassified():
-    z = np.concatenate([np.linspace(100.0, 101.0, 30), [200.0]])
-    arr = _make_ground_arr(z)
+def test_filter_ground_outliers_keeps_sloped_sparse_ground():
+    """A clean 25 degree slope at 0.25 pts/m2 must lose no ground.
+
+    The removed statistical stage flagged such isolated-but-valid points.
+    (ELM itself starts to: 0.08% at 35 degrees, 0.4% at 45 at this density.)
+    """
+    rng = np.random.default_rng(5)
+    arr = _make_ground_arr(np.zeros(2500))
+    arr["X"], arr["Y"] = rng.uniform(0.0, 100.0, (2, 2500))
+    arr["Z"] = 500.0 + np.tan(np.radians(25)) * arr["X"] + rng.normal(0, 0.05, 2500)
     result = _filter_ground_outliers(arr)
-    # The spike at Z=200 should no longer be class 2
-    spike_idx = np.argmax(z)
-    assert result["Classification"][spike_idx] != 2
+    assert (result["Classification"] == 2).all()
 
 
 def test_filter_ground_outliers_below_ground_reclassified():
@@ -272,7 +277,7 @@ def test_filter_ground_outliers_too_few_points_unchanged():
 
 
 def test_filter_ground_outliers_does_not_modify_original():
-    z = np.concatenate([np.linspace(100.0, 101.0, 30), [200.0]])
+    z = np.concatenate([np.linspace(100.0, 101.0, 30), [0.0]])
     arr = _make_ground_arr(z)
     original_cls = arr["Classification"].copy()
     _filter_ground_outliers(arr)

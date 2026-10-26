@@ -9,9 +9,9 @@ from alsdb.processing._grid import GridSpec
 from alsdb.processing._surface import (
     QUALITY_FLAGS,
     CHMConfig,
-    canopy_mask,
     clean_points,
     reconstruct_chm,
+    surface_mask,
 )
 from alsdb.processing._terrain import TerrainModel, normalize_points
 from alsdb.processing._tiling import (
@@ -54,7 +54,8 @@ def software_versions():
             versions[name] = version(name)
         except PackageNotFoundError:
             versions[name] = "unknown"
-    versions["surface_algorithm"] = "2"
+    # 3: ground returns in the CHM surface, pitfree edge trimming, class 9 ground.
+    versions["surface_algorithm"] = "3"
     return versions
 
 
@@ -122,22 +123,22 @@ def _worker(
         y = np.minimum(np.nextafter(points["Y"], -np.inf), y1)
         return _rasterise(points["X"], y, points["Z"], crop_bbox, resolution, statistic)
 
+    is_ground = np.isin(arr["Classification"], config.ground_classes)
     prepared = None
     if "chm" in products:
         cleaned = clean_points(arr)
-        # Only canopy candidates get a height: on a dense DE-Hai tile that's
+        # Only surface candidates get a height: on a dense DE-Hai tile that's
         # ~23% of the returns, and the TIN lookup dominated tile time.
         prepared = normalize_points(
-            cleaned[canopy_mask(cleaned, config)],
+            cleaned[surface_mask(cleaned, config)],
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
-            model=TerrainModel(cleaned[cleaned["Classification"] == 2]),
+            model=TerrainModel(cleaned[np.isin(cleaned["Classification"], config.ground_classes)]),
         )
     if "dtm" in products:
-        ground = arr[arr["Classification"] == 2]
-        terrain = prepared[1] if prepared is not None else TerrainModel(ground)
+        terrain = prepared[1] if prepared is not None else TerrainModel(arr[is_ground])
         if dtm_method == "min":
-            data = binned(arr[own & (arr["Classification"] == 2)], "min")
+            data = binned(arr[own & is_ground], "min")
         else:
             gx, gy = grid.centers()
             data, _, _ = terrain.evaluate(
@@ -211,6 +212,7 @@ def compute_products(provider, store, products, options):
             if product == "chm"
             else {
                 "method": dtm_method,
+                "ground_classes": list(config.ground_classes),
                 "max_ground_distance": config.max_ground_distance,
                 "ground_extrapolation": config.ground_extrapolation,
             }

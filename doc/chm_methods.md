@@ -1,8 +1,12 @@
 # CHM methods, quality and uncertainty
 
 Surface processing uses one north-up pixel lattice, a buffered ground TIN, and
-explicit quality layers. CHM is a statistic/interpolation of normalized canopy
-returns; it is not generally equal to the independently rasterized DSM minus DTM.
+explicit quality layers. CHM is a statistic/interpolation of normalized surface
+returns, i.e. vegetation (`veg_classes`, default 3–5) **and** ground
+(`ground_classes`, default 2 and 9 = water), as in lidR and LAStools. Ground
+returns pin the CHM to ~0 in crown gaps; without them a TIN bridges every gap
+from crown to crown. It is not generally equal to the independently rasterized
+DSM minus DTM.
 All horizontal and vertical coordinates must use compatible metric units.
 
 ## Choosing a method
@@ -10,17 +14,23 @@ All horizontal and vertical coordinates must use compatible metric units.
 | `method` | Behavior | Important parameters |
 |---|---|---|
 | `max` | Bin normalized eligible returns; `height_statistic` can select another statistic | `first_returns_only`, `height_statistic` |
-| `pitfree` | Maximum of height-threshold TIN layers | `pitfree_thresholds`, required `pitfree_max_distance` |
-| `highest_subcell_tin` | Highest return per small subcell, followed by a TIN | `spikefree_subcell_resolution`, required `spikefree_max_distance` |
-| `spikefree` | Incremental constrained Delaunay with triangle freezing | `freeze_distance`, `height_buffer`, optional `max_triangle_edge` |
+| `pitfree` | Maximum of height-threshold TIN layers (Khosravipour 2014, as lidR `pitfree()`) | `pitfree_thresholds`, `pitfree_max_edge`, optional `max_triangle_edge` |
+| `highest_subcell_tin` | Legacy: highest return per small subcell, followed by a TIN; has no pit protection (mean CHM 2.0 m below LAStools on Barcelona NFI plots), prefer `spikefree` | `spikefree_subcell_resolution`, optional `max_triangle_edge` |
+| `spikefree` | Incremental constrained Delaunay with triangle freezing | `freeze_distance` (default `"auto"`), `height_buffer`, optional `max_triangle_edge` |
 | `lastools` | Explicit external las2dem spike-free backend | `lastools_executable`, `freeze_interval`, `freeze_distance`, `height_buffer` |
 
-Distance masks for the two approximation methods accept metres or `"auto"`.
-Auto distances are estimated from spacing within each buffered tile/layer and
-therefore are not guaranteed to be invariant to tile size. Check seams explicitly.
+`pitfree` keeps the highest first return per output cell, then triangulates
+each threshold layer. The base layer (all surface returns, ground included) is
+only trimmed by `max_triangle_edge` (default: none). Every higher layer drops
+triangles with a horizontal edge longer than `pitfree_max_edge`; `"auto"` uses
+three times the pulse spacing of the thinned returns (rapidlasso's pit-free
+`-kill` rule of thumb), estimated per buffered tile, so check seams explicitly.
+Those upper-layer triangles are the ones that span crown gaps; the previous
+point-distance masks (`pitfree_max_distance`, `spikefree_max_distance`) kept
+them and inflated mean CHM by ~2 m on Barcelona NFI plots, and were removed.
 The native method uses all eligible return numbers; classification selection
-still applies (default vegetation classes 3–5). For surveys with vegetation in
-class 1, explicitly choose appropriate `veg_classes` after checking classification.
+still applies. For surveys with vegetation in class 1, explicitly choose
+appropriate `veg_classes` after checking classification.
 Withheld, nonfinite, and classified noise returns are excluded from CHM.
 
 ## Native spike-free installation
@@ -51,7 +61,10 @@ compute_chm(
 ```
 
 These example distances are illustrative; choose them from acquisition spacing,
-terrain support, and validation. The freeze distance limits all three horizontal
+terrain support, and validation. `freeze_distance="auto"` (the default) uses three
+first-return (pulse) spacings per buffered tile, lidR's recommendation. The old
+fixed 1.5 m default left pits on ~1 pulse/m² PNOA data (mean CHM 1.8 m below
+LAStools on Barcelona NFI plots). The freeze distance limits all three horizontal
 triangle edges. Freezing is delayed until all vertices are above the current
 insertion elevation plus `height_buffer`. Frozen edges are constrained; later
 points inside the face or on its constrained boundary are rejected. Equal-height
@@ -73,16 +86,22 @@ pits rather than identifying all erroneous high returns.
 ## Terrain, holes, and pixel support
 
 Ground TIN interpolation is shared between CHM normalization and TIN DTM output.
-Duplicate ground XY locations use mean elevation. Outside the convex hull, or
+The terrain uses `ground_classes` (default 2 and 9: water returns are the
+terrain surface over water, as in lidR). Duplicate ground XY locations use mean
+elevation. Outside the convex hull, or
 with insufficient noncollinear ground, heights remain missing by default.
 `ground_extrapolation=True` explicitly enables nearest-ground fallback (IDW uses
 its neighbourhood outside the hull). `max_ground_distance` limits support for
 both normalized points and output cells. `dtm_method="min"` is ground-point
 binning and does not interpolate. IDW and TIN retain query-buffer points.
 
-`ground_outlier_removal=True` applies the existing ground cleaning before fitting;
-rejected ground is class 7 rather than class 1, preventing it from re-entering a
-class-1-inclusive canopy selection. Disable it for controlled comparisons to
+`ground_outlier_removal=True` runs PDAL's ELM filter on class 2 before fitting:
+returns at least 1 m below the next one in their 10 m cell (multipath and other
+low noise) become class 7 rather than class 1, preventing them from re-entering a
+class-1-inclusive canopy selection. High points in class 2 are trusted, as in
+lidR and LAStools. The former second, statistical (isolation) stage removed 2–5%
+of mostly valid ground on Barcelona windows and moved steep-terrain DTMs by
+more than 0.5 m on 9–23% of cells, so it was dropped. Disable it for controlled comparisons to
 already cleaned inputs. The separate canopy `remove_outliers` option remains
 available. Negative normalized values are clamped to zero and flagged.
 
@@ -91,8 +110,8 @@ most `fill_max_cells` pixels, using neighbouring observed heights. It never uses
 tile-wide median, fills raster edges, or restores a rejected-support/height cell.
 A raster halo preserves local context at tile boundaries. TIN distance/hull gaps
 are deliberately excluded from post-filling. True canopy gaps and absent returns
-cannot always be distinguished from points alone; missing vegetation is not
-silently converted to zero.
+cannot always be distinguished from points alone: cells with a ground return
+are zero, cells with no return at all stay missing.
 
 Output extents preserve the requested upper-left corner and extend east/south to
 whole pixels. Tile windows are integer offsets on that grid, with half-open point
@@ -104,7 +123,8 @@ from a whole-scene TIN in sparse areas. Mismatched store grids/CRSs are rejected
 
 `quality=True` writes:
 
-- `chm_canopy_count`: eligible, supported canopy returns contributing locally.
+- `chm_canopy_count`: eligible, supported vegetation returns contributing locally
+  (ground returns also shape the surface but are counted in `chm_ground_count`).
 - `chm_ground_count`: local retained ground returns.
 - `chm_ground_distance`: nearest retained ground point from the cell centre, metres.
 - `chm_terrain_slope`: local ground-TIN slope, degrees; missing outside the TIN.
@@ -112,7 +132,7 @@ from a whole-scene TIN in sparse areas. Mismatched store grids/CRSs are rejected
 
 | Bit | Meaning |
 |---:|---|
-| 1 | Valid surface with eligible canopy observations in the pixel |
+| 1 | Valid surface with eligible surface (vegetation or ground) observations in the pixel |
 | 2 | Interpolated surface (may also have local observations) |
 | 4 | Locally filled hole |
 | 8 | Unsupported terrain at cell centre or for a candidate canopy return |
@@ -242,6 +262,10 @@ operational accuracy.
 - `spikefree=True` still selects the old approximation with a deprecation warning.
   Use `method="highest_subcell_tin"` to name it explicitly or `method="spikefree"`
   for the new native implementation.
+- Surface algorithm 3: ground returns enter the CHM surface, class 9 is ground,
+  and pitfree trims upper layers by edge length. `pitfree_max_distance` and
+  `spikefree_max_distance` no longer exist; drop them (or set
+  `pitfree_max_edge`). Existing stores need `overwrite=True` or a new path.
 - Pit filling and ground extrapolation are opt-in. New support masks can reduce
   coverage compared with previous plausible-looking but unsupported values.
 - The CHM ground model now explicitly interpolates the buffered ground TIN rather
