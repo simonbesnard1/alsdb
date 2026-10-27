@@ -44,15 +44,18 @@ class Tile:
 
     @property
     def metadata(self) -> dict:
-        """Lazily load and cache full PDAL pipeline metadata (runs ``filters.stats``)."""
+        """PDAL metadata of the LAS header (year, CRS, bounds, count), cached.
+
+        Reads only the header (``count: 0``): the previous full read with
+        ``filters.stats`` decompressed every point just for the name, and the
+        points were then read again for ingestion (about 13 of 32 s per PNOA
+        tile on the cluster). :meth:`read` adds the ``filters.stats`` block from
+        its own pass, so :attr:`native_bbox` reports the points' extent once
+        the tile has been read.
+        """
         if self._metadata is None:
             pipeline = pdal.Pipeline(
-                json.dumps(
-                    [
-                        {"type": "readers.las", "filename": str(self._path)},
-                        {"type": "filters.stats"},
-                    ]
-                )
+                json.dumps([{"type": "readers.las", "filename": str(self._path), "count": 0}])
             )
             pipeline.execute()
             meta = pipeline.metadata
@@ -70,14 +73,19 @@ class Tile:
     @property
     def native_bbox(self) -> tuple[float, float, float, float]:
         """
-        Return ``(min_x, min_y, max_x, max_y)`` in the file's native CRS,
-        as reported by ``filters.stats``.
+        Return ``(min_x, min_y, max_x, max_y)`` in the file's native CRS:
+        the points' extent from ``filters.stats`` once :meth:`read` has run,
+        otherwise the header bounds.
         """
-        for key, val in self.metadata.get("metadata", {}).items():
+        blocks = self.metadata.get("metadata", {})
+        for key, val in blocks.items():
             if "filters.stats" in key:
                 b = val.get("bbox", {}).get("native", {}).get("bbox", {})
                 if b:
                     return (b["minx"], b["miny"], b["maxx"], b["maxy"])
+        for key, val in blocks.items():
+            if "readers.las" in key and "minx" in val:
+                return (val["minx"], val["miny"], val["maxx"], val["maxy"])
         raise ValueError(f"Could not extract bounding box from {self._path}")
 
     # ------------------------------------------------------------------
@@ -101,11 +109,21 @@ class Tile:
             If provided, reproject points to this CRS (e.g. ``"EPSG:32616"``)
             using ``filters.reprojection`` before returning.
         """
-        stages: list = [{"type": "readers.las", "filename": str(self._path)}]
+        # Stats before any reprojection: the native extent of the points,
+        # computed in this single pass rather than in a separate full read.
+        stages: list = [
+            {"type": "readers.las", "filename": str(self._path)},
+            {"type": "filters.stats"},
+        ]
         if out_crs:
             stages.append({"type": "filters.reprojection", "out_srs": out_crs})
         pipeline = pdal.Pipeline(json.dumps(stages))
         pipeline.execute()
+        meta = pipeline.metadata
+        meta = meta if isinstance(meta, dict) else json.loads(meta)
+        stats = {k: v for k, v in meta.get("metadata", {}).items() if "filters.stats" in k}
+        if stats:
+            self.metadata.setdefault("metadata", {}).update(stats)
 
         arrays = pipeline.arrays
         if not arrays:

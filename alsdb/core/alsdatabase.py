@@ -385,7 +385,7 @@ class ALSDatabase(TileDBProvider):
             return 0, {
                 "year": year,
                 "crs": crs,
-                "bbox": list(tile_name.bbox_native),
+                "bbox": list(tile.points_bbox),
                 "n_points": 0,
                 "status": "ok",
                 "ts": datetime.now(UTC).isoformat(),
@@ -423,7 +423,7 @@ class ALSDatabase(TileDBProvider):
         entry = {
             "year": year,
             "crs": crs,
-            "bbox": list(tile_name.bbox_native),
+            "bbox": list(tile.points_bbox),
             "n_points": total,
             "status": "ok",
             "ts": datetime.now(UTC).isoformat(),

@@ -156,6 +156,11 @@ class ALSTile:
         return self._tile.name
 
     @property
+    def points_bbox(self) -> tuple[float, float, float, float]:
+        """Native-CRS extent of the points (exact after reading; header before)."""
+        return self._tile.native_bbox
+
+    @property
     def target_crs(self) -> str:
         """CRS of the data after ingestion (native or reprojected)."""
         out = self._get_out_crs()
