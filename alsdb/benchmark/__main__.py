@@ -61,6 +61,20 @@ def main(argv=None):
     p.add_argument("--tiles", type=int, help="only the first N tiles (pilot)")
     p.add_argument("--normalized", action="store_true", help="input Z is already height")
 
+    p = sub.add_parser("synthetic", help="HELIOS++ scenes with exact truth; score all tools")
+    p.add_argument("out_dir")
+    p.add_argument("--terrain", nargs="+", default=["rolling"])
+    p.add_argument("--forest", nargs="+", default=["conifer"])
+    p.add_argument("--density", type=float, nargs="+", default=[2.0], help="pulses per m2")
+    p.add_argument("--pad-scale", type=float, nargs="+", default=[1.0])
+    p.add_argument("--max-returns", type=int, default=4)
+    p.add_argument("--seeds", type=int, nargs="+", default=[0])
+    p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
+                   choices=["alsdb", "lasr", "lastools"])  # fmt: skip
+    p.add_argument("--lastools-dir")
+    p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
+    p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
+
     p = sub.add_parser("compare", help="score alsdb stores against reference tile folders")
     p.add_argument("--store", nargs="+", required=True, metavar="NAME=PATH")
     p.add_argument("--ref", nargs="+", required=True, metavar="NAME=DIR")
@@ -86,6 +100,21 @@ def main(argv=None):
             max_edge=args.edge, n_workers=args.workers, tiles=args.tiles,
             normalized=args.normalized,
         )  # fmt: skip
+    elif args.command == "synthetic":
+        import itertools
+
+        from alsdb.benchmark.synthetic import Scenario, run_grid
+
+        scenarios = [
+            Scenario(
+                terrain=t, forest=f, density=d, pad_scale=p, max_returns=args.max_returns, seed=s
+            )
+            for t, f, d, p, s in itertools.product(
+                args.terrain, args.forest, args.density, args.pad_scale, args.seeds
+            )
+        ]
+        print(run_grid(args.out_dir, scenarios, tools=args.tools, lastools_dir=args.lastools_dir,
+                       threads=args.threads, keep=args.keep))  # fmt: skip
     elif args.command == "compare":
         from alsdb.benchmark.compare import compare
 

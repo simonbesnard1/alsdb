@@ -127,7 +127,15 @@ pkg-config = "*"
 [tool.pixi.feature.lasr.tasks]
 install-lasr = "Rscript -e \"install.packages('lasR', repos = c('https://r-lidar.r-universe.dev', 'https://cloud.r-project.org'), Ncpus = 4)\""
 
+# Optional HELIOS++ (LGPL-3) LiDAR simulator for alsdb.benchmark.synthetic.
+# Own minimal environment: conda-forge builds stop at Python 3.12, and it only
+# runs simulations (scene files are written from the default environment).
+[tool.pixi.feature.helios.dependencies]
+python = "3.12.*"
+helios = ">=2.2.2"
+
 [tool.pixi.environments]
 default = { features = [] }
 spikefree = { features = ["spikefree"] }
 lasr = { features = ["lasr"] }
+helios = { features = ["helios"], no-default-feature = true }
