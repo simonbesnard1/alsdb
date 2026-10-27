@@ -212,9 +212,9 @@ class GenericTileName:
         if crs_str == "EPSG:0":
             logger.warning(
                 "%s: no CRS found in the LAZ file header (returned EPSG:0). "
-                "The array will be stored without a valid CRS, which will break "
-                "downstream reprojection and co-registration. "
-                "Call db.create(crs='EPSG:XXXX') before ingesting to set it explicitly.",
+                "Call db.create(crs='EPSG:XXXX') before ingesting: such tiles then take "
+                "the array's CRS. Without it the array is stored without a valid CRS, "
+                "which breaks downstream reprojection and co-registration.",
                 Path(path).name,
             )
 

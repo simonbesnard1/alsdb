@@ -28,6 +28,16 @@ _EPSG_RE = re.compile(r'AUTHORITY\["EPSG","(\d+)"\]\s*\]?\s*$')
 _NAME_RE = re.compile(r'(?:PROJCS|GEOGCS)\["([^"]+)"')
 
 
+_NO_CRS = "EPSG:0"  # what tile-name parsing reports for headers without a CRS
+
+
+def _keep_crs(tile_crs: str, stored_crs: str | None) -> str:
+    """CRS for a recreated array: the tile's, unless it has none and the array had one."""
+    if tile_crs == _NO_CRS and stored_crs and stored_crs != _NO_CRS:
+        return stored_crs
+    return tile_crs
+
+
 def _short_crs(crs_str: str) -> str:
     """Return a compact CRS label for logging (e.g. EPSG:25830)."""
     m = _EPSG_RE.search(crs_str.strip())
@@ -361,6 +371,15 @@ class ALSDatabase(TileDBProvider):
         tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
         crs = tile.target_crs  # use post-reprojection CRS for storage
+        if crs == _NO_CRS and stored_crs and stored_crs != _NO_CRS:
+            # Header without a CRS (e.g. Sustainable Landscapes Brazil, DE-Hai):
+            # trust the CRS the array was created with instead of rejecting it.
+            logger.info(
+                "%s has no CRS in its header; using the array's %s",
+                filename,
+                _short_crs(stored_crs),
+            )
+            crs = stored_crs
 
         if stored_crs and stored_crs != crs:
             raise ValueError(
@@ -500,7 +519,7 @@ class ALSDatabase(TileDBProvider):
         tile_crs = tile.target_crs
 
         if overwrite and self.array_exists():
-            self.create(overwrite=True, crs=tile_crs)
+            self.create(overwrite=True, crs=_keep_crs(tile_crs, self.stored_crs()))
 
         stored = self.stored_crs()
 
@@ -615,7 +634,7 @@ class ALSDatabase(TileDBProvider):
         )
         first_crs = first_tile.target_crs
         if overwrite and self.array_exists():
-            self.create(overwrite=True, crs=first_crs)
+            self.create(overwrite=True, crs=_keep_crs(first_crs, self.stored_crs()))
         elif not self.array_exists():
             self.create(crs=first_crs)
 
