@@ -1,4 +1,4 @@
-"""``python -m alsdb.benchmark {lastools,lasr,compare,points} ...``"""
+"""``python -m alsdb.benchmark {lastools,lasr,synthetic,uls,compare,points,timing} ...``"""
 
 import argparse
 import sys
@@ -76,6 +76,28 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser("uls", help="real ULS canopies at ALS density: thinned and HELIOS++")
+    p.add_argument("out_dir")
+    p.add_argument("--laz-dir", required=True, help="folder of ULS LAS/LAZ tiles")
+    p.add_argument("--site", required=True)
+    p.add_argument("--x0", type=float, required=True, help="core lower-left x (whole metres)")
+    p.add_argument("--y0", type=float, required=True)
+    p.add_argument("--core", type=float, default=100.0)
+    p.add_argument("--margin", type=float, default=15.0)
+    p.add_argument("--year", type=int, required=True)
+    p.add_argument("--crs", help="e.g. EPSG:25833; default: from the LAZ headers")
+    p.add_argument("--trees", help="GeoPackage of field trees with heights")
+    p.add_argument("--tree-height-field", default="tls_treeheight")
+    p.add_argument("--density", type=float, nargs="+", default=[0.5, 2.0, 10.0])
+    p.add_argument("--variants", nargs="+", default=["thinned", "helios"],
+                   choices=["thinned", "helios"])  # fmt: skip
+    p.add_argument("--max-angle", type=float, default=20.0, help="near-nadir limit, degrees")
+    p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
+                   choices=["alsdb", "lasr", "lastools"])  # fmt: skip
+    p.add_argument("--lastools-dir")
+    p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
+    p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
+
     p = sub.add_parser("compare", help="score alsdb stores against reference tile folders")
     p.add_argument("--store", nargs="+", required=True, metavar="NAME=PATH")
     p.add_argument("--ref", nargs="+", required=True, metavar="NAME=DIR")
@@ -116,6 +138,17 @@ def main(argv=None):
         ]
         print(run_grid(args.out_dir, scenarios, tools=args.tools, lastools_dir=args.lastools_dir,
                        threads=args.threads, keep=args.keep))  # fmt: skip
+    elif args.command == "uls":
+        from alsdb.benchmark.uls import Area, run_area
+
+        area = Area(
+            site=args.site, laz_dir=args.laz_dir, x0=args.x0, y0=args.y0, core=args.core,
+            margin=args.margin, year=args.year, crs=args.crs, trees=args.trees,
+            tree_height_field=args.tree_height_field,
+        )  # fmt: skip
+        print(run_area(args.out_dir, area, densities=args.density, variants=args.variants,
+                       tools=args.tools, lastools_dir=args.lastools_dir,
+                       max_angle=args.max_angle, threads=args.threads, keep=args.keep))  # fmt: skip
     elif args.command == "compare":
         from alsdb.benchmark.compare import compare
 

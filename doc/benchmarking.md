@@ -10,6 +10,9 @@ processes; alsdb never installs or links them.
 | `alsdb.benchmark.lastools` | LAStools spike-free + binned-max tiles from LAS/LAZ; `rasterize_lastools` in-memory adapter | licensed LAStools executables |
 | `alsdb.benchmark.compare` | matched scoring of alsdb stores against reference tile folders | – |
 | `alsdb.benchmark.points` | every alsdb method on one prepared point set | – |
+| `alsdb.benchmark.synthetic` | HELIOS++ surveys of generated forests, scored against exact truth | `pixi install -e helios` |
+| `alsdb.benchmark.uls` | real canopies from UAV laser scanning at ALS densities, thinned and via HELIOS++ | ULS tiles with GPS time; `helios` for the HELIOS++ variant |
+| `alsdb.benchmark.timing` | compute time of all three tools on the same work | licensed LAStools, `lasr` |
 
 ## Reference tiles
 
@@ -95,6 +98,78 @@ part of these timings.
 Process start-up (pixi, Python imports, R) is a few seconds per step and is
 included for every tool; it matters only for very small areas. Run on a
 quiet node: other jobs on the pinned cores show up as slower timings.
+
+## Accuracy against known truth
+
+Agreement between tools says nothing about which is right. Two benchmarks
+score all tools against a truth instead; both write one scene folder per case
+(`laz/`, `truth.npz`, `scene.json`), run alsdb (pitfree, spike-free), lasR
+(both) and optionally LAStools (spike-free) on it, and append one row per
+output to `<out_dir>/results.csv`. Finished cases are skipped on rerun.
+Run them from the `spikefree` environment.
+
+| | canopy | sensor | truth |
+|---|---|---|---|
+| `synthetic` | generated crowns (voxels) | HELIOS++ aircraft | exact |
+| `uls` thinned | real | real UAV, thinned | full-density ULS |
+| `uls` helios | real, as 0.5 m voxels | HELIOS++ aircraft | exact (the voxels) |
+
+A method that ranks the same in all three is robust; where rankings differ,
+the column that changed (canopy, sensor or truth) is the likely cause.
+
+Scores per output: bias, MAE and share within 0.5 m against the CHM at the
+cell centre and the cell maximum, cover above 2 m, and tree-top errors (3 x 3
+cell peak at each stem against the truth; against field heights when given).
+
+### Synthetic forests (HELIOS++)
+
+```bash
+pixi run -e spikefree python -m alsdb.benchmark synthetic <out_dir> \
+    --terrain flat rolling steep rough --forest open conifer broadleaf tropical \
+    --density 0.5 2 10 --tools alsdb lasr lastools --lastools-dir /path/to/bin
+```
+
+Each scenario is 150 m scored plus a 30 m margin. Forest types set stems,
+crown shapes and a stand plant area index (open 1, conifer 4, broadleaf 5.5,
+tropical 6); the plant area density inside crowns follows from the crown
+volume. One flight line at 1000 m, Leica ALS50-II geometry, up to four
+returns per pulse. HELIOS++ needs about 4.5 KB of memory per voxel: a 210 m
+broadleaf or tropical scene needs more than 22 GB.
+
+### ULS canopies
+
+```bash
+pixi run -e spikefree python -m alsdb.benchmark uls <out_dir> \
+    --laz-dir <ULS tiles> --site DE-Eco --x0 416700 --y0 5346650 --core 100 \
+    --year 2026 --trees inventory.gpkg --density 0.5 2 10
+```
+
+The tiles are read once, streaming. Only near-nadir returns (`--max-angle`,
+default 20°) feed the samples and the voxel profiles; the reference uses all
+returns.
+
+- `thinned`: one pulse per cell of 1/density m², with all its returns.
+  Pulses are identified by GPS time, flight line and scanner channel, and
+  preselected by a hash of that key, so a pulse is kept or dropped whole even
+  when its returns sit in different tiles. Reference: DTM from a TIN of the
+  lowest ground return per 25 cm; CHM from the highest return per 10 cm above
+  it (the 1 m cell maximum, and the 20 cm around the cell centre).
+- `helios`: plant area density per 0.5 m voxel from the near-nadir returns
+  (MacArthur-Horn per voxel column, returns weighted 1 / number of returns, as
+  in leafR); voxels below 0.05 m²/m³ are dropped. HELIOS++ scans these voxels
+  over the reference terrain with the synthetic survey; the truth is computed
+  from the same voxels.
+
+Classes: ground (2) stays, every other non-noise class becomes vegetation (5).
+The tools reuse the ULS ground classification; it is not under test.
+
+Caveats. The thinned samples keep the UAV sensor: centimetre footprints and
+low flying height hit crown tops and gaps more easily than aircraft ALS.
+Density-harmonised ULS (one point per 2 cm voxel) has lost some returns of
+many pulses (only 32% of pulses complete on DE-Eco), so the thinned samples
+have fewer late returns than a real survey. Existing CHMs delivered with ULS
+data are often made with one of the tools under test (e.g. LAStools
+spike-free) and must not be used as truth.
 
 ## What agreement to expect
 

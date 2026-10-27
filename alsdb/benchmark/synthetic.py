@@ -7,7 +7,7 @@ the optional ``helios`` pixi environment) flies a survey over it and writes
 classified LAZ. alsdb, lasR and LAStools then process that LAZ, and every
 output is scored against the truth of the same scene:
 
-- DTM: the terrain function, exact.
+- DTM: the 1 m terrain mesh HELIOS++ scans, exact.
 - CHM: the top of the voxel crowns HELIOS++ sees, relative to the terrain, at
   each 1 m cell centre (what TIN-based CHMs estimate) and as the cell maximum
   (what binned maxima estimate). The voxel grid is offset so cell centres
@@ -181,6 +181,143 @@ def crown_pad(pai, occ, size, voxel):
     return pai * size * size / (occ.sum() * voxel**3)
 
 
+def mesh_height(zgrid, x, y):
+    """Height of the 1 m terrain mesh written for HELIOS++ at local *x*, *y*.
+
+    Vertices are ``zgrid[j, i]`` at local (i, j); each square is split along
+    its (i, j)-(i+1, j+1) diagonal, as in ``terrain.obj``.
+    """
+    ny, nx = zgrid.shape
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    i = np.clip(np.floor(x).astype(int), 0, nx - 2)
+    j = np.clip(np.floor(y).astype(int), 0, ny - 2)
+    u, v = x - i, y - j
+    za, zb, zc, zd = zgrid[j, i], zgrid[j, i + 1], zgrid[j + 1, i + 1], zgrid[j + 1, i]
+    return np.where(u >= v, za + u * (zb - za) + v * (zc - zb), za + v * (zd - za) + u * (zc - zd))
+
+
+def voxel_truth(occ, origin, zmin, voxel, zgrid, margin, core):
+    """DTM and CHM truths on the core (1 m cells, north-up) from occupied voxels.
+
+    The DTM is the terrain mesh at cell centres. CHMs are the top of the
+    voxel columns above the mesh: the column at each cell centre, and the
+    highest column touching the cell.
+    """
+    nx, ny, nz = occ.shape
+    has = occ.any(axis=2)
+    top = np.where(has, zmin + (nz - np.argmax(occ[:, :, ::-1], axis=2)) * voxel, -np.inf)
+    cx = origin + (np.arange(nx) + 0.5) * voxel  # column centres (multiples of voxel)
+    cy = origin + (np.arange(ny) + 0.5) * voxel
+    col_hag = np.maximum(top - mesh_height(zgrid, *np.meshgrid(cx, cy, indexing="ij")), 0.0)
+    per_m = round(1 / voxel)
+    m0, nc = round(margin), round(core)
+    centre_idx = np.round((np.arange(nc) + m0 + 0.5) * per_m).astype(int)  # column of each centre
+    chm_centre = col_hag[np.ix_(centre_idx, centre_idx)]
+    half = per_m // 2  # columns from the centre to the cell edge (edge columns straddle)
+    chm_max = np.full((nc, nc), -np.inf)
+    for di in range(-half, half + 1):
+        for dj in range(-half, half + 1):
+            chm_max = np.maximum(chm_max, col_hag[np.ix_(centre_idx + di, centre_idx + dj)])
+    ccx = m0 + np.arange(nc) + 0.5
+    dtm = mesh_height(zgrid, *np.meshgrid(ccx, ccx, indexing="ij"))
+
+    def to_north_up(a):  # (x, y) -> rows north to south
+        return a.T[::-1].astype(np.float32)
+
+    return {"dtm": to_north_up(dtm), "chm_centre": to_north_up(chm_centre),
+            "chm_max": to_north_up(chm_max)}  # fmt: skip
+
+
+def write_helios_scene(out, *, name, zgrid, voxels, pad, origin, zmin, shape, voxel, xy0, density,
+                       max_returns, seed):  # fmt: skip
+    """Write terrain mesh, voxel crowns, scene, scanner and survey for HELIOS++.
+
+    *zgrid* is the 1 m terrain (local coordinates, ``zgrid[j, i]`` at x=i,
+    y=j); *voxels* the (i, j, k) indices of occupied voxels and *pad* their
+    plant area density (scalar or one per voxel). Everything is translated by
+    *xy0*. One flight line along x over the middle of the scene.
+    """
+    out = Path(out)
+    ny, nx = zgrid.shape
+    gx, gy = np.meshgrid(np.arange(nx, dtype=float), np.arange(ny, dtype=float))
+    idx = np.arange(nx * ny).reshape(ny, nx) + 1
+    a, b, c, d = idx[:-1, :-1], idx[:-1, 1:], idx[1:, 1:], idx[1:, :-1]
+    faces = np.stack([a, b, c, a, c, d], -1).reshape(-1, 3)
+    with open(out / "terrain.obj", "w") as f:
+        f.write("mtllib terrain.mtl\nusemtl ground\n")
+        np.savetxt(
+            f, np.column_stack((gx.ravel(), gy.ravel(), zgrid.ravel())), fmt="v %.3f %.3f %.3f"
+        )
+        np.savetxt(f, faces, fmt="f %d %d %d")
+    (out / "terrain.mtl").write_text(
+        "newmtl ground\nKd 0.3 0.3 0.3\nhelios_isGround 1\nhelios_classification 2\n"
+    )
+
+    # Crowns as transmittive voxels (AMAPVox format read by HELIOS++).
+    ii, jj, kk = voxels
+    vx, vy, vz = shape
+    with open(out / "forest.vox", "w") as f:
+        f.write(f"VOXEL SPACE\n#min_corner: {origin} {origin} {zmin}\n")
+        f.write(f"#max_corner: {origin + vx * voxel} {origin + vy * voxel} {zmin + vz * voxel}\n")
+        f.write(f"#split: {vx} {vy} {vz}\n#res: {voxel}\n")
+        f.write("i j k PadBVTotal angleMean bsEntering bsIntercepted bsPotential ground_distance "
+                "lMeanTotal lgTotal nbEchos nbSampling transmittance attenuation "
+                "attenuationBiasCorrection\n")  # fmt: skip
+        rows = np.column_stack((ii, jj, kk, np.broadcast_to(pad, np.shape(ii))))
+        np.savetxt(f, rows, fmt="%d %d %d %.6g 0 0 0 0 0 0 0 0 0 0 0 0")
+    (out / "forest.mtl").write_text(
+        "newmtl foliage\nKd 0.05 0.4 0.05\nhelios_spectra deciduous\nhelios_classification 5\n"
+    )
+
+    x0, y0 = xy0
+    (out / "scene.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<document>
+  <scene id="syn" name="{name}">
+    <part>
+      <filter type="objloader"><param type="string" key="filepath" value="{out / "terrain.obj"}"/></filter>
+      <filter type="translate"><param type="vec3" key="offset" value="{x0};{y0};0"/></filter>
+    </part>
+    <part>
+      <filter type="detailedvoxels">
+        <param type="string" key="filepath" value="{out / "forest.vox"}"/>
+        <param type="string" key="matfile" value="{out / "forest.mtl"}"/>
+        <param type="string" key="matname" value="foliage"/>
+      </filter>
+      <filter type="translate"><param type="vec3" key="offset" value="{x0};{y0};0"/></filter>
+    </part>
+  </scene>
+</document>
+""")
+    prf, scan_freq = survey_settings(density)
+    (out / "scanner.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<document>
+  <!-- Leica ALS50-II geometry; maxNOR and pulse rate set per scenario -->
+  <scanner id="syn_als" accuracy_m="0.05" beamDivergence_rad="0.00022" name="synthetic ALS"
+           optics="oscillating" pulseFreqs_Hz="{prf}" pulseLength_ns="10" rangeMin_m="200"
+           scanAngleMax_deg="37.5" scanFreqMin_Hz="0" scanFreqMax_Hz="400"
+           maxNOR="{max_returns}"/>
+</document>
+""")
+    alt = float(zgrid.max()) + FLIGHT_HEIGHT
+    size_x = nx - 1
+    cy_line = y0 + (ny - 1) / 2
+    (out / "survey.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<document>
+  <scannerSettings id="set" active="true" pulseFreq_hz="{prf}" scanAngle_deg="{SCAN_HALF_ANGLE}"
+                   scanFreq_hz="{scan_freq}" trajectoryTimeInterval_s="0.05"/>
+  <survey name="syn" seed="{seed + 1}" scene="{out / "scene.xml"}#syn"
+          platform="data/platforms.xml#sr22" scanner="{out / "scanner.xml"}#syn_als">
+    <!-- winSize_ns: HELIOS++ default peak window. 1 ns split filled crowns into returns
+         0.8 m apart, so 94% of broadleaf pulses spent all four returns in the crown top. -->
+    <FWFSettings beamSampleQuality="3" binSize_ns="0.25" winSize_ns="2.5"/>
+    <leg><platformSettings x="{x0 - 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set"/></leg>
+    <leg><platformSettings x="{x0 + size_x + 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set" active="false"/></leg>
+  </survey>
+</document>
+""")  # fmt: skip
+    return prf, scan_freq
+
+
 def make_scene(scenario, out_dir):
     """Write the HELIOS++ scene and survey, and the truth, for *scenario*."""
     out = Path(out_dir)
@@ -191,118 +328,26 @@ def make_scene(scenario, out_dir):
     occ, origin, zmin = voxelise(trees, scenario.terrain, size, voxel)
     pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
     pad = crown_pad(pai, occ, size, voxel)
+    g = np.arange(int(size) + 1, dtype=float)
+    zgrid = terrain_height(scenario.terrain, *np.meshgrid(g, g))  # 1 m mesh, [y, x]
 
-    # Terrain mesh, 1 m.
-    n = int(size) + 1
-    gx, gy = np.meshgrid(np.arange(n, dtype=float), np.arange(n, dtype=float))
-    gz = terrain_height(scenario.terrain, gx, gy)
-    idx = np.arange(n * n).reshape(n, n) + 1
-    a, b, c, d = idx[:-1, :-1], idx[:-1, 1:], idx[1:, 1:], idx[1:, :-1]
-    faces = np.stack([a, b, c, a, c, d], -1).reshape(-1, 3)
-    with open(out / "terrain.obj", "w") as f:
-        f.write("mtllib terrain.mtl\nusemtl ground\n")
-        np.savetxt(f, np.column_stack((gx.ravel(), gy.ravel(), gz.ravel())), fmt="v %.3f %.3f %.3f")
-        np.savetxt(f, faces, fmt="f %d %d %d")
-    (out / "terrain.mtl").write_text(
-        "newmtl ground\nKd 0.3 0.3 0.3\nhelios_isGround 1\nhelios_classification 2\n"
-    )
-
-    # Crowns as transmittive voxels (AMAPVox format read by HELIOS++).
-    ii, jj, kk = np.nonzero(occ)
-    nx, ny, nz = occ.shape
-    with open(out / "forest.vox", "w") as f:
-        f.write(f"VOXEL SPACE\n#min_corner: {origin} {origin} {zmin}\n")
-        f.write(f"#max_corner: {origin + nx * voxel} {origin + ny * voxel} {zmin + nz * voxel}\n")
-        f.write(f"#split: {nx} {ny} {nz}\n#res: {voxel}\n")
-        f.write("i j k PadBVTotal angleMean bsEntering bsIntercepted bsPotential ground_distance "
-                "lMeanTotal lgTotal nbEchos nbSampling transmittance attenuation "
-                "attenuationBiasCorrection\n")  # fmt: skip
-        np.savetxt(f, np.column_stack((ii, jj, kk)), fmt=f"%d %d %d {pad:.6g} 0 0 0 0 0 0 0 0 0 0 0 0")
-    (out / "forest.mtl").write_text(
-        "newmtl foliage\nKd 0.05 0.4 0.05\nhelios_spectra deciduous\nhelios_classification 5\n"
-    )
-
-    # Truth on the core, 1 m cells, north-up.
-    has = occ.any(axis=2)
-    top = np.where(has, zmin + (nz - np.argmax(occ[:, :, ::-1], axis=2)) * voxel, -np.inf)
-    col = origin + (np.arange(nx) + 0.5) * voxel  # column centres (multiples of voxel)
-    cx, cy = np.meshgrid(col, col, indexing="ij")
-    col_hag = np.maximum(top - terrain_height(scenario.terrain, cx, cy), 0.0)  # 0 over ground
-    per_m = round(1 / voxel)
+    truth = voxel_truth(occ, origin, zmin, voxel, zgrid, scenario.margin, scenario.core)
     m0, nc = round(scenario.margin), round(scenario.core)
-    centre_idx = (np.arange(nc) + m0 + 0.5) * per_m  # column index of each cell centre
-    centre_idx = np.round(centre_idx).astype(int)
-    chm_centre = col_hag[np.ix_(centre_idx, centre_idx)]
-    half = per_m // 2  # columns from the centre to the cell edge (edge columns straddle)
-    chm_max = np.full((nc, nc), -np.inf)
-    for di in range(-half, half + 1):
-        for dj in range(-half, half + 1):
-            chm_max = np.maximum(chm_max, col_hag[np.ix_(centre_idx + di, centre_idx + dj)])
-    ccx = m0 + np.arange(nc) + 0.5
-    dtm = terrain_height(scenario.terrain, *np.meshgrid(ccx, ccx, indexing="ij"))
-
-    def to_north_up(a):  # (x, y) -> rows north to south
-        return a.T[::-1]
-
     in_core = ((trees["x"] >= m0) & (trees["x"] < m0 + nc)
                & (trees["y"] >= m0) & (trees["y"] < m0 + nc))  # fmt: skip
     np.savez_compressed(
-        out / "truth.npz",
-        dtm=to_north_up(dtm).astype(np.float32),
-        chm_centre=to_north_up(chm_centre).astype(np.float32),
-        chm_max=to_north_up(chm_max).astype(np.float32),
-        x0=X0 + m0, y1=Y0 + m0 + nc,
+        out / "truth.npz", **truth, x0=X0 + m0, y1=Y0 + m0 + nc,
         tree_x=X0 + trees["x"][in_core], tree_y=Y0 + trees["y"][in_core],
         tree_h=trees["h"][in_core],
     )  # fmt: skip
-
-    # HELIOS++ files: scene, scanner, survey.
-    (out / "scene.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
-<document>
-  <scene id="syn" name="{scenario.name}">
-    <part>
-      <filter type="objloader"><param type="string" key="filepath" value="{out / "terrain.obj"}"/></filter>
-      <filter type="translate"><param type="vec3" key="offset" value="{X0};{Y0};0"/></filter>
-    </part>
-    <part>
-      <filter type="detailedvoxels">
-        <param type="string" key="filepath" value="{out / "forest.vox"}"/>
-        <param type="string" key="matfile" value="{out / "forest.mtl"}"/>
-        <param type="string" key="matname" value="foliage"/>
-      </filter>
-      <filter type="translate"><param type="vec3" key="offset" value="{X0};{Y0};0"/></filter>
-    </part>
-  </scene>
-</document>
-""")
-    prf, scan_freq = survey_settings(scenario.density)
-    (out / "scanner.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
-<document>
-  <!-- Leica ALS50-II geometry; maxNOR and pulse rate set per scenario -->
-  <scanner id="syn_als" accuracy_m="0.05" beamDivergence_rad="0.00022" name="synthetic ALS"
-           optics="oscillating" pulseFreqs_Hz="{prf}" pulseLength_ns="10" rangeMin_m="200"
-           scanAngleMax_deg="37.5" scanFreqMin_Hz="0" scanFreqMax_Hz="400"
-           maxNOR="{scenario.max_returns}"/>
-</document>
-""")
-    alt = float(gz.max()) + FLIGHT_HEIGHT
-    cy_line = Y0 + size / 2
-    (out / "survey.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
-<document>
-  <scannerSettings id="set" active="true" pulseFreq_hz="{prf}" scanAngle_deg="{SCAN_HALF_ANGLE}"
-                   scanFreq_hz="{scan_freq}" trajectoryTimeInterval_s="0.05"/>
-  <survey name="syn" seed="{scenario.seed + 1}" scene="{out / "scene.xml"}#syn"
-          platform="data/platforms.xml#sr22" scanner="{out / "scanner.xml"}#syn_als">
-    <!-- winSize_ns: HELIOS++ default peak window. 1 ns split filled crowns into returns
-         0.8 m apart, so 94% of broadleaf pulses spent all four returns in the crown top. -->
-    <FWFSettings beamSampleQuality="3" binSize_ns="0.25" winSize_ns="2.5"/>
-    <leg><platformSettings x="{X0 - 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set"/></leg>
-    <leg><platformSettings x="{X0 + size + 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set" active="false"/></leg>
-  </survey>
-</document>
-""")  # fmt: skip
-    meta = {"scenario": asdict(scenario), "trees": int(trees["x"].size), "voxels": int(occ.sum()),
-            "pai": pai, "pad": pad, "pulse_rate_hz": prf, "scan_freq_hz": scan_freq}  # fmt: skip
+    prf, scan_freq = write_helios_scene(
+        out, name=scenario.name, zgrid=zgrid, voxels=np.nonzero(occ), pad=pad, origin=origin,
+        zmin=zmin, shape=occ.shape, voxel=voxel, xy0=(X0, Y0), density=scenario.density,
+        max_returns=scenario.max_returns, seed=scenario.seed,
+    )  # fmt: skip
+    meta = {"scenario": asdict(scenario), "crs": CRS, "year": YEAR, "trees": int(trees["x"].size),
+            "voxels": int(occ.sum()), "pai": pai, "pad": pad, "pulse_rate_hz": prf,
+            "scan_freq_hz": scan_freq}  # fmt: skip
     (out / "scene.json").write_text(json.dumps(meta, indent=2))
     return meta
 
@@ -331,11 +376,17 @@ def _pixi(env, *args, repo=None):
     return ["pixi", "run", "--manifest-path", str(repo), "-e", env, *map(str, args)]
 
 
+def _scene_crs_year(scene_dir):
+    meta = json.loads((Path(scene_dir) / "scene.json").read_text())
+    return meta.get("crs", CRS), meta.get("year", YEAR)
+
+
 def simulate(scene_dir, *, threads=8, repo=None):
     """Run HELIOS++ and write ``<scene_dir>/laz/SYN_<year>_scene.laz`` (CRS, 1 mm scale)."""
     import pdal
 
     scene_dir = Path(scene_dir)
+    crs, year = _scene_crs_year(scene_dir)
     shutil.rmtree(scene_dir / "helios", ignore_errors=True)
     with open(scene_dir / "helios.log", "w") as log:
         subprocess.run(
@@ -348,7 +399,7 @@ def simulate(scene_dir, *, threads=8, repo=None):
     laz.mkdir(exist_ok=True)
     pdal.Pipeline(json.dumps([
         *legs, {"type": "filters.merge"},
-        {"type": "writers.las", "filename": str(laz / f"SYN_{YEAR}_scene.laz"), "a_srs": CRS,
+        {"type": "writers.las", "filename": str(laz / f"SYN_{year}_scene.laz"), "a_srs": crs,
          "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
          "offset_y": "auto", "offset_z": "auto", "minor_version": 4},
     ])).execute()  # fmt: skip
@@ -368,6 +419,7 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
     from rasterio.windows import from_bounds
 
     scene_dir = Path(scene_dir)
+    crs, year = _scene_crs_year(scene_dir)
     truth = np.load(scene_dir / "truth.npz")
     bounds, n = _window(truth)
     laz = scene_dir / "laz"
@@ -386,12 +438,12 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
         uri = scene_dir / "alsdb" / "tiledb"
         shutil.rmtree(scene_dir / "alsdb", ignore_errors=True)
         db = ALSDatabase(storage_type="local", uri=str(uri))
-        db.create(crs=CRS)
+        db.create(crs=crs)
         db.ingest_many(sorted(laz.glob("*.laz")))
         for method in METHODS:
             store = scene_dir / "alsdb" / f"{method}.zarr"
             t = time.perf_counter()
-            compute_all(db, ALSZarrStore(str(store)), resolution=1.0, year=YEAR, bbox=bounds,
+            compute_all(db, ALSZarrStore(str(store)), resolution=1.0, year=year, bbox=bounds,
                         method=method, tile_size=float(n), quality=False)  # fmt: skip
             timings[f"alsdb_{method}"] = time.perf_counter() - t
             g = zarr.open(str(store), mode="r")["1m"]
@@ -406,7 +458,7 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
                        check=True, capture_output=True)  # fmt: skip
         timings["lasr"] = time.perf_counter() - t
         for method in METHODS:
-            preds[f"lasr_{method}"] = tif(out / method / f"SYN_{YEAR}_scene.tif")
+            preds[f"lasr_{method}"] = tif(out / method / f"SYN_{year}_scene.tif")
     if "lastools" in tools:
         from alsdb.benchmark import lastools
 
@@ -415,7 +467,7 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
         t = time.perf_counter()
         lastools.run(laz, out, veg_classes=(5,), lastools_dir=lastools_dir, products=("spikefree",))
         timings["lastools"] = time.perf_counter() - t
-        preds["lastools_spikefree"] = tif(out / "spikefree" / f"SYN_{YEAR}_scene.tif")
+        preds["lastools_spikefree"] = tif(out / "spikefree" / f"SYN_{year}_scene.tif")
     np.savez_compressed(scene_dir / "preds.npz", **preds)
     (scene_dir / "timings.json").write_text(json.dumps(timings, indent=2))
     return preds
@@ -433,7 +485,12 @@ def _peaks(a, rows, cols, k=1):
 
 
 def score(scene_dir):
-    """One row per CHM output: errors against both truths, cover, mean height, tree tops."""
+    """One row per CHM output: errors against both truths, cover, mean height, tree tops.
+
+    Cells where the truth is missing (a real-data reference can have gaps)
+    are left out. When the truth carries ``tree_h_field`` (e.g. TLS heights),
+    tree tops are also scored against those.
+    """
     scene_dir = Path(scene_dir)
     truth = np.load(scene_dir / "truth.npz")
     preds = dict(np.load(scene_dir / "preds.npz"))
@@ -444,28 +501,38 @@ def score(scene_dir):
     ok = (rows >= 1) & (cols >= 1) & (rows < n - 1) & (cols < n - 1)
     rows, cols = rows[ok], cols[ok]
     vox_top = _peaks(truth["chm_max"], rows, cols)
+    field = truth["tree_h_field"][ok] if "tree_h_field" in truth else None
+    has_truth = np.isfinite(truth["chm_centre"]) & np.isfinite(truth["chm_max"])
     out = []
     for name, p in preds.items():
         if "_dtm_" in name:
             continue
-        m = np.isfinite(p)
+        m = np.isfinite(p) & has_truth
         row = {"scenario": Path(scene_dir).name, **meta["scenario"], "source": name,
-               "valid": float(m.mean())}  # fmt: skip
+               "valid": float(np.isfinite(p)[has_truth].mean())}  # fmt: skip
         for label in ("centre", "max"):
             d = p[m] - truth[f"chm_{label}"][m]
             row.update({f"bias_{label}": float(d.mean()), f"mae_{label}": float(np.abs(d).mean()),
                         f"within05_{label}": float(np.mean(np.abs(d) < 0.5))})  # fmt: skip
         t = truth["chm_centre"]
         row.update({
-            "mean_height": float(np.nanmean(p)), "mean_height_truth": float(t.mean()),
-            "cover2": float(np.mean(p[m] > 2)), "cover2_truth": float(np.mean(t > 2)),
+            "mean_height": float(np.nanmean(p)), "mean_height_truth": float(np.nanmean(t)),
+            "cover2": float(np.mean(p[m] > 2)), "cover2_truth": float(np.mean(t[has_truth] > 2)),
         })  # fmt: skip
-        e = _peaks(p, rows, cols) - vox_top
-        row.update({"treetop_bias": float(np.nanmean(e)), "treetop_mae": float(np.nanmean(np.abs(e))),
-                    "treetop_within1": float(np.nanmean(np.abs(e) < 1)), "trees": int(ok.sum())})  # fmt: skip
+        if rows.size:
+            peaks = _peaks(p, rows, cols)
+            e = peaks - vox_top
+            row.update({"treetop_bias": float(np.nanmean(e)),
+                        "treetop_mae": float(np.nanmean(np.abs(e))),
+                        "treetop_within1": float(np.nanmean(np.abs(e) < 1)),
+                        "trees": int(ok.sum())})  # fmt: skip
+            if field is not None:
+                f = peaks - field
+                row.update({"treetop_field_bias": float(np.nanmean(f)),
+                            "treetop_field_mae": float(np.nanmean(np.abs(f)))})  # fmt: skip
         dtm = preds.get(name.replace("alsdb_", "alsdb_dtm_")) if name.startswith("alsdb_") else None
         if dtm is not None:
-            dm = np.isfinite(dtm)
+            dm = np.isfinite(dtm) & np.isfinite(truth["dtm"])
             dd = dtm[dm] - truth["dtm"][dm]
             row.update({"dtm_bias": float(dd.mean()), "dtm_mae": float(np.abs(dd).mean())})
         out.append(row)
@@ -477,16 +544,46 @@ def score(scene_dir):
 # ---------------------------------------------------------------------------
 
 
+def finished_scenarios(results):
+    """Scenario names already in *results* (a results.csv), so reruns skip them."""
+    results = Path(results)
+    if not results.exists():
+        return set()
+    with results.open() as handle:
+        return {r["scenario"] for r in csv.DictReader(handle)}
+
+
+def append_results(results, rows):
+    """Append score rows to *results*, widening the header when new columns appear."""
+    results = Path(results)
+    results.parent.mkdir(parents=True, exist_ok=True)
+    fields = list(dict.fromkeys(k for r in rows for k in r))
+    new = not results.exists()
+    if not new:
+        with results.open() as handle:
+            old = next(csv.reader(handle))
+        fields = list(dict.fromkeys([*old, *fields]))
+        if fields != old:  # rewrite with the wider header
+            with results.open() as handle:
+                kept = list(csv.DictReader(handle))
+            with results.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(kept)
+    with results.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        if new:
+            writer.writeheader()
+        writer.writerows(rows)
+
+
 def run_grid(out_dir, scenarios, *, tools=("alsdb", "lasr"), lastools_dir=None, threads=8,
              keep=False):  # fmt: skip
     """Make, simulate, process and score every scenario; append rows to results.csv."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results = out_dir / "results.csv"
-    done = set()
-    if results.exists():
-        with results.open() as handle:
-            done = {r["scenario"] for r in csv.DictReader(handle)}
+    done = finished_scenarios(results)
     for scenario in scenarios:
         if scenario.name in done:
             continue
@@ -495,17 +592,7 @@ def run_grid(out_dir, scenarios, *, tools=("alsdb", "lasr"), lastools_dir=None, 
         meta = make_scene(scenario, scene)
         simulate(scene, threads=threads)
         run_tools(scene, tools, lastools_dir=lastools_dir)
-        rows = score(scene)
-        new = not results.exists()
-        fields = list(dict.fromkeys(k for r in rows for k in r))
-        if not new:
-            with results.open() as handle:
-                fields = list(dict.fromkeys([*next(csv.reader(handle)), *fields]))
-        with results.open("a", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
-            if new:
-                writer.writeheader()
-            writer.writerows(rows)
+        append_results(results, score(scene))
         print(f"{scenario.name}: {meta['trees']} trees, {meta['voxels']:,} voxels, "
               f"{time.perf_counter() - t:.0f} s", flush=True)  # fmt: skip
         if not keep:

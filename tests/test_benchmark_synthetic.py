@@ -27,7 +27,7 @@ def test_truth_is_consistent(scene):
     # DTM: exact terrain at the cell centres, north-up
     x = float(t["x0"]) - synthetic.X0 + 0.5
     y = float(t["y1"]) - synthetic.Y0 - 0.5
-    assert t["dtm"][0, 0] == pytest.approx(terrain_height("rolling", x, y), abs=1e-4)
+    assert t["dtm"][0, 0] == pytest.approx(terrain_height("rolling", x, y), abs=0.01)  # mesh vs function
     assert meta["voxels"] > 0 and meta["trees"] > 0
 
 
