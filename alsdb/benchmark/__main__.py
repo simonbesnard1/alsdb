@@ -66,7 +66,8 @@ def main(argv=None):
     p.add_argument("--terrain", nargs="+", default=["rolling"])
     p.add_argument("--forest", nargs="+", default=["conifer"])
     p.add_argument("--density", type=float, nargs="+", default=[2.0], help="pulses per m2")
-    p.add_argument("--pad-scale", type=float, nargs="+", default=[1.0])
+    p.add_argument("--pad-scale", type=float, nargs="+", default=[1.0],
+                   help="multiplies the forest type's plant area index")  # fmt: skip
     p.add_argument("--max-returns", type=int, default=4)
     p.add_argument("--seeds", type=int, nargs="+", default=[0])
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],

@@ -50,7 +50,7 @@ class Scenario:
     terrain: str = "rolling"
     forest: str = "conifer"
     density: float = 2.0  # pulses per m2
-    pad_scale: float = 1.0  # multiplies the forest type's plant area density
+    pad_scale: float = 1.0  # multiplies the forest type's plant area index
     max_returns: int = 4
     core: float = 150.0  # scored square, m
     margin: float = 30.0  # simulated around the core, not scored
@@ -94,16 +94,19 @@ def terrain_height(kind, x, y):
 
 
 # Forest types: list of layers (stems per ha, height mean/sd, height bounds,
-# crown radius / height, crown base / height, shape, placement), and plant
-# area density (m2/m3) inside crowns.
+# crown radius / height, crown base / height, shape, placement), and the
+# stand plant area index (m2 plant area per m2 ground, gaps included; leaf
+# area index values after Asner et al. 2003, Global Ecol. Biogeogr., plus
+# wood). The plant area density inside crowns follows from the crown volume
+# (see crown_pad): fixing it directly made deep, filled crowns far too opaque.
 FOREST_TYPES = {
-    "open": {"pad": 0.8, "layers": [
+    "open": {"pai": 1.0, "layers": [
         {"per_ha": 60, "h": (10.0, 3.0), "hb": (4.0, 20.0), "r": 0.35, "base": 0.3, "shape": "ellipsoid", "place": "random"}]},
-    "conifer": {"pad": 1.0, "layers": [
+    "conifer": {"pai": 4.0, "layers": [
         {"per_ha": 340, "h": (18.0, 4.0), "hb": (6.0, 32.0), "r": 0.18, "base": 0.4, "shape": "cone", "place": "grid"}]},
-    "broadleaf": {"pad": 1.2, "layers": [
+    "broadleaf": {"pai": 5.5, "layers": [
         {"per_ha": 200, "h": (22.0, 5.0), "hb": (8.0, 35.0), "r": 0.30, "base": 0.45, "shape": "ellipsoid", "place": "grid"}]},
-    "tropical": {"pad": 1.5, "layers": [
+    "tropical": {"pai": 6.0, "layers": [
         {"per_ha": 8, "h": (45.0, 3.0), "hb": (38.0, 52.0), "r": 0.18, "base": 0.6, "shape": "ellipsoid", "place": "random"},
         {"per_ha": 160, "h": (30.0, 4.0), "hb": (20.0, 38.0), "r": 0.22, "base": 0.55, "shape": "ellipsoid", "place": "grid"},
         {"per_ha": 400, "h": (10.0, 2.5), "hb": (5.0, 16.0), "r": 0.25, "base": 0.3, "shape": "ellipsoid", "place": "random"}]},
@@ -146,7 +149,10 @@ def voxelise(trees, terrain, size, voxel):
     n_xy = round(size / voxel) + 1
     origin = -voxel / 2
     ground_at_stem = terrain_height(terrain, trees["x"], trees["y"])
-    zmin = float(np.floor(terrain_height(terrain, *np.meshgrid([0, size], [0, size])).min()) - 1)
+    # Lowest ground anywhere in the scene (valleys lie inside it, not at the corners).
+    g = np.arange(0.0, size + 1.0)
+    ground_min = min(terrain_height(terrain, *np.meshgrid(g, g)).min(), ground_at_stem.min())
+    zmin = float(np.floor(ground_min) - 1)
     ztop = float((ground_at_stem + trees["h"]).max()) + 1
     nz = math.ceil((ztop - zmin) / voxel)
     occ = np.zeros((n_xy, n_xy, nz), dtype=bool)
@@ -170,6 +176,11 @@ def voxelise(trees, terrain, size, voxel):
     return occ, origin, zmin
 
 
+def crown_pad(pai, occ, size, voxel):
+    """Plant area density (m2/m3) giving stand plant area index *pai* over *size* x *size* m."""
+    return pai * size * size / (occ.sum() * voxel**3)
+
+
 def make_scene(scenario, out_dir):
     """Write the HELIOS++ scene and survey, and the truth, for *scenario*."""
     out = Path(out_dir)
@@ -178,7 +189,8 @@ def make_scene(scenario, out_dir):
     size, voxel = scenario.size, scenario.voxel
     trees = make_trees(scenario.forest, size, rng)
     occ, origin, zmin = voxelise(trees, scenario.terrain, size, voxel)
-    pad = FOREST_TYPES[scenario.forest]["pad"] * scenario.pad_scale
+    pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
+    pad = crown_pad(pai, occ, size, voxel)
 
     # Terrain mesh, 1 m.
     n = int(size) + 1
@@ -205,7 +217,7 @@ def make_scene(scenario, out_dir):
         f.write("i j k PadBVTotal angleMean bsEntering bsIntercepted bsPotential ground_distance "
                 "lMeanTotal lgTotal nbEchos nbSampling transmittance attenuation "
                 "attenuationBiasCorrection\n")  # fmt: skip
-        np.savetxt(f, np.column_stack((ii, jj, kk)), fmt=f"%d %d %d {pad} 0 0 0 0 0 0 0 0 0 0 0 0")
+        np.savetxt(f, np.column_stack((ii, jj, kk)), fmt=f"%d %d %d {pad:.6g} 0 0 0 0 0 0 0 0 0 0 0 0")
     (out / "forest.mtl").write_text(
         "newmtl foliage\nKd 0.05 0.4 0.05\nhelios_spectra deciduous\nhelios_classification 5\n"
     )
@@ -281,14 +293,16 @@ def make_scene(scenario, out_dir):
                    scanFreq_hz="{scan_freq}" trajectoryTimeInterval_s="0.05"/>
   <survey name="syn" seed="{scenario.seed + 1}" scene="{out / "scene.xml"}#syn"
           platform="data/platforms.xml#sr22" scanner="{out / "scanner.xml"}#syn_als">
-    <FWFSettings beamSampleQuality="3" binSize_ns="0.25" winSize_ns="1"/>
+    <!-- winSize_ns: HELIOS++ default peak window. 1 ns split filled crowns into returns
+         0.8 m apart, so 94% of broadleaf pulses spent all four returns in the crown top. -->
+    <FWFSettings beamSampleQuality="3" binSize_ns="0.25" winSize_ns="2.5"/>
     <leg><platformSettings x="{X0 - 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set"/></leg>
     <leg><platformSettings x="{X0 + size + 300}" y="{cy_line}" z="{alt}" onGround="false" movePerSec_m="{SPEED}"/><scannerSettings template="set" active="false"/></leg>
   </survey>
 </document>
 """)  # fmt: skip
     meta = {"scenario": asdict(scenario), "trees": int(trees["x"].size), "voxels": int(occ.sum()),
-            "pulse_rate_hz": prf, "scan_freq_hz": scan_freq}  # fmt: skip
+            "pai": pai, "pad": pad, "pulse_rate_hz": prf, "scan_freq_hz": scan_freq}  # fmt: skip
     (out / "scene.json").write_text(json.dumps(meta, indent=2))
     return meta
 
