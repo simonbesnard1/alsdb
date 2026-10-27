@@ -78,12 +78,14 @@ def _crop(data, outer, inner, resolution):
     return data[r0 : r0 + ny, c0 : c0 + nx]
 
 
-def surface_tile(arr, bbox, resolution, config, *, prepared=None):
+def surface_tile(arr, bbox, resolution, config, *, prepared=None, diagnostics=True):
     """Include enough raster halo for every eligible bounded hole and its rim."""
     halo = (config.fill_max_cells + 1) * resolution if config.pit_fill else 0.0
     x0, y0, x1, y1 = bbox
     outer = (x0 - halo, y0 - halo, x1 + halo, y1 + halo)
-    result = reconstruct_chm(arr, outer, resolution, config, prepared=prepared)
+    result = reconstruct_chm(
+        arr, outer, resolution, config, prepared=prepared, diagnostics=diagnostics
+    )
     return {name: _crop(data, outer, bbox, resolution) for name, data in result.items()}
 
 
@@ -134,6 +136,7 @@ def _worker(
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
             model=TerrainModel(cleaned[np.isin(cleaned["Classification"], config.ground_classes)]),
+            distances=quality,
         )
     if "dtm" in products:
         terrain = prepared[1] if prepared is not None else TerrainModel(arr[is_ground])
@@ -155,7 +158,9 @@ def _worker(
             mask &= arr["ReturnNumber"] == 1
         store.write_tile("dsm", resolution, year, binned(arr[mask], "max"), crop_bbox)
     if "chm" in products:
-        result = surface_tile(arr, crop_bbox, resolution, config, prepared=prepared)
+        result = surface_tile(
+            arr, crop_bbox, resolution, config, prepared=prepared, diagnostics=quality
+        )
         for name, data in result.items():
             if name == "chm" or quality:
                 store.write_tile(name, resolution, year, data, crop_bbox)

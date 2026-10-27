@@ -26,15 +26,39 @@ def test_candidate_only_normalization_matches_full(method):
         np.testing.assert_array_equal(full[name], fast[name], err_msg=name)
 
 
-def test_sorted_tin_lookup_matches_scipy_on_scattered_points():
+def test_tin_locator_matches_scipy_delaunay_on_scattered_points():
+    """Delaunator TIN + grid locator give scipy's triangles and hull test.
+
+    Random float points have a unique Delaunay triangulation, so the triangle
+    containing each query must have the same three vertices in both.
+    """
+    from scipy.spatial import Delaunay
+
     rng = np.random.default_rng(3)
     dtype = [("X", "f8"), ("Y", "f8"), ("Z", "f8")]
     ground = np.zeros(4000, dtype=dtype)
     ground["X"], ground["Y"] = rng.uniform(0, 100, (2, 4000))
     ground["Z"] = 50 + 0.1 * ground["X"] + rng.normal(0, 0.2, 4000)
     model = TerrainModel(ground)
-    xy = rng.uniform(-5, 105, (20000, 2))  # includes points outside the hull
-    np.testing.assert_array_equal(model._find_simplex(xy), model.tin.find_simplex(xy))
+    local = model.xy - model._origin
+    reference = Delaunay(local)
+    assert len(model.tin.simplices) == len(reference.simplices)
+    xy = rng.uniform(-5, 105, (20000, 2)) - model._origin  # includes points outside the hull
+    ours, theirs = model._find_simplex(xy), reference.find_simplex(xy)
+    np.testing.assert_array_equal(ours < 0, theirs < 0)
+    inside = ours >= 0
+    np.testing.assert_array_equal(
+        np.sort(model.tin.simplices[ours[inside]], axis=1),
+        np.sort(reference.simplices[theirs[inside]], axis=1),
+    )
+    z, _, outside = model.evaluate(xy[inside][:5] + model._origin)
+    t = reference.transform[theirs[inside][:5]]
+    b = np.einsum("ijk,ik->ij", t[:, :2], xy[inside][:5] - t[:, 2])
+    expected = (
+        np.column_stack((b, 1 - b.sum(1))) * model.z[reference.simplices[theirs[inside][:5]]]
+    ).sum(1)
+    np.testing.assert_allclose(z, expected, atol=1e-9)
+    assert not outside.any()
 
 
 def test_tin_keeps_all_ground_points_at_utm_coordinates():

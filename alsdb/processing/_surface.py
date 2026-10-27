@@ -162,11 +162,16 @@ def auto_freeze_distance(points):
 DEFAULT_CHM_CONFIG = CHMConfig()
 
 
-def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepared=None):
+def reconstruct_chm(
+    arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepared=None, diagnostics=True
+):
     """Build a CHM and diagnostics from buffered, already ground-cleaned points.
 
     The caller should rasterize a halo before cropping when hole filling is on.
     This pure function is also used for every uncertainty realization.
+    ``diagnostics=False`` returns only ``{"chm": ...}``: the quality flags,
+    counts, ground distance and terrain slope are not computed (on a PNOA
+    tile they were about a fifth of the pitfree time). The CHM is identical.
     """
     from alsdb.processing.chm import (
         _fill_pits,
@@ -188,6 +193,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
             ground_classes=config.ground_classes,
+            distances=diagnostics,
         )
     )
     gx, gy = grid.centers()
@@ -195,6 +201,7 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
         np.column_stack((gx.ravel(), gy.ravel())),
         max_distance=config.max_ground_distance,
         extrapolate=config.ground_extrapolation,
+        distances=diagnostics,
     )
     supported = np.isfinite(ground_z).reshape(grid.shape)
     candidates = normalized[surface_mask(normalized, config)]
@@ -236,12 +243,6 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
 
     raw_count = raster(candidates, candidates["Z"], "count")
     count = raster(points, points["Z"], "count")
-    canopy = points[np.isin(points["Classification"], config.veg_classes)]
-    canopy_count = raster(canopy, canopy["Z"], "count")
-    is_veg = np.isin(candidates["Classification"], config.veg_classes)
-    raw_canopy_count = raster(candidates[is_veg], candidates["Z"][is_veg], "count")
-    ground = arr[np.isin(arr["Classification"], config.ground_classes)]
-    ground_count = raster(ground, ground["Z"], "count")
     out = np.full(grid.shape, np.nan, np.float32)
     freeze_distance = config.freeze_distance
     if freeze_distance == "auto" and len(points):
@@ -304,6 +305,14 @@ def reconstruct_chm(arr, bbox, resolution, config=DEFAULT_CHM_CONFIG, *, prepare
         # by hull/distance/edge rules and must not be reintroduced by filling.
         eligible = supported & ~rejected & ~(invalid > 0) & (config.method == "max")
         out = _fill_pits(out, eligible=eligible, max_cells=config.fill_max_cells)
+    if not diagnostics:
+        return {"chm": out}
+    canopy = points[np.isin(points["Classification"], config.veg_classes)]
+    canopy_count = raster(canopy, canopy["Z"], "count")
+    is_veg = np.isin(candidates["Classification"], config.veg_classes)
+    raw_canopy_count = raster(candidates[is_veg], candidates["Z"][is_veg], "count")
+    ground = arr[np.isin(arr["Classification"], config.ground_classes)]
+    ground_count = raster(ground, ground["Z"], "count")
     filled = ~before & np.isfinite(out)
     flags = np.zeros(grid.shape, np.uint16)
     flags[before & (count > 0)] |= OBSERVED

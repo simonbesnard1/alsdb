@@ -289,7 +289,12 @@ def compute_forest_products(
                     )
             if "chm" in needed:
                 for name, data in surface_tile(
-                    arr, crop_bbox, resolution, config, prepared=(normalized, terrain)
+                    arr,
+                    crop_bbox,
+                    resolution,
+                    config,
+                    prepared=(normalized, terrain),
+                    diagnostics=quality,
                 ).items():
                     if name == "chm" or quality:
                         store.write_tile(name, resolution, year, data, crop_bbox)

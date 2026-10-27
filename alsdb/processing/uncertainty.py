@@ -187,7 +187,9 @@ def estimate_chm_uncertainty(
         perturbed = perturb_points(arr, error_model, seed=seed, realization=realization)
         if ground_outlier_removal:
             perturbed = _filter_ground_outliers(perturbed)
-        samples[realization] = surface_tile(perturbed, bbox, resolution, config)["chm"]
+        samples[realization] = surface_tile(perturbed, bbox, resolution, config, diagnostics=False)[
+            "chm"
+        ]
     return ensemble_summary(samples, interval, min_valid_fraction)
 
 

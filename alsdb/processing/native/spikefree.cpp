@@ -58,6 +58,41 @@ py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array:
     CDT tin;
     std::priority_queue<Candidate> pending;
     FH hint;
+    // Points arrive highest first. Canopy heights are spatially uncorrelated
+    // enough that consecutive points are far apart, and a locate walking from
+    // the previous vertex crossed much of the TIN: on a real PNOA 1 km tile,
+    // 307k vegetation returns took 9.9 s, and the same heights at random XY
+    // 11 s, against 1.3 s with equal heights. A coarse grid remembering the
+    // last vertex inserted per cell gives each locate a nearby start. The
+    // insertion order is unchanged, so the triangulation is identical.
+    double gx0 = std::numeric_limits<double>::max(), gy0 = gx0;
+    double gx1 = std::numeric_limits<double>::lowest(), gy1 = gx1;
+    for (const auto& point: points) {
+        gx0 = std::min(gx0, point[0]); gx1 = std::max(gx1, point[0]);
+        gy0 = std::min(gy0, point[1]); gy1 = std::max(gy1, point[1]);
+    }
+    const double cell = points.empty() ? 1.0 : std::max(
+        1e-6, 2.0 * std::sqrt(std::max(gx1 - gx0, 1e-6) * std::max(gy1 - gy0, 1e-6) / points.size()));
+    const int gnx = points.empty() ? 1 : int((gx1 - gx0) / cell) + 1;
+    const int gny = points.empty() ? 1 : int((gy1 - gy0) / cell) + 1;
+    std::vector<VH> recent(size_t(gnx) * gny, VH());
+    auto cell_of = [&](double x, double y) {
+        return std::make_pair(std::min(gnx - 1, int((x - gx0) / cell)),
+                              std::min(gny - 1, int((y - gy0) / cell)));
+    };
+    auto start_face = [&](double x, double y) {
+        const auto [i, j] = cell_of(x, y);
+        for (int ring = 0; ring <= 3; ++ring)
+            for (int dj = -ring; dj <= ring; ++dj)
+                for (int di = -ring; di <= ring; ++di) {
+                    if (std::max(std::abs(di), std::abs(dj)) != ring) continue;
+                    const int ii = i + di, jj = j + dj;
+                    if (ii < 0 || jj < 0 || ii >= gnx || jj >= gny) continue;
+                    const VH v = recent[size_t(jj) * gnx + ii];
+                    if (v != VH()) return v->face();
+                }
+        return hint;
+    };
     for (const auto& point: points) {
         // Candidates are revalidated because insertion can replace an unfrozen
         // face. Vertex handles remain valid throughout this insertion-only TIN.
@@ -75,13 +110,15 @@ py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array:
         K::Point_2 q(point[0], point[1]);
         CDT::Locate_type type;
         int index;
-        FH face = tin.locate(q, type, index, hint);
+        FH face = tin.locate(q, type, index, start_face(point[0], point[1]));
         if (type == CDT::VERTEX) continue; // Highest duplicate XY already retained.
         if (tin.dimension() == 2 && !tin.is_infinite(face) && face->info()) continue;
         if (tin.dimension() == 2 && type == CDT::EDGE && tin.is_constrained({face, index})) continue;
         VH v = tin.insert(q, type, face, index);
         v->info().z = point[2];
         hint = v->face();
+        const auto [ci, cj] = cell_of(point[0], point[1]);
+        recent[size_t(cj) * gnx + ci] = v;
         if (tin.dimension() != 2) continue;
         auto faces = tin.incident_faces(v), start = faces;
         if (faces == 0) continue;
