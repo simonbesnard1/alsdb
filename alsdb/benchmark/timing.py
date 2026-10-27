@@ -13,7 +13,10 @@ that many CPUs with ``taskset``), storage (input on its original, usually
 network, filesystem vs copied to local disk) and repeats. Every step runs in
 its own process; wall time, user/system CPU (``wait4`` rusage, children
 included) and peak resident memory of the whole process tree (sampled from
-``/proc``) go to one CSV row. Linux only.
+``/proc``) go to one CSV row. The harness is a child subreaper, so processes
+a step detaches (lasR's PSOCK workers are started in the background by a
+shell) stay in the tree and are counted, and the step ends when they exit.
+Linux only.
 
     python -m alsdb.benchmark timing <laz_dir> <work_dir> --dry-run
     python -m alsdb.benchmark timing <laz_dir> <work_dir> --areas 1 4 16 --cores 1 4 8
@@ -119,19 +122,23 @@ def _children_map():
     return parents
 
 
-def _tree_rss(root):
-    """Resident memory (bytes) summed over *root* and all its descendants."""
+def _descendants(root):
     parents = _children_map()
-    tree, frontier = {root}, [root]
+    tree, frontier = set(), [root]
     while frontier:
         pid = frontier.pop()
         for child, parent in parents.items():
             if parent == pid and child not in tree:
                 tree.add(child)
                 frontier.append(child)
+    return tree
+
+
+def _tree_rss(root):
+    """Resident memory (bytes) summed over all descendants of *root* (not *root* itself)."""
     page = os.sysconf("SC_PAGE_SIZE")
     total = 0
-    for pid in tree:
+    for pid in _descendants(root):
         try:
             with open(f"/proc/{pid}/statm") as handle:
                 total += int(handle.read().split()[1]) * page
@@ -140,8 +147,49 @@ def _tree_rss(root):
     return total
 
 
-def measure(command, *, cpus=None, env=None, log=None, interval=0.5):
-    """Run *command*; return wall, user, sys seconds, peak tree RSS (GB), exit code."""
+def _become_subreaper():
+    """Re-parent orphaned descendants to this process instead of init (Linux prctl)."""
+    import ctypes
+
+    PR_SET_CHILD_SUBREAPER = 36
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+
+
+def _reap_orphans(timeout):
+    """Wait for re-parented descendants; return their summed user and system CPU seconds.
+
+    Orphans still running after *timeout* seconds are killed.
+    """
+    user = system = 0.0
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            pid, _, usage = os.wait4(-1, os.WNOHANG)
+        except ChildProcessError:
+            return user, system
+        if pid:
+            user += usage.ru_utime
+            system += usage.ru_stime
+            continue
+        if time.monotonic() > deadline:
+            for left in _descendants(os.getpid()):
+                try:
+                    os.kill(left, 9)
+                except ProcessLookupError:
+                    pass
+            deadline = math.inf
+        time.sleep(0.05)
+
+
+def measure(command, *, cpus=None, env=None, log=None, interval=0.5, orphan_timeout=60.0):
+    """Run *command*; return wall, user, sys seconds, peak tree RSS (GB), exit code.
+
+    Processes the command leaves behind (detached workers) are counted and
+    waited for; still running after *orphan_timeout* s, they are killed.
+    """
+    _become_subreaper()
     if cpus:
         command = ["taskset", "-c", ",".join(map(str, cpus)), *command]
     with open(log if log else os.devnull, "w") as out:
@@ -149,21 +197,23 @@ def measure(command, *, cpus=None, env=None, log=None, interval=0.5):
         proc = subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, env=env)
         peak, done = [0], threading.Event()
 
-        def sample():
+        def sample():  # the whole tree below this process: the step plus re-parented orphans
             while not done.is_set():
-                peak[0] = max(peak[0], _tree_rss(proc.pid))
+                peak[0] = max(peak[0], _tree_rss(os.getpid()))
                 done.wait(interval)
 
         sampler = threading.Thread(target=sample, daemon=True)
         sampler.start()
         _, status, usage = os.wait4(proc.pid, 0)
+        orphan_user, orphan_sys = _reap_orphans(orphan_timeout)
+        wall = time.perf_counter() - started
         done.set()
         sampler.join()
         proc.returncode = os.waitstatus_to_exitcode(status)
     return {
-        "wall_s": round(time.perf_counter() - started, 3),
-        "user_s": round(usage.ru_utime, 3),
-        "sys_s": round(usage.ru_stime, 3),
+        "wall_s": round(wall, 3),
+        "user_s": round(usage.ru_utime + orphan_user, 3),
+        "sys_s": round(usage.ru_stime + orphan_sys, 3),
         "peak_rss_gb": round(peak[0] / 1e9, 3),
         "exit_code": proc.returncode,
     }

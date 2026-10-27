@@ -71,6 +71,17 @@ def test_measure_reports_tree_memory_and_failures(tmp_path):
     assert failed["exit_code"] == 3
 
 
+def test_measure_counts_detached_workers(tmp_path):
+    # Like lasR's PSOCK workers: a shell starts the worker in the background and exits.
+    burn = "import time; b = bytearray(300_000_000); t = time.process_time()\nwhile time.process_time() - t < 1.5: pass"
+    detach = f"({sys.executable} -c '{burn}' &)"
+    result = timing.measure(["sh", "-c", detach], interval=0.2, log=tmp_path / "log.txt")
+    assert result["exit_code"] == 0
+    assert result["user_s"] + result["sys_s"] >= 1.4  # the worker's CPU counts
+    assert result["wall_s"] >= 1.4  # the step lasts until the worker exits
+    assert result["peak_rss_gb"] > 0.25  # and so does its memory
+
+
 def _have_native_spikefree():
     try:
         from alsdb.processing.spikefree import require_backend
