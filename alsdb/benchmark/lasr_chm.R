@@ -86,8 +86,12 @@ for (d in c("spikefree", "pitfree", layer_dir)) dir.create(file.path(out_dir, ba
 # sum = returns, non-empty 1 m cells = one-highest-per-cell count, non-empty
 # 5 m cells = occupied area.
 auto_params <- function(f) {
-  tmp <- tempfile(fileext = ".tif")
-  exec(lasR::rasterize(RES, "count", filter = c(keep_first(), SURFACE), ofile = tmp), on = f)
+  # Named per tile and process: forked workers share R's random state, so
+  # tempfile() returned the same name in several workers at once.
+  tmp <- file.path(tempdir(), sprintf("count_%s_%d.tif",
+                                      tools::file_path_sans_ext(basename(f)), Sys.getpid()))
+  exec(lasR::rasterize(RES, "count", filter = c(keep_first(), SURFACE), ofile = tmp), on = f,
+       with = list(ncores = sequential(), progress = FALSE, noread = TRUE))
   r <- rast(tmp)
   v <- values(r, mat = FALSE)
   n_raw <- sum(v, na.rm = TRUE)
@@ -97,19 +101,6 @@ auto_params <- function(f) {
   unlink(tmp)
   c(freeze = 3 * sqrt(area / n_raw), edge = 3 * sqrt(area / n_thin))
 }
-params <- data.frame(file = targets, freeze = NA_real_, edge = NA_real_)
-for (i in seq_along(targets)) {
-  a <- if (FREEZE == "auto" || EDGE == "auto") auto_params(targets[i]) else c(freeze = NA, edge = NA)
-  params$freeze[i] <- if (FREEZE == "auto") a[["freeze"]] else as.numeric(FREEZE)
-  params$edge[i] <- if (EDGE == "auto") a[["edge"]] else as.numeric(EDGE)
-}
-# Group tiles with equal values (to 0.1 m) so each group is one exec.
-params$freeze <- round(params$freeze, 1)
-params$edge <- round(params$edge, 1)
-log_file <- file.path(out_dir, "params.csv")
-write.table(transform(params, tile = basename(file), file = NULL), log_file, sep = ",",
-            row.names = FALSE, append = file.exists(log_file), col.names = !file.exists(log_file))
-
 make_pipeline <- function(freeze, edge) {
   # PNOA headers use scale factors down to ~4e-08 m. Merging neighbour tiles
   # for the buffer makes LASlib enlarge them 10x, after which Z above ~894 m
@@ -135,19 +126,33 @@ make_pipeline <- function(freeze, edge) {
   p
 }
 
-# All files are passed so neighbours provide the 50 m tile buffer; noprocess
-# limits each run to its group.
-groups <- split(params, list(params$freeze, params$edge), drop = TRUE)
-for (g in groups) {
-  message(sprintf("freeze %.1f, edge %.1f: %d tile(s)", g$freeze[1], g$edge[1], nrow(g)))
-  invisible(exec(make_pipeline(g$freeze[1], g$edge[1]), on = files,
-                 with = list(ncores = concurrent_files(ncores), progress = TRUE, buffer = 50,
-                             noprocess = !(files %in% g$file))))
+# Header bounding boxes, read once: each tile gets only the neighbours its
+# 50 m buffer touches instead of all files (lasR reads every header in `on`).
+header_bbox <- function(f) {
+  con <- file(f, "rb"); h <- readBin(con, "raw", 227); close(con)
+  d <- readBin(h[180:211], "double", n = 4, size = 8, endian = "little")
+  c(xmin = d[2], ymin = d[4], xmax = d[1], ymax = d[3])  # stored max x, min x, max y, min y
 }
+bbox <- t(vapply(files, header_bbox, numeric(4)))
+BUFFER <- 50
 
-for (s in tools::file_path_sans_ext(basename(targets))) {
+# One worker process per tile, each with its own auto parameters. (Grouping
+# tiles by equal parameters ran the groups one after another, so tiles with
+# different values never ran in parallel.)
+process_tile <- function(f) {
+  a <- if (FREEZE == "auto" || EDGE == "auto") auto_params(f) else c(freeze = NA, edge = NA)
+  freeze <- round(if (FREEZE == "auto") a[["freeze"]] else as.numeric(FREEZE), 1)
+  edge <- round(if (EDGE == "auto") a[["edge"]] else as.numeric(EDGE), 1)
+  b <- bbox[f, ]
+  near <- bbox[, "xmin"] <= b[["xmax"]] + BUFFER & bbox[, "xmax"] >= b[["xmin"]] - BUFFER &
+    bbox[, "ymin"] <= b[["ymax"]] + BUFFER & bbox[, "ymax"] >= b[["ymin"]] - BUFFER
+  on <- c(f, setdiff(files[near], f))
+  invisible(exec(make_pipeline(freeze, edge), on = on,
+                 with = list(ncores = sequential(), progress = FALSE, buffer = BUFFER,
+                             noprocess = on != f, noread = TRUE)))
+  s <- tools::file_path_sans_ext(basename(f))
   layers <- list.files(layer_dir, pattern = paste0("^", s, "_l\\d+\\.tif$"), full.names = TRUE)
-  if (!length(layers)) { warning("no pitfree layers for ", s); next }
+  if (!length(layers)) stop("no pitfree layers for ", s)
   rs <- lapply(sort(layers), rast)
   # Sparse upper layers may cover a smaller extent; pad all to the union.
   e <- Reduce(terra::union, lapply(rs, ext))
@@ -155,5 +160,37 @@ for (s in tools::file_path_sans_ext(basename(targets))) {
   writeRaster(max(stack, na.rm = TRUE), file.path(out_dir, "pitfree", paste0(s, ".tif")),
               overwrite = TRUE, datatype = "FLT4S")
   invisible(unlink(layers))
+  data.frame(freeze = freeze, edge = edge, tile = basename(f))
 }
-message("done")
+
+# Build missing .lax spatial indexes once, before the workers start. lasR
+# otherwise writes them on demand next to the input files, and parallel
+# workers reading the same neighbour tile for their buffers raced on it:
+# tiles were then processed wrongly, outputs mixed up and corrupted. With the
+# indexes in place, 1 and 4 workers give identical pitfree and spike-free
+# within lasR's own run-to-run variation (~0.1-0.3% of cells).
+need <- files[!file.exists(sub("[.]la[sz]$", ".lax", files, ignore.case = TRUE))]
+if (length(need)) {
+  message(sprintf("writing %d .lax spatial indexes next to the input files", length(need)))
+  invisible(exec(write_lax(), on = need, with = list(ncores = concurrent_files(ncores), progress = FALSE)))
+}
+
+# Fresh R processes, not forks: forked workers (mclapply) inherit the parent's
+# library state (OpenMP, GDAL) and lasR in them intermittently wrote no output
+# without raising an error. PSOCK workers start clean.
+cl <- parallel::makePSOCKcluster(min(ncores, length(targets)))
+invisible(parallel::clusterEvalQ(cl, suppressPackageStartupMessages({ library(lasR); library(terra) })))
+parallel::clusterExport(cl, c("auto_params", "make_pipeline", "process_tile", "bbox", "files",
+                              "BUFFER", "RES", "THRESHOLDS", "SURFACE", "VEG", "FREEZE", "EDGE",
+                              "NORMALIZED", "out_dir", "layer_dir"))
+results <- parallel::parLapplyLB(cl, targets, function(f) tryCatch(process_tile(f), error = function(e) e))
+parallel::stopCluster(cl)
+ok <- vapply(results, is.data.frame, logical(1))
+if (any(ok)) {
+  log_file <- file.path(out_dir, "params.csv")
+  write.table(do.call(rbind, results[ok]), log_file, sep = ",", row.names = FALSE,
+              append = file.exists(log_file), col.names = !file.exists(log_file))
+}
+for (i in which(!ok)) message("FAILED ", basename(targets[i]), ": ", conditionMessage(results[[i]]))
+message(sprintf("done: %d of %d tiles", sum(ok), length(targets)))
+if (!all(ok)) quit(save = "no", status = 1)

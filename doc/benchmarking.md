@@ -31,6 +31,12 @@ computed per tile with alsdb's rule (three pulse spacings of surface first
 returns). Use `--tiles N` for a pilot and `--veg 20` for surveys with
 vegetation in class 20 (e.g. DE-Hai).
 
+The lasR runner processes tiles in separate R worker processes, each tile with
+its own auto parameters, reading only its neighbours for the buffer. Missing
+`.lax` spatial indexes are written next to the input files first. lasR's
+spike-free is not bit-reproducible: repeated runs differ on ~0.1-0.4% of
+cells (mean 1-2 cm); pitfree is identical.
+
 Returns outside the surface classes are ignored. On PNOA this includes
 overlap-strip returns (class 12, read by PDAL as class 0 with the Overlap
 flag), often most of the points. LAZ header point counts include them, so the
