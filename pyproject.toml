@@ -104,6 +104,9 @@ line-length = 100
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]
 cgal-cpp = ">=6,<7"
+# libpdal-hdf 2.10 is built against HDF5 2 but does not require it; without
+# this pin the solver pairs it with HDF5 1.14 and PDAL prints plugin errors.
+hdf5 = ">=2"
 pybind11 = ">=2.13"
 cxx-compiler = "*"
 
