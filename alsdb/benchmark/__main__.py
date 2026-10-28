@@ -1,6 +1,7 @@
-"""``python -m alsdb.benchmark {lastools,lasr,synthetic,uls,compare,points,timing} ...``"""
+"""Command-line entry point for alsdb validation benchmarks."""
 
 import argparse
+import json
 import sys
 
 
@@ -38,6 +39,15 @@ def main(argv=None):
     sub.add_parser("points", help="all alsdb methods on one prepared point set (see points --help)")
     sub.add_parser("timing", help="compute-performance benchmark (see timing --help)")
     sub.add_parser("timing-report", help="summarise a timing CSV: timing-report <timings.csv>")
+
+    p = sub.add_parser("classification", help="synthetic ground-classification benchmark")
+    p.add_argument("--terrain", nargs="+", default=["flat", "rolling", "steep", "rough"])
+    p.add_argument("--density", type=float, nargs="+", default=[0.5, 2.0, 10.0])
+    p.add_argument("--seed", type=int, nargs="+", default=[0, 1, 2])
+    p.add_argument("--size", type=float, default=100.0)
+    p.add_argument("--methods", nargs="+", default=["csf", "pmf", "smrf"])
+    p.add_argument("--boundary-width", type=float, default=5.0)
+    p.add_argument("--output", help="write JSON results here")
 
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
@@ -107,7 +117,31 @@ def main(argv=None):
     p.add_argument("--npz", help="save stats, residual samples and maps here")
 
     args = parser.parse_args(argv)
-    if args.command == "lastools":
+    if args.command == "classification":
+        import itertools
+
+        from alsdb.benchmark.classification import (
+            SyntheticClassificationScenario,
+            run_synthetic_grid,
+        )
+
+        scenarios = [
+            SyntheticClassificationScenario(terrain=t, density=d, size=args.size, seed=s)
+            for t, d, s in itertools.product(args.terrain, args.density, args.seed)
+        ]
+        rows = run_synthetic_grid(
+            scenarios,
+            methods=tuple(args.methods),
+            boundary_width=args.boundary_width,
+        )
+        payload = json.dumps(rows, indent=2)
+        if args.output:
+            from pathlib import Path
+
+            Path(args.output).write_text(payload)
+        else:
+            print(payload)
+    elif args.command == "lastools":
         from alsdb.benchmark import lastools
 
         lastools.run(

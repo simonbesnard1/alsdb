@@ -7,7 +7,10 @@
 - :mod:`alsdb.benchmark.compare` - matched scoring of alsdb stores against
   any folder of reference GeoTIFF tiles.
 - :mod:`alsdb.benchmark.points` - all alsdb methods on one prepared point set.
+- :mod:`alsdb.benchmark.classification` - exact-label synthetic scenarios,
+  classification scores, and adapters for PDAL, pyLASR PTD, FAST-GC, and
+  LAStools ``lasground``.
 
 External tools run as separate processes and are never installed by alsdb.
-Command line: ``python -m alsdb.benchmark {lastools,lasr,compare,points} --help``.
+Command line: ``python -m alsdb.benchmark classification --help``.
 """

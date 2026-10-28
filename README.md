@@ -164,6 +164,21 @@ same year and CRS, uses their points as classification context, and writes only
 the points owned by each source file. This avoids treating file edges as survey
 edges. Single-file `ingest()` cannot supply neighboring context.
 
+Ground classifiers can be compared on deterministic exact-label scenes:
+
+```bash
+python -m alsdb.benchmark classification \
+    --terrain flat rolling steep rough \
+    --density 0.5 2 10 \
+    --methods csf pmf smrf \
+    --output classification-results.json
+```
+
+The benchmark records point-level precision, recall, F1, balanced accuracy,
+runtime, and separate boundary/interior F1. Optional Python adapters are also
+available for pyLASR PTD, FAST-GC, and LAStools `lasground`; external tools are
+not installed as alsdb dependencies.
+
 ---
 
 ## Architecture
