@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from alsdb.benchmark.classification import score_ground_classification, terrain_error
+from alsdb.benchmark.classification import PTDParameters, score_ground_classification, terrain_error
 
 
 def test_classification_scores_known_confusion_matrix():
@@ -9,7 +9,12 @@ def test_classification_scores_known_confusion_matrix():
         [True, True, False, False],
         [True, False, True, False],
     )
-    assert (score.true_positive, score.false_positive, score.false_negative, score.true_negative) == (
+    assert (
+        score.true_positive,
+        score.false_positive,
+        score.false_negative,
+        score.true_negative,
+    ) == (
         1,
         1,
         1,
@@ -31,3 +36,7 @@ def test_terrain_error_known_values_and_missing_cells():
     assert score["mae"] == pytest.approx(1.0)
     assert score["rmse"] == pytest.approx(np.sqrt(5 / 3))
     assert score["coverage"] == 1.0
+
+
+def test_ptd_parameter_defaults_match_pylasr():
+    assert PTDParameters() == PTDParameters(10.0, 20.0, 3.0, 0.25)

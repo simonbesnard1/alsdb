@@ -18,8 +18,8 @@ from retry import retry
 from alsdb.core.alstile import ALSTile
 from alsdb.core.classification import ClassificationConfig, resolve_classification_config
 from alsdb.providers.tiledb_provider import TileDBProvider
-from alsdb.utils.schema import TileDBSchemaConfig, create_schema
 from alsdb.tile.tile import Tile
+from alsdb.utils.schema import TileDBSchemaConfig, create_schema
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,10 @@ def _classification_neighbors(paths: list[Path], buffer: float) -> dict[Path, tu
     """Files whose native bounds intersect each file's buffered bounds."""
     if buffer <= 0:
         return {path: () for path in paths}
-    bounds = np.asarray([Tile(path).native_bbox for path in paths], dtype=float)
+    tiles = [Tile(path) for path in paths]
+    bounds = np.asarray([tile.native_bbox for tile in tiles], dtype=float)
+    years = np.asarray([tile.name.year for tile in tiles])
+    crs = np.asarray([tile.name.crs for tile in tiles], dtype=object)
     result = {}
     for index, path in enumerate(paths):
         x0, y0, x1, y1 = bounds[index]
@@ -46,6 +49,8 @@ def _classification_neighbors(paths: list[Path], buffer: float) -> dict[Path, tu
             & (bounds[:, 0] <= x1 + buffer)
             & (bounds[:, 3] >= y0 - buffer)
             & (bounds[:, 1] <= y1 + buffer)
+            & (years == years[index])
+            & (crs == crs[index])
         )
         intersects[index] = False
         result[path] = tuple(paths[i] for i in np.flatnonzero(intersects))
@@ -537,6 +542,12 @@ class ALSDatabase(TileDBProvider):
             ground_method=ground_classifier,
             denoise=denoise,
         )
+        if classification_config.active and classification_config.buffer > 0:
+            logger.warning(
+                "Classification buffer %.1f m has no neighboring files in ingest(); "
+                "use ingest_many() for buffered classification",
+                classification_config.buffer,
+            )
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
 
         manifest = self.load_manifest()

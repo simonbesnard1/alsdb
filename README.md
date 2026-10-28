@@ -147,6 +147,7 @@ from alsdb import ALSDatabase, ClassificationConfig
 classification = ClassificationConfig(
     ground_method="csf",
     denoise=True,
+    buffer=30.0,
     vegetation_low=0.5,
     vegetation_medium=2.0,
     vegetation_high=5.0,
@@ -157,6 +158,11 @@ db.ingest("tile.laz", classification_config=classification)
 Enabled classification settings and their stable fingerprint are recorded in
 the ingestion manifest. Re-ingesting a file with different settings requires
 `overwrite=True`.
+
+When `buffer` is positive, `ingest_many()` discovers adjacent files from the
+same year and CRS, uses their points as classification context, and writes only
+the points owned by each source file. This avoids treating file edges as survey
+edges. Single-file `ingest()` cannot supply neighboring context.
 
 ---
 

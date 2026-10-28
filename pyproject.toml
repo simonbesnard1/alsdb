@@ -109,6 +109,10 @@ wheel = "*"
 pybind11 = ">=2.13"
 cmake = "*"
 cxx-compiler = "*"
+hdf5 = ">=2"
+
+[tool.pixi.feature.ptd.tasks]
+install-pylasr = "python -m pip install --no-build-isolation 'pylasr @ git+https://github.com/r-lidar/lasR.git@9b3048eff7d77a3fb4b93c5b33a662ea561cebfb#subdirectory=python'"
 
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]

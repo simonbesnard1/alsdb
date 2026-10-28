@@ -308,9 +308,12 @@ class ALSTile:
                 x0, x1 = float(raw["X"].min()), float(raw["X"].max())
                 y0, y1 = float(raw["Y"].min()), float(raw["Y"].max())
                 buffer = self._classification.buffer
+                query_bbox = (x0 - buffer, y0 - buffer, x1 + buffer, y1 + buffer)
                 context = []
                 for path in self._classification_context:
-                    arrays = list(Tile(path).read(chunk_size=None, out_crs=out_crs))
+                    arrays = list(
+                        Tile(path).read(chunk_size=None, out_crs=out_crs, bbox=query_bbox)
+                    )
                     if not arrays:
                         continue
                     neighbor = arrays[0]

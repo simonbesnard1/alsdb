@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import numpy as np
 import pdal
@@ -39,6 +40,16 @@ class ClassificationRun:
     method: str
     is_ground: np.ndarray
     wall_seconds: float
+
+
+@dataclass(frozen=True)
+class PTDParameters:
+    """pyLASR progressive TIN densification parameters."""
+
+    seed_resolution: float = 10.0
+    angle: float = 20.0
+    distance: float = 3.0
+    spacing: float = 0.25
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -93,6 +104,47 @@ def run_pdal_ground_classifier(
         method=config.ground_method,
         is_ground=np.asarray(result["Classification"] == 2),
         wall_seconds=time.perf_counter() - start,
+    )
+
+
+def run_pylasr_ptd(
+    input_path: str | Path,
+    output_path: str | Path,
+    parameters: PTDParameters | None = None,
+) -> ClassificationRun:
+    """Run PTD through the optional current-source pyLASR package."""
+    try:
+        import pylasr
+    except ImportError as exc:
+        raise ImportError(
+            "PTD benchmarking requires pyLASR built from current lasR source; "
+            "the PyPI 0.17.4 wheel does not expose classify_with_ptd"
+        ) from exc
+
+    if not hasattr(pylasr, "classify_with_ptd"):
+        raise ImportError("Installed pyLASR does not expose classify_with_ptd")
+    parameters = parameters or PTDParameters()
+    input_path, output_path = Path(input_path), Path(output_path)
+    pipeline = pylasr.classify_with_ptd(
+        res=parameters.seed_resolution,
+        angle=parameters.angle,
+        distance=parameters.distance,
+        spacing=parameters.spacing,
+        classification=2,
+        filter=[""],
+    ) + pylasr.write_las(str(output_path))
+    start = time.perf_counter()
+    result = pipeline.execute(str(input_path))
+    elapsed = time.perf_counter() - start
+    if not result.get("success") or not output_path.is_file():
+        raise RuntimeError(f"pyLASR PTD failed: {result}")
+    reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(output_path)}]))
+    reader.execute()
+    classified = reader.arrays[0]
+    return ClassificationRun(
+        method="ptd-pylasr",
+        is_ground=np.asarray(classified["Classification"] == 2),
+        wall_seconds=elapsed,
     )
 
 

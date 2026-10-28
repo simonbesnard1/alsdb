@@ -96,6 +96,7 @@ class Tile:
         self,
         chunk_size: int | None = None,
         out_crs: str | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
     ) -> Generator[np.ndarray, None, None]:
         """
         Yield structured numpy arrays of LAS points read via PDAL.
@@ -108,6 +109,8 @@ class Tile:
         out_crs:
             If provided, reproject points to this CRS (e.g. ``"EPSG:32616"``)
             using ``filters.reprojection`` before returning.
+        bbox:
+            Optional output-CRS bounds used to crop points after reprojection.
         """
         # Stats before any reprojection: the native extent of the points,
         # computed in this single pass rather than in a separate full read.
@@ -117,6 +120,9 @@ class Tile:
         ]
         if out_crs:
             stages.append({"type": "filters.reprojection", "out_srs": out_crs})
+        if bbox is not None:
+            x0, y0, x1, y1 = bbox
+            stages.append({"type": "filters.crop", "bounds": f"([{x0},{x1}],[{y0},{y1}])"})
         pipeline = pdal.Pipeline(json.dumps(stages))
         pipeline.execute()
         meta = pipeline.metadata

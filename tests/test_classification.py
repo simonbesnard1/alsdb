@@ -1,15 +1,18 @@
 """Tests for ingestion-time classification configuration."""
 
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 
-from alsdb import ClassificationConfig
+from alsdb import ALSTile, ClassificationConfig
+from alsdb.core.alsdatabase import _classification_neighbors
 from alsdb.core.classification import (
     classification_stages,
     denoise_stages,
     ground_stage,
     resolve_classification_config,
 )
-from alsdb.core.alsdatabase import _classification_neighbors
 
 
 def test_default_config_matches_existing_classifier_defaults():
@@ -108,9 +111,45 @@ def test_classification_neighbors_find_only_buffer_intersections(monkeypatch, tm
     class FakeTile:
         def __init__(self, path):
             self.native_bbox = boxes[path.name]
+            self.name = SimpleNamespace(year=2020, crs="EPSG:25831")
 
     monkeypatch.setattr("alsdb.core.alsdatabase.Tile", FakeTile)
     neighbors = _classification_neighbors(paths, buffer=3)
     assert neighbors[paths[0]] == (paths[1],)
     assert neighbors[paths[1]] == (paths[0],)
     assert neighbors[paths[2]] == ()
+
+
+def test_buffered_tile_uses_neighbor_context_but_returns_only_owned_points(monkeypatch):
+    dtype = [("X", "f8"), ("Y", "f8"), ("Z", "f8"), ("Classification", "u1")]
+
+    def points(x):
+        values = np.zeros(len(x), dtype=dtype)
+        values["X"], values["Y"], values["Z"], values["Classification"] = x, 5, 100, 1
+        return values
+
+    arrays = {"core.laz": points([0, 10]), "neighbor.laz": points([11, 50])}
+
+    class FakeTile:
+        def __init__(self, path):
+            self.path = path
+
+        def read(self, chunk_size=None, out_crs=None, bbox=None):
+            yield arrays[str(self.path)]
+
+    observed = []
+
+    def classify(self, values):
+        observed.append(len(values))
+        return values
+
+    monkeypatch.setattr("alsdb.core.alstile.Tile", FakeTile)
+    monkeypatch.setattr(ALSTile, "_apply_reclassification", classify)
+    tile = ALSTile(
+        "core.laz",
+        classification_config=ClassificationConfig(buffer=2),
+        classification_context=("neighbor.laz",),
+    )
+    chunks = list(tile.iter_chunks())
+    assert observed == [3]
+    assert sum(len(x) for x, _, _ in chunks) == 2
