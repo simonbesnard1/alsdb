@@ -624,15 +624,10 @@ class ALSZarrStore:
         if row0 < 0 or col0 < 0 or data.shape[0] < tile_ny or data.shape[1] < tile_nx:
             raise ValueError("Tile data/window does not fit the store grid")
         year = int(year)
-        window = data[:tile_ny, :tile_nx].astype(np.float32)
+        window = data[:tile_ny, :tile_nx].astype(np.float32, copy=False)
         arr = self._sized_array(res_key, variable, year)
         t_idx = self._time_index[(res_key, year)]
-        # Metadata (time axis, resizes, data_years) is serialized by the group
-        # lock above/below; the chunk write itself only needs a lock when the
-        # window doesn't cover whole chunks, since only then can two tiles
-        # read-modify-write the same chunk. Tiles from GridSpec.tiles() with
-        # tile_size == chunk size are always aligned - the common case runs
-        # fully in parallel.
+        # Unaligned windows require a lock because they share Zarr chunks.
         cy, cx = arr.chunks[1], arr.chunks[2]
         aligned = (
             row0 % cy == 0

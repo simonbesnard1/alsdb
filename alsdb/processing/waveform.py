@@ -227,25 +227,7 @@ def _effective_query_radius(
     sigma_beam: float | None,
     beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
 ) -> float:
-    """
-    Return the radius actually used to query/mask points for one footprint.
-
-    When ``gaussian_beam_weighting`` is enabled, points are weighted by
-    ``exp(-r^2 / (2 * sigma_beam^2))``.  A 2-D Gaussian's cumulative energy
-    within a radius of exactly ``footprint_radius`` (= 2 * sigma_beam with
-    the default ``sigma_beam = footprint_radius / 2``) is only
-    ``1 - exp(-2) ≈ 86.5%`` - querying no farther than ``footprint_radius``
-    silently discards the other ~13.5% of the beam's true energy before it
-    ever reaches the weighting step. Querying out to
-    ``beam_extent_sigma * sigma_beam`` instead (default 3σ ≈ 98.9% of total
-    Gaussian energy) fixes this without changing the weighting formula
-    itself - the tail is now present to be weighted down, rather than
-    absent entirely.
-
-    When ``gaussian_beam_weighting`` is ``False`` there's no Gaussian tail
-    to account for - a flat circular footprint of exactly
-    ``footprint_radius`` is already the correct, unmodified query.
-    """
+    """Return the query radius, including the configured Gaussian beam tail."""
     if not np.isfinite(footprint_radius) or footprint_radius <= 0:
         raise ValueError("footprint_radius must be finite and positive")
     if sigma_beam is not None and (not np.isfinite(sigma_beam) or sigma_beam <= 0):
@@ -814,13 +796,14 @@ def simulate_batch(
     ) + (kwargs.get("density_radius") or 0)
     results = [None] * len(shots)
     attributes = ("Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "Withheld")
+    beam_ids = shots[beam_col].astype(str).to_numpy() if beam_col in shots.columns else None
 
     def process(indices, points, neighborhoods):
         output = []
         for index, neighborhood in zip(indices, neighborhoods):
             options = dict(kwargs)
-            if beam_col in shots.columns:
-                options["beam_id"] = str(shots.iloc[index][beam_col])
+            if beam_ids is not None:
+                options["beam_id"] = beam_ids[index]
             result = waveform_from_points(
                 points[neighborhood],
                 *centers[index],

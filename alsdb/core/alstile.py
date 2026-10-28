@@ -350,7 +350,7 @@ class ALSTile:
             for start in range(0, len(data), step):
                 chunk = data[start : start + step]
                 attrs = {
-                    name: chunk[name].astype(dtype)
+                    name: chunk[name].astype(dtype, copy=False)
                     for name, dtype in LAS_ATTRIBUTES.items()
                     if name in chunk.dtype.names
                 }
@@ -366,7 +366,7 @@ class ALSTile:
                 if len(data) == 0:
                     continue
                 attrs = {
-                    name: data[name].astype(dtype)
+                    name: data[name].astype(dtype, copy=False)
                     for name, dtype in LAS_ATTRIBUTES.items()
                     if name in data.dtype.names
                 }

@@ -567,6 +567,16 @@ def _extract_metrics_baba(
         raise ValueError("Unknown structural metric")
     nx, ny, neighborhoods, area = baba_neighbourhoods(points, resolution, bbox, baba_radius)
     out = {name: np.full(nx * ny, np.nan, np.float32) for name in requested}
+    requested_set = set(requested)
+    quantiles = tuple(
+        (name, q) for name, q in (("h50", 50), ("h75", 75), ("h95", 95)) if name in requested_set
+    )
+    strata = tuple(
+        (name, bounds)
+        for name, bounds in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA)
+        if name in requested_set
+    )
+    needs_entropy = bool({"fhd", "vci"} & requested_set)
     hag = points["HeightAboveGround"]
     veg = np.isfinite(hag) & (hag > 0) & np.isin(points["Classification"], veg_classes)
     first = np.isfinite(hag) & (points["ReturnNumber"] == 1)
@@ -584,27 +594,27 @@ def _extract_metrics_baba(
         hv = h[veg[idx]]
         if not len(hv):
             continue
-        quantiles = [
-            (name, q) for name, q in (("h50", 50), ("h75", 75), ("h95", 95)) if name in out
-        ]
         if quantiles:
             for (name, _), value in zip(quantiles, np.percentile(hv, [q for _, q in quantiles])):
                 out[name][cell] = value
-        if "hmean" in out:
-            out["hmean"][cell] = hv.mean()
-        if "hmax" in out:
-            out["hmax"][cell] = hv.max()
-        if "crr" in out and hv.max() > hv.min():
-            out["crr"][cell] = (hv.mean() - hv.min()) / (hv.max() - hv.min())
-        if {"fhd", "vci"} & set(out):
+        height_mean = hv.mean() if {"hmean", "crr"} & requested_set else None
+        height_max = hv.max() if {"hmax", "crr"} & requested_set else None
+        if "hmean" in requested_set:
+            out["hmean"][cell] = height_mean
+        if "hmax" in requested_set:
+            out["hmax"][cell] = height_max
+        if "crr" in requested_set:
+            height_min = hv.min()
+            if height_max > height_min:
+                out["crr"][cell] = (height_mean - height_min) / (height_max - height_min)
+        if needs_entropy:
             entropy = _fhd_from_hag(hv)
-            if "fhd" in out:
+            if "fhd" in requested_set:
                 out["fhd"][cell] = entropy
-            if "vci" in out:
+            if "vci" in requested_set:
                 out["vci"][cell] = entropy / _VCI_MAX_ENTROPY
-        for name, (lo, hi) in zip(_HEIGHT_STRATA_NAMES, _HEIGHT_STRATA):
-            if name in out:
-                out[name][cell] = np.mean((hv > lo) & (hv <= hi))
+        for name, (lo, hi) in strata:
+            out[name][cell] = np.mean((hv > lo) & (hv <= hi))
     return {name: flip_to_north_up(values.reshape(ny, nx)) for name, values in out.items()}
 
 

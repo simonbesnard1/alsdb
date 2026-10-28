@@ -14,17 +14,11 @@ GROUND_CLASSES = (2, 9)
 class _Tin:
     """Planar Delaunay TIN with a grid-bucket point locator.
 
-    Built with PDAL's delaunator (``filters.delaunay``): on a real PNOA 1 km
-    tile with 419k ground points that took 0.32 s against 3.5 s for scipy's
-    Qhull, the largest single cost of CHM processing. ``simplices`` and
-    ``transform`` follow scipy's ``Delaunay`` layout (rows 0-1 of a transform
-    are the inverse barycentric matrix, row 2 the third vertex), so
-    interpolation and slope code is shared.
+    ``simplices`` and ``transform`` follow SciPy's ``Delaunay`` layout so
+    interpolation and slope calculations can share the same representation.
 
     :meth:`find_simplex` registers every triangle in the grid cells its
-    bounding box covers and tests each query only against the triangles of its
-    own cell. A point on a shared edge may get either triangle; the
-    interpolated value is the same.
+    bounding box covers and tests a query only against triangles in its cell.
     """
 
     _CHUNK = 262_144  # queries per vectorised batch, bounds memory
@@ -102,14 +96,7 @@ class TerrainModel:
         # Duplicate XY ground returns have no unique TIN elevation. Use mean Z.
         self.xy, inverse = np.unique(xy, axis=0, return_inverse=True)
         self.z = np.bincount(inverse, weights=z) / np.bincount(inverse) if len(z) else np.empty(0)
-        # Triangulate in coordinates centred on the data, not absolute UTM.
-        # Qhull lifts points to x^2 + y^2; at x ~ 6e5 m that's ~4e11, so
-        # returns centimetres apart become numerically coplanar. On a real
-        # dense DE-Hai tile, absolute coordinates kept only 19% of 3.46M
-        # ground points as TIN vertices (the rest silently dropped), produced
-        # a triangulation matplotlib rejects as invalid (overlapping
-        # triangles), and made point location ~40x slower. Centred: 100% of
-        # points are vertices and ~2N triangles, as a planar Delaunay should.
+        # Centering avoids precision loss when triangulating large map coordinates.
         self._origin = self.xy.mean(axis=0) if len(self.xy) else np.zeros(2)
         local = self.xy - self._origin
         self.tree = cKDTree(local) if len(local) else None

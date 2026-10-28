@@ -103,8 +103,13 @@ def _compute_gap_grid(
 
 
 def gap_statistics(
-    points, resolution, bbox, min_density=0.0, veg_classes=_VEG_CLASSES, baba_radius=0.0
-):
+    points: np.ndarray,
+    resolution: float,
+    bbox: tuple[float, float, float, float],
+    min_density: float = 0.0,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    baba_radius: float = 0.0,
+) -> dict[str, np.ndarray]:
     """Gap estimate, first-return support counts and zero-gap saturation flag."""
     from scipy.spatial import cKDTree
 
@@ -121,7 +126,8 @@ def gap_statistics(
         xy = np.column_stack((points["X"][first], points["Y"][first]))
 
         def count(mask):
-            return cKDTree(xy[mask]).query_ball_point(centers, baba_radius, return_length=True)
+            tree = cKDTree(xy[mask])
+            return tree.query_ball_point(centers, baba_radius, return_length=True)
 
         ng, nc, nf = (count(mask) for mask in (ground, classified, np.ones(len(xy), bool)))
         area = np.pi * baba_radius**2

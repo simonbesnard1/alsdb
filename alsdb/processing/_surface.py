@@ -169,9 +169,8 @@ def reconstruct_chm(
 
     The caller should rasterize a halo before cropping when hole filling is on.
     This pure function is also used for every uncertainty realization.
-    ``diagnostics=False`` returns only ``{"chm": ...}``: the quality flags,
-    counts, ground distance and terrain slope are not computed (on a PNOA
-    tile they were about a fifth of the pitfree time). The CHM is identical.
+    ``diagnostics=False`` returns only ``{"chm": ...}`` and skips quality
+    flags, counts, ground distance, and terrain slope.
     """
     from alsdb.processing.chm import (
         _fill_pits,
@@ -214,6 +213,14 @@ def reconstruct_chm(
             points,
         )
 
+    def bin_counts(source, selected=None):
+        inside, cells = grid.point_bins(source)
+        if selected is not None:
+            cells = cells[np.asarray(selected)[inside]]
+        return (
+            np.bincount(cells, minlength=grid.nx * grid.ny).reshape(grid.shape).astype(np.float32)
+        )
+
     def raster(points, values, statistic="max"):
         if not len(points):
             return (
@@ -241,8 +248,15 @@ def reconstruct_chm(
             points["X"][mask], y, np.asarray(values)[mask], bbox, resolution, statistic
         )
 
-    raw_count = raster(candidates, candidates["Z"], "count")
-    count = raster(points, points["Z"], "count")
+    candidate_is_valid = np.isfinite(candidates["HeightAboveGround"])
+    candidate_is_canopy = np.isin(candidates["Classification"], config.veg_classes)
+    raw_count = bin_counts(candidates)
+    invalid = bin_counts(candidates, ~candidate_is_valid) > 0
+    raw_canopy_count = bin_counts(candidates, candidate_is_canopy)
+
+    point_is_canopy = np.isin(points["Classification"], config.veg_classes)
+    count = bin_counts(points)
+    canopy_count = bin_counts(points, point_is_canopy) if diagnostics else None
     out = np.full(grid.shape, np.nan, np.float32)
     freeze_distance = config.freeze_distance
     if freeze_distance == "auto" and len(points):
@@ -293,8 +307,7 @@ def reconstruct_chm(
                 max_triangle_edge=config.max_triangle_edge,
             )
 
-    invalid = raster(candidates, (~np.isfinite(candidates["HeightAboveGround"])).astype(float))
-    rejected = (raw_count > 0) & (count == 0) & ~(invalid > 0)
+    rejected = (raw_count > 0) & (count == 0) & ~invalid
     if config.max_height is not None:
         rejected |= np.isfinite(out) & (out > config.max_height)
     out[rejected] = np.nan
@@ -303,26 +316,22 @@ def reconstruct_chm(
     if config.pit_fill:
         # Only binned holes are eligible. TIN gaps were deliberately excluded
         # by hull/distance/edge rules and must not be reintroduced by filling.
-        eligible = supported & ~rejected & ~(invalid > 0) & (config.method == "max")
+        eligible = supported & ~rejected & ~invalid & (config.method == "max")
         out = _fill_pits(out, eligible=eligible, max_cells=config.fill_max_cells)
     if not diagnostics:
         return {"chm": out}
-    canopy = points[np.isin(points["Classification"], config.veg_classes)]
-    canopy_count = raster(canopy, canopy["Z"], "count")
-    is_veg = np.isin(candidates["Classification"], config.veg_classes)
-    raw_canopy_count = raster(candidates[is_veg], candidates["Z"][is_veg], "count")
     ground = arr[np.isin(arr["Classification"], config.ground_classes)]
-    ground_count = raster(ground, ground["Z"], "count")
+    ground_count = bin_counts(ground)
     filled = ~before & np.isfinite(out)
     flags = np.zeros(grid.shape, np.uint16)
     flags[before & (count > 0)] |= OBSERVED
     flags[before & ((count == 0) | (config.method != "max"))] |= INTERPOLATED
     flags[filled] |= FILLED
-    flags[~supported | (invalid > 0)] |= UNSUPPORTED
+    flags[~supported | invalid] |= UNSUPPORTED
     flags[raw_canopy_count == 0] |= NO_OBSERVATIONS
     flags[extrapolated.reshape(grid.shape)] |= EXTRAPOLATED
-    negative = raster(candidates, candidates["NegativeHAG"].astype(float))
-    flags[negative > 0] |= NEGATIVE_HAG
+    negative = bin_counts(candidates, candidates["NegativeHAG"] > 0) > 0
+    flags[negative] |= NEGATIVE_HAG
     flags[rejected] |= REJECTED
     return {
         "chm": out,
