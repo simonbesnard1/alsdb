@@ -179,6 +179,19 @@ runtime, and separate boundary/interior F1. Optional Python adapters are also
 available for pyLASR PTD, FAST-GC, and LAStools `lasground`; external tools are
 not installed as alsdb dependencies.
 
+To compare classifiers against existing class-2 labels in real LAS/LAZ files:
+
+```bash
+python -m alsdb.benchmark classification-files results/classification \
+    --laz-dir /data/laz \
+    --tools csf pmf smrf ptd fastgc lastools \
+    --lastools-dir /opt/LAStools/bin \
+    --boundary-width 5
+```
+
+Results are appended to `results.csv`. Successful file/method pairs are skipped
+when the command is restarted; failures are recorded and retried.
+
 ---
 
 ## Architecture

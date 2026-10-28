@@ -1,3 +1,5 @@
+import csv
+
 import numpy as np
 import pytest
 
@@ -87,3 +89,47 @@ def test_external_adapters_report_missing_executables():
         run_lastools_lasground("input.laz", "output.laz", executable="missing-lasground")
     with pytest.raises(FileNotFoundError, match="FAST-GC"):
         run_fastgc("input.laz", "output", executable="missing-fastgc")
+
+
+def test_ground_mask_is_aligned_when_classifier_reorders_points(tmp_path, monkeypatch):
+    from alsdb.benchmark import classification
+
+    reference, _ = synthetic_points(SyntheticClassificationScenario(size=5, density=0.2))
+    classified = reference[[2, 0, 4, 1, 3]].copy()
+    classified["Classification"] = [2, 1, 2, 2, 1]
+    monkeypatch.setattr(classification, "_read_las", lambda path: classified)
+    mask = classification._ground_mask_from_las(tmp_path / "classified.laz", reference)
+    expected = np.zeros(5, dtype=bool)
+    expected[[reference_index for reference_index in (2, 4, 1)]] = True
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_file_benchmark_writes_results_and_resumes(tmp_path, monkeypatch):
+    from alsdb.benchmark import classification
+
+    laz_dir = tmp_path / "input"
+    laz_dir.mkdir()
+    (laz_dir / "tile.laz").touch()
+    points, truth = synthetic_points(SyntheticClassificationScenario(size=10, density=0.2))
+    points["Classification"] = np.where(truth, 2, 5)
+    calls = []
+
+    monkeypatch.setattr(classification, "_read_las", lambda path: points)
+
+    def classify(method, input_path, source, work_dir, **kwargs):
+        calls.append(method)
+        return classification.ClassificationRun(method, truth, 0.25)
+
+    monkeypatch.setattr(classification, "_file_classifier", classify)
+    output = tmp_path / "output"
+    results = classification.run_file_benchmark(
+        laz_dir, output, methods=("pmf", "smrf"), boundary_width=1
+    )
+    with results.open() as handle:
+        rows = list(csv.DictReader(handle))
+    assert calls == ["pmf", "smrf"]
+    assert [row["status"] for row in rows] == ["ok", "ok"]
+    assert all(float(row["f1"]) == 1 for row in rows)
+
+    classification.run_file_benchmark(laz_dir, output, methods=("pmf", "smrf"), boundary_width=1)
+    assert calls == ["pmf", "smrf"]

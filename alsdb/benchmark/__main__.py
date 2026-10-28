@@ -49,6 +49,22 @@ def main(argv=None):
     p.add_argument("--boundary-width", type=float, default=5.0)
     p.add_argument("--output", help="write JSON results here")
 
+    p = sub.add_parser(
+        "classification-files", help="compare ground classifiers on classified LAS/LAZ files"
+    )
+    p.add_argument("out_dir")
+    p.add_argument("--laz-dir", required=True, help="folder containing reference LAS/LAZ files")
+    p.add_argument(
+        "--tools",
+        nargs="+",
+        default=["csf", "pmf", "smrf"],
+        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+    )
+    p.add_argument("--boundary-width", type=float, default=5.0)
+    p.add_argument("--tiles", type=int, help="only process the first N files")
+    p.add_argument("--lastools-dir", help="folder containing lasground64")
+    p.add_argument("--fastgc-executable", default="fastgc")
+
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
@@ -141,6 +157,23 @@ def main(argv=None):
             Path(args.output).write_text(payload)
         else:
             print(payload)
+    elif args.command == "classification-files":
+        from pathlib import Path
+
+        from alsdb.benchmark.classification import run_file_benchmark
+
+        lasground = (
+            str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
+        )
+        run_file_benchmark(
+            args.laz_dir,
+            args.out_dir,
+            methods=tuple(args.tools),
+            boundary_width=args.boundary_width,
+            tiles=args.tiles,
+            lastools_executable=lasground,
+            fastgc_executable=args.fastgc_executable,
+        )
     elif args.command == "lastools":
         from alsdb.benchmark import lastools
 

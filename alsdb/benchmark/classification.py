@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -276,10 +278,46 @@ def run_pylasr_ptd(
     )
 
 
-def _ground_mask_from_las(path: Path) -> np.ndarray:
+def _read_las(path: Path) -> np.ndarray:
     reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(path)}]))
     reader.execute()
-    return np.asarray(reader.arrays[0]["Classification"] == 2)
+    return reader.arrays[0]
+
+
+def _ground_mask_from_las(path: Path, reference: np.ndarray | None = None) -> np.ndarray:
+    classified = _read_las(path)
+    mask = np.asarray(classified["Classification"] == 2)
+    if reference is None:
+        return mask
+    if len(reference) != len(classified):
+        raise ValueError(
+            f"classifier changed the point count: {len(reference)} input, {len(classified)} output"
+        )
+    names = [
+        name
+        for name in ("X", "Y", "Z", "GpsTime", "ReturnNumber", "PointSourceId")
+        if name in reference.dtype.names and name in classified.dtype.names
+    ]
+    if not {"X", "Y", "Z"}.issubset(names):
+        raise ValueError("input and classified output must contain X, Y, and Z")
+
+    def matches(name: str, left: np.ndarray, right: np.ndarray) -> bool:
+        if name in ("X", "Y", "Z"):
+            return bool(np.allclose(left, right, rtol=0, atol=1e-7))
+        return bool(np.array_equal(left, right))
+
+    if all(matches(name, reference[name], classified[name]) for name in names):
+        return mask
+    reference_order = np.lexsort(tuple(reference[name] for name in reversed(names)))
+    classified_order = np.lexsort(tuple(classified[name] for name in reversed(names)))
+    if any(
+        not matches(name, reference[name][reference_order], classified[name][classified_order])
+        for name in names
+    ):
+        raise ValueError("classifier output points do not match the input points")
+    aligned = np.empty_like(mask)
+    aligned[reference_order] = mask[classified_order]
+    return aligned
 
 
 def run_lastools_lasground(
@@ -289,6 +327,7 @@ def run_lastools_lasground(
     executable: str = "lasground64",
     options: tuple[str, ...] = (),
     timeout: float = 3600,
+    reference: np.ndarray | None = None,
 ) -> ClassificationRun:
     """Run the external LAStools ground classifier."""
     resolved = shutil.which(executable)
@@ -303,7 +342,9 @@ def run_lastools_lasground(
     succeeded = result.returncode == 0 or (result.returncode == 1 and "ERROR" not in text)
     if not succeeded or not output_path.is_file():
         raise RuntimeError(f"lasground failed ({result.returncode}): {text[-4000:]}")
-    return ClassificationRun("lastools-lasground", _ground_mask_from_las(output_path), elapsed)
+    return ClassificationRun(
+        "lastools-lasground", _ground_mask_from_las(output_path, reference), elapsed
+    )
 
 
 def run_fastgc(
@@ -313,6 +354,7 @@ def run_fastgc(
     executable: str = "fastgc",
     sensor_mode: str = "ALS",
     timeout: float = 3600,
+    reference: np.ndarray | None = None,
 ) -> ClassificationRun:
     """Run FAST-GC as an isolated external classifier."""
     resolved = shutil.which(executable)
@@ -349,7 +391,162 @@ def run_fastgc(
     candidates = preferred or outputs
     if len(candidates) != 1:
         raise RuntimeError(f"Could not identify one FAST-GC classified output: {candidates}")
-    return ClassificationRun("fastgc", _ground_mask_from_las(candidates[0]), elapsed)
+    return ClassificationRun("fastgc", _ground_mask_from_las(candidates[0], reference), elapsed)
+
+
+FILE_RESULT_FIELDS = (
+    "file",
+    "method",
+    "status",
+    "error",
+    "n_points",
+    "wall_seconds",
+    "true_ground",
+    "true_non_ground",
+    "predicted_ground",
+    "true_positive",
+    "false_positive",
+    "false_negative",
+    "true_negative",
+    "precision",
+    "recall",
+    "f1",
+    "balanced_accuracy",
+    "boundary_f1",
+    "interior_f1",
+)
+
+
+def _append_file_result(path: Path, row: dict) -> None:
+    new = not path.exists()
+    with path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FILE_RESULT_FIELDS, extrasaction="ignore")
+        if new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _completed_file_runs(path: Path) -> set[tuple[str, str]]:
+    if not path.exists():
+        return set()
+    with path.open(newline="") as handle:
+        return {
+            (row["file"], row["method"]) for row in csv.DictReader(handle) if row["status"] == "ok"
+        }
+
+
+def _file_classifier(
+    method: str,
+    input_path: Path,
+    points: np.ndarray,
+    work_dir: Path,
+    *,
+    lastools_executable: str,
+    fastgc_executable: str,
+) -> ClassificationRun:
+    if method in ("csf", "pmf", "smrf"):
+        return run_pdal_ground_classifier(points, ClassificationConfig(ground_method=method))
+    neutral_input = work_dir / f"unclassified{input_path.suffix.lower()}"
+    neutral_pipeline = [
+        {"type": "readers.las", "filename": str(input_path)},
+        {"type": "filters.assign", "value": "Classification = 1"},
+        {"type": "writers.las", "filename": str(neutral_input), "forward": "all"},
+    ]
+    pdal.Pipeline(json.dumps(neutral_pipeline)).execute()
+    if method == "ptd":
+        output = work_dir / "ptd.laz"
+        run = run_pylasr_ptd(neutral_input, output)
+        return ClassificationRun(
+            run.method, _ground_mask_from_las(output, points), run.wall_seconds
+        )
+    if method == "lastools":
+        return run_lastools_lasground(
+            neutral_input,
+            work_dir / "lastools.laz",
+            executable=lastools_executable,
+            reference=points,
+        )
+    if method == "fastgc":
+        return run_fastgc(
+            neutral_input,
+            work_dir / "fastgc",
+            executable=fastgc_executable,
+            reference=points,
+        )
+    raise ValueError(f"unknown classification method: {method}")
+
+
+def run_file_benchmark(
+    laz_dir: str | Path,
+    out_dir: str | Path,
+    *,
+    methods: tuple[str, ...] = ("csf", "pmf", "smrf"),
+    boundary_width: float = 5.0,
+    tiles: int | None = None,
+    lastools_executable: str = "lasground64",
+    fastgc_executable: str = "fastgc",
+) -> Path:
+    """Compare classifiers with existing class 2 labels in LAS/LAZ files.
+
+    Successful file/method pairs in ``results.csv`` are skipped on reruns.
+    Failures are recorded and retried the next time the command is run.
+    """
+    if boundary_width <= 0:
+        raise ValueError("boundary_width must be positive")
+    valid = {"csf", "pmf", "smrf", "ptd", "fastgc", "lastools"}
+    unknown = set(methods) - valid
+    if unknown:
+        raise ValueError(f"unknown classification methods: {sorted(unknown)}")
+    laz_dir, out_dir = Path(laz_dir), Path(out_dir)
+    files = sorted(path for path in laz_dir.rglob("*") if path.suffix.lower() in (".las", ".laz"))
+    if tiles is not None:
+        files = files[:tiles]
+    if not files:
+        raise FileNotFoundError(f"no LAS/LAZ files found in {laz_dir}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = out_dir / "results.csv"
+    completed = _completed_file_runs(results)
+    for index, input_path in enumerate(files, 1):
+        relative = str(input_path.relative_to(laz_dir))
+        pending = [method for method in methods if (relative, method) not in completed]
+        if not pending:
+            continue
+        points = _read_las(input_path)
+        truth = np.asarray(points["Classification"] == 2)
+        x0, x1 = float(points["X"].min()), float(points["X"].max())
+        y0, y1 = float(points["Y"].min()), float(points["Y"].max())
+        print(f"[{index}/{len(files)}] {relative}: {len(points):,} points", flush=True)
+        for method in pending:
+            print(f"  {method} ...", end="", flush=True)
+            row = {"file": relative, "method": method, "n_points": len(points)}
+            try:
+                with tempfile.TemporaryDirectory(prefix=f"alsdb-{method}-", dir=out_dir) as tmp:
+                    run = _file_classifier(
+                        method,
+                        input_path,
+                        points,
+                        Path(tmp),
+                        lastools_executable=lastools_executable,
+                        fastgc_executable=fastgc_executable,
+                    )
+                score = score_ground_classification(truth, run.is_ground)
+                row.update(score.to_dict())
+                row.update(status="ok", error="", wall_seconds=run.wall_seconds)
+                if 2 * boundary_width < min(x1 - x0, y1 - y0):
+                    strips = score_boundary_strips(
+                        points, truth, run.is_ground, (x0, y0, x1, y1), boundary_width
+                    )
+                    row.update(
+                        boundary_f1=strips["boundary"].f1,
+                        interior_f1=strips["interior"].f1,
+                    )
+                print(f" F1={score.f1:.4f}, {run.wall_seconds:.2f}s", flush=True)
+            except Exception as exc:  # noqa: BLE001 - one failed tool must not abort a long run
+                row.update(status="error", error=f"{type(exc).__name__}: {exc}")
+                print(f" ERROR: {exc}", flush=True)
+            _append_file_result(results, row)
+    print(f"-> {results}", flush=True)
+    return results
 
 
 def terrain_error(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float]:
