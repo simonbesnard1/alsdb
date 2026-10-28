@@ -10,6 +10,12 @@ from pathlib import Path
 import numpy as np
 import pdal
 
+from alsdb.core.classification import (
+    ClassificationConfig,
+    classification_stages,
+    denoise_stages,
+    resolve_classification_config,
+)
 from alsdb.tile.tile import Tile
 from alsdb.tile.tile_name import TileNameBase
 from alsdb.utils.schema import LAS_ATTRIBUTES
@@ -129,18 +135,22 @@ class ALSTile:
         hag_low: float = _HAG_LOW,
         hag_med: float = _HAG_MED,
         hag_high: float = _HAG_HIGH,
+        classification_config: ClassificationConfig | None = None,
+        classification_context: tuple[str | Path, ...] = (),
     ) -> None:
-        if ground_classifier not in ("csf", "pmf"):
-            raise ValueError(f"ground_classifier must be 'csf' or 'pmf', got {ground_classifier!r}")
         self._tile = Tile(path)
         self._classification_filter = classification_filter
-        self._reclassify = reclassify
-        self._ground_classifier = ground_classifier
-        self._denoise = denoise
+        self._classification = resolve_classification_config(
+            classification_config,
+            reclassify=reclassify,
+            ground_method=ground_classifier,
+            denoise=denoise,
+            vegetation_low=hag_low,
+            vegetation_medium=hag_med,
+            vegetation_high=hag_high,
+        )
+        self._classification_context = tuple(Path(path) for path in classification_context)
         self._reproject_to = reproject_to
-        self._hag_low = hag_low
-        self._hag_med = hag_med
-        self._hag_high = hag_high
         self._resolved_crs = _UNRESOLVED  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
@@ -165,6 +175,11 @@ class ALSTile:
         """CRS of the data after ingestion (native or reprojected)."""
         out = self._get_out_crs()
         return out if out is not None else self.name.crs
+
+    @property
+    def classification_config(self) -> ClassificationConfig:
+        """Resolved ingestion-time classification configuration."""
+        return self._classification
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -228,15 +243,9 @@ class ALSTile:
         outlier detection (isolated points).  Flagged points receive class 7
         and are excluded from subsequent ground classification and HAG.
         """
-        stages = [
-            {"type": "filters.elm"},
-            {
-                "type": "filters.outlier",
-                "method": "radius",
-                "radius": 1.0,
-                "min_k": 2,
-            },
-        ]
+        stages = denoise_stages(self._classification)
+        if not stages:
+            return data
         p = pdal.Pipeline(json.dumps(stages), arrays=[data])
         p.execute()
         result = p.arrays[0] if p.arrays else data
@@ -252,58 +261,14 @@ class ALSTile:
         (use reproject_to to ensure this for feet-based source files).
         Only unclassified (class 1) points are relabelled.
         """
-        ignore = "Classification[7:7],Classification[18:18]"
-        if self._ground_classifier == "pmf":
-            ground_stage: dict = {
-                "type": "filters.pmf",
-                "ignore": ignore,
-                "max_window_size": 33,
-                "slope": 1.0,
-                "initial_distance": 0.15,
-                "max_distance": 2.5,
-            }
-        else:
-            ground_stage = {
-                "type": "filters.csf",
-                "ignore": ignore,
-                "resolution": 0.5,
-                "threshold": 0.5,
-                "rigidness": 1,
-            }
-        stages = [
-            ground_stage,
-            {"type": "filters.hag_nn", "count": 10, "allow_extrapolation": True},
-            {
-                "type": "filters.assign",
-                "value": "HeightAboveGround = 0 WHERE HeightAboveGround < 0",
-            },
-            {
-                "type": "filters.assign",
-                "value": (
-                    f"Classification = 3 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {self._hag_low}"
-                    f" && HeightAboveGround < {self._hag_med}"
-                ),
-            },
-            {
-                "type": "filters.assign",
-                "value": (
-                    f"Classification = 4 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {self._hag_med}"
-                    f" && HeightAboveGround < {self._hag_high}"
-                ),
-            },
-            {
-                "type": "filters.assign",
-                "value": (
-                    f"Classification = 5 WHERE Classification == 1"
-                    f" && HeightAboveGround >= {self._hag_high}"
-                ),
-            },
-        ]
+        original = data["Classification"].copy()
+        stages = classification_stages(self._classification)
         p = pdal.Pipeline(json.dumps(stages), arrays=[data])
         p.execute()
         result = p.arrays[0]
+        if self._classification.preserve_existing:
+            restore = ~np.isin(original, self._classification.source_classes)
+            result["Classification"][restore] = original[restore]
         n_veg = int(np.isin(result["Classification"], [3, 4, 5]).sum())
         logger.debug("Reclassification complete: %d vegetation points assigned", n_veg)
         return result
@@ -332,18 +297,44 @@ class ALSTile:
         out_crs = self._get_out_crs()
         z_scale = self._get_z_scale()
 
-        if self._reclassify:
+        if self._classification.enabled:
             # Ground classifier needs to see the full tile for a reliable ground model.
             chunks = list(self._tile.read(chunk_size=None, out_crs=out_crs))
             if not chunks:
                 return
             raw = chunks[0]
+            core_size = len(raw)
+            if self._classification.buffer > 0 and self._classification_context:
+                x0, x1 = float(raw["X"].min()), float(raw["X"].max())
+                y0, y1 = float(raw["Y"].min()), float(raw["Y"].max())
+                buffer = self._classification.buffer
+                context = []
+                for path in self._classification_context:
+                    arrays = list(Tile(path).read(chunk_size=None, out_crs=out_crs))
+                    if not arrays:
+                        continue
+                    neighbor = arrays[0]
+                    inside = (
+                        (neighbor["X"] >= x0 - buffer)
+                        & (neighbor["X"] <= x1 + buffer)
+                        & (neighbor["Y"] >= y0 - buffer)
+                        & (neighbor["Y"] <= y1 + buffer)
+                    )
+                    if inside.any():
+                        aligned = np.zeros(inside.sum(), dtype=raw.dtype)
+                        for name in raw.dtype.names:
+                            if name in neighbor.dtype.names:
+                                aligned[name] = neighbor[name][inside]
+                        context.append(aligned)
+                if context:
+                    raw = np.concatenate((raw, *context))
             if z_scale is not None:
                 raw = raw.copy()
                 raw["Z"] = raw["Z"] * z_scale
-            if self._denoise:
+            if self._classification.denoise:
                 raw = self._apply_denoise(raw)
-            data = self._apply_filter(self._apply_reclassification(raw))
+            data = self._apply_reclassification(raw)[:core_size]
+            data = self._apply_filter(data)
             if len(data) == 0:
                 return
             step = chunk_size or len(data)
@@ -360,7 +351,7 @@ class ALSTile:
                 if z_scale is not None:
                     raw = raw.copy()
                     raw["Z"] = raw["Z"] * z_scale
-                if self._denoise:
+                if self._classification.denoise:
                     raw = self._apply_denoise(raw)
                 data = self._apply_filter(raw)
                 if len(data) == 0:

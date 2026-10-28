@@ -134,7 +134,29 @@ alsdb info tile.laz
 
 # Filter to ground + vegetation classes only
 alsdb ingest tile.laz my_array -c 2 -c 3 -c 4 -c 5
+
+# Classify an unclassified survey during ingestion
+alsdb ingest tile.laz my_array --classify --ground-method csf --denoise
 ```
+
+The Python API accepts a validated, reusable classification configuration:
+
+```python
+from alsdb import ALSDatabase, ClassificationConfig
+
+classification = ClassificationConfig(
+    ground_method="csf",
+    denoise=True,
+    vegetation_low=0.5,
+    vegetation_medium=2.0,
+    vegetation_high=5.0,
+)
+db.ingest("tile.laz", classification_config=classification)
+```
+
+Enabled classification settings and their stable fingerprint are recorded in
+the ingestion manifest. Re-ingesting a file with different settings requires
+`overwrite=True`.
 
 ---
 

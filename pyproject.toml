@@ -101,6 +101,15 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 
+[tool.pixi.feature.ptd.dependencies]
+python = "3.13.*"
+pip = "*"
+setuptools = "*"
+wheel = "*"
+pybind11 = ">=2.13"
+cmake = "*"
+cxx-compiler = "*"
+
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]
 cgal-cpp = ">=6,<7"
@@ -140,5 +149,6 @@ helios = ">=2.2.2"
 [tool.pixi.environments]
 default = { features = [] }
 spikefree = { features = ["spikefree"] }
+ptd = { features = ["ptd"] }
 lasr = { features = ["lasr"] }
 helios = { features = ["helios"], no-default-feature = true }

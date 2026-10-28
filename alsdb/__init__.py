@@ -7,6 +7,7 @@ import logging
 from alsdb.core.alsdatabase import ALSDatabase
 from alsdb.core.alsprovider import ALSProvider
 from alsdb.core.alstile import ALSTile
+from alsdb.core.classification import ClassificationConfig
 from alsdb.processing.change import compute_change
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.tile.tile import Tile
@@ -30,19 +31,15 @@ __all__ = [
     "PNOA_TILE_SIZE_M",
     "UTM30N",
     "WGS84",
-    # Core
     "ALSDatabase",
-    # Utils
     "ALSProduct",
     "ALSProvider",
     "ALSTile",
+    "ClassificationConfig",
     "PNOATileName",
-    # Tile
     "Tile",
-    # Provider base
     "TileDBProvider",
     "TileDBSchemaConfig",
-    # Processing
     "compute_change",
     "create_schema",
     "parse_tile_filename",

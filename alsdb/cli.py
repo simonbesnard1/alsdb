@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from alsdb.core.alsdatabase import ALSDatabase
+from alsdb.core.classification import ClassificationConfig
 from alsdb.utils.schema import TileDBSchemaConfig
 
 
@@ -67,6 +68,25 @@ def main(verbose: bool) -> None:
     type=int,
     help="Keep only these classification codes (repeatable). E.g. -c 2 -c 5",
 )
+@click.option("--classify", is_flag=True, help="Classify ground and vegetation during ingestion.")
+@click.option(
+    "--ground-method",
+    type=click.Choice(["csf", "pmf", "smrf"]),
+    default="csf",
+    show_default=True,
+    help="Ground classifier used with --classify.",
+)
+@click.option(
+    "--denoise", is_flag=True, help="Classify low and isolated noise before ground fitting."
+)
+@click.option(
+    "--vegetation-thresholds",
+    type=(float, float, float),
+    default=(0.5, 2.0, 5.0),
+    show_default=True,
+    metavar="LOW MEDIUM HIGH",
+    help="HAG thresholds in metres for vegetation classes 3, 4, and 5.",
+)
 @click.option(
     "--overwrite",
     is_flag=True,
@@ -88,6 +108,10 @@ def ingest_cmd(
     domain_min_y: float,
     domain_max_y: float,
     classification: tuple,
+    classify: bool,
+    ground_method: str,
+    denoise: bool,
+    vegetation_thresholds: tuple[float, float, float],
     overwrite: bool,
 ) -> None:
     """Ingest a PNOA LAZ tile into a TileDB array at ARRAY_URI."""
@@ -114,12 +138,22 @@ def ingest_cmd(
         credentials=credentials,
     )
 
-    n = db.ingest(
+    low, medium, high = vegetation_thresholds
+    classification_config = ClassificationConfig(
+        enabled=classify,
+        ground_method=ground_method,
+        denoise=denoise,
+        vegetation_low=low,
+        vegetation_medium=medium,
+        vegetation_high=high,
+    )
+    db.ingest(
         laz_path,
         classification_filter=list(classification) if classification else None,
+        classification_config=classification_config,
         overwrite=overwrite,
     )
-    click.echo(f"Wrote {n:,} points → {array_uri}")
+    click.echo(f"Ingested {laz_path.name} → {array_uri}")
 
 
 # ---------------------------------------------------------------------------

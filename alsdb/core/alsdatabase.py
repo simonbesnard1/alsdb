@@ -16,8 +16,10 @@ import tiledb
 from retry import retry
 
 from alsdb.core.alstile import ALSTile
+from alsdb.core.classification import ClassificationConfig, resolve_classification_config
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.utils.schema import TileDBSchemaConfig, create_schema
+from alsdb.tile.tile import Tile
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,25 @@ _NAME_RE = re.compile(r'(?:PROJCS|GEOGCS)\["([^"]+)"')
 
 
 _NO_CRS = "EPSG:0"  # what tile-name parsing reports for headers without a CRS
+
+
+def _classification_neighbors(paths: list[Path], buffer: float) -> dict[Path, tuple[Path, ...]]:
+    """Files whose native bounds intersect each file's buffered bounds."""
+    if buffer <= 0:
+        return {path: () for path in paths}
+    bounds = np.asarray([Tile(path).native_bbox for path in paths], dtype=float)
+    result = {}
+    for index, path in enumerate(paths):
+        x0, y0, x1, y1 = bounds[index]
+        intersects = (
+            (bounds[:, 2] >= x0 - buffer)
+            & (bounds[:, 0] <= x1 + buffer)
+            & (bounds[:, 3] >= y0 - buffer)
+            & (bounds[:, 1] <= y1 + buffer)
+        )
+        intersects[index] = False
+        result[path] = tuple(paths[i] for i in np.flatnonzero(intersects))
+    return result
 
 
 def _keep_crs(tile_crs: str, stored_crs: str | None) -> str:
@@ -350,6 +371,8 @@ class ALSDatabase(TileDBProvider):
         ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: str | None = None,
+        classification_config: ClassificationConfig | None = None,
+        classification_context: tuple[Path, ...] = (),
     ) -> tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
@@ -360,13 +383,18 @@ class ALSDatabase(TileDBProvider):
         Raises ``ValueError`` on CRS mismatch.
         """
         filename = laz_path.name
+        classification_config = resolve_classification_config(
+            classification_config,
+            reclassify=reclassify,
+            ground_method=ground_classifier,
+            denoise=denoise,
+        )
         tile = _tile or ALSTile(
             laz_path,
             classification_filter=classification_filter,
-            reclassify=reclassify,
-            ground_classifier=ground_classifier,
-            denoise=denoise,
             reproject_to=reproject_to,
+            classification_config=classification_config,
+            classification_context=classification_context,
         )
         tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
@@ -401,7 +429,7 @@ class ALSDatabase(TileDBProvider):
             attr_chunks.append(attrs)
 
         if not xs:
-            return 0, {
+            entry = {
                 "year": year,
                 "crs": crs,
                 "bbox": list(tile.points_bbox),
@@ -409,6 +437,10 @@ class ALSDatabase(TileDBProvider):
                 "status": "ok",
                 "ts": datetime.now(UTC).isoformat(),
             }
+            if tile.classification_config.active:
+                entry["classification"] = tile.classification_config.to_dict()
+                entry["classification_hash"] = tile.classification_config.fingerprint
+            return 0, entry
 
         x_all = np.concatenate(xs)
         y_all = np.concatenate(ys)
@@ -447,6 +479,9 @@ class ALSDatabase(TileDBProvider):
             "status": "ok",
             "ts": datetime.now(UTC).isoformat(),
         }
+        if tile.classification_config.active:
+            entry["classification"] = tile.classification_config.to_dict()
+            entry["classification_hash"] = tile.classification_config.fingerprint
         return total, entry
 
     def ingest(
@@ -459,6 +494,7 @@ class ALSDatabase(TileDBProvider):
         ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: str | None = None,
+        classification_config: ClassificationConfig | None = None,
     ) -> None:
         """
         Ingest a single LAZ tile into the TileDB array.
@@ -495,10 +531,27 @@ class ALSDatabase(TileDBProvider):
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
+        classification_config = resolve_classification_config(
+            classification_config,
+            reclassify=reclassify,
+            ground_method=ground_classifier,
+            denoise=denoise,
+        )
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
 
         manifest = self.load_manifest()
-        if not overwrite and manifest.get(filename, {}).get("status") == "ok":
+        existing = manifest.get(filename, {})
+        if (
+            not overwrite
+            and existing.get("status") == "ok"
+            and classification_config.active
+            and existing.get("classification_hash") != classification_config.fingerprint
+        ):
+            raise ValueError(
+                f"{filename} was ingested with a different classification configuration; "
+                "pass overwrite=True to rebuild the array"
+            )
+        if not overwrite and existing.get("status") == "ok":
             logger.info(
                 "Already ingested %s — skipping (pass overwrite=True to force)",
                 filename,
@@ -511,10 +564,8 @@ class ALSDatabase(TileDBProvider):
         tile = ALSTile(
             laz_path,
             classification_filter=classification_filter,
-            reclassify=reclassify,
-            ground_classifier=ground_classifier,
-            denoise=denoise,
             reproject_to=reproject_to,
+            classification_config=classification_config,
         )
         tile_crs = tile.target_crs
 
@@ -530,10 +581,8 @@ class ALSDatabase(TileDBProvider):
                 classification_filter,
                 stored,
                 _tile=tile,
-                reclassify=reclassify,
-                ground_classifier=ground_classifier,
-                denoise=denoise,
                 reproject_to=reproject_to,
+                classification_config=classification_config,
             )
             manifest[filename] = entry
         except Exception as exc:
@@ -567,6 +616,7 @@ class ALSDatabase(TileDBProvider):
         ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: str | None = None,
+        classification_config: ClassificationConfig | None = None,
     ) -> dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -602,14 +652,32 @@ class ALSDatabase(TileDBProvider):
             Skipped files have value 0.
         """
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
+        classification_config = resolve_classification_config(
+            classification_config,
+            reclassify=reclassify,
+            ground_method=ground_classifier,
+            denoise=denoise,
+        )
         laz_paths = [Path(p) for p in laz_paths]
+        neighbors = _classification_neighbors(laz_paths, classification_config.buffer)
 
         # Pre-load manifest; filter already-ingested files unless overwrite
         manifest = self.load_manifest()
         pending: list[Path] = []
         results: dict[str, int] = {}
         for p in laz_paths:
-            if not overwrite and manifest.get(p.name, {}).get("status") == "ok":
+            existing = manifest.get(p.name, {})
+            if (
+                not overwrite
+                and existing.get("status") == "ok"
+                and classification_config.active
+                and existing.get("classification_hash") != classification_config.fingerprint
+            ):
+                raise ValueError(
+                    f"{p.name} was ingested with a different classification configuration; "
+                    "pass overwrite=True to rebuild the array"
+                )
+            if not overwrite and existing.get("status") == "ok":
                 logger.debug("Already ingested %s — skipping", p.name)
                 results[p.name] = 0
             else:
@@ -629,8 +697,7 @@ class ALSDatabase(TileDBProvider):
             pending[0],
             classification_filter=classification_filter,
             reproject_to=reproject_to,
-            ground_classifier=ground_classifier,
-            denoise=denoise,
+            classification_config=classification_config,
         )
         first_crs = first_tile.target_crs
         if overwrite and self.array_exists():
@@ -665,10 +732,9 @@ class ALSDatabase(TileDBProvider):
                 chunk_size,
                 classification_filter,
                 stored,
-                reclassify=reclassify,
-                ground_classifier=ground_classifier,
-                denoise=denoise,
                 reproject_to=reproject_to,
+                classification_config=classification_config,
+                classification_context=neighbors[path],
             )
             return path.name, total, entry
 
