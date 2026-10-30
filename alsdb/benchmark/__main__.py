@@ -124,6 +124,12 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser("sensitivity", help="spike-free freeze distances on finished scenes")
+    p.add_argument("scenes_dir", help="folder of synthetic or uls scenes")
+    p.add_argument("out_csv")
+    p.add_argument("--workers", type=int, default=1, help="scenes processed in parallel")
+    p.add_argument("--keep", action="store_true", help="keep the per-scene stores")
+
     p = sub.add_parser("compare", help="score alsdb stores against reference tile folders")
     p.add_argument("--store", nargs="+", required=True, metavar="NAME=PATH")
     p.add_argument("--ref", nargs="+", required=True, metavar="NAME=DIR")
@@ -216,6 +222,10 @@ def main(argv=None):
         print(run_area(args.out_dir, area, densities=args.density, variants=args.variants,
                        tools=args.tools, lastools_dir=args.lastools_dir,
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep))  # fmt: skip
+    elif args.command == "sensitivity":
+        from alsdb.benchmark.sensitivity import run
+
+        print(run(args.scenes_dir, args.out_csv, workers=args.workers, keep=args.keep))
     elif args.command == "compare":
         from alsdb.benchmark.compare import compare
 
