@@ -412,8 +412,14 @@ def _window(truth):
     return (x0, y1 - n, x0 + n, y1), n
 
 
-def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=None):
-    """Process the scene's LAZ with each tool; save core-window rasters to ``preds.npz``."""
+def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=None,
+              timeout=3600):  # fmt: skip
+    """Process the scene's LAZ with each tool; save core-window rasters to ``preds.npz``.
+
+    A failing or hung external tool (lasR, LAStools; killed after *timeout*
+    seconds) is recorded under ``"failed"`` in ``timings.json`` and the
+    scene is scored without it. alsdb errors still raise.
+    """
     import rasterio
     import zarr
     from rasterio.windows import from_bounds
@@ -423,7 +429,7 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
     truth = np.load(scene_dir / "truth.npz")
     bounds, n = _window(truth)
     laz = scene_dir / "laz"
-    preds, timings = {}, {}
+    preds, timings, failed = {}, {}, {}
 
     def tif(path):
         with rasterio.open(path) as ds:
@@ -449,27 +455,44 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
             g = zarr.open(str(store), mode="r")["1m"]
             preds[f"alsdb_{method}"] = np.asarray(g["chm"][0, :n, :n], np.float32)
             preds[f"alsdb_dtm_{method}"] = np.asarray(g["dtm"][0, :n, :n], np.float32)
+
+    def external(name, work):
+        t = time.perf_counter()
+        try:
+            work()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            failed[name] = str(exc)[-2000:]
+            print(f"{scene_dir.name}: {name} failed, scored without it: "
+                  f"{str(exc).splitlines()[0]}", flush=True)  # fmt: skip
+            return
+        timings[name] = time.perf_counter() - t
+
     if "lasr" in tools:
         out = scene_dir / "lasr"
         shutil.rmtree(out, ignore_errors=True)
-        t = time.perf_counter()
-        subprocess.run(_pixi("lasr", "python", "-m", "alsdb.benchmark", "lasr", laz, out,
-                             "--workers", 1, "--veg", 5, repo=repo),
-                       check=True, capture_output=True)  # fmt: skip
-        timings["lasr"] = time.perf_counter() - t
-        for method in METHODS:
-            preds[f"lasr_{method}"] = tif(out / method / f"SYN_{year}_scene.tif")
+
+        def lasr():
+            subprocess.run(_pixi("lasr", "python", "-m", "alsdb.benchmark", "lasr", laz, out,
+                                 "--workers", 1, "--veg", 5, repo=repo),
+                           check=True, capture_output=True, timeout=timeout)  # fmt: skip
+            for method in METHODS:
+                preds[f"lasr_{method}"] = tif(out / method / f"SYN_{year}_scene.tif")
+
+        external("lasr", lasr)
     if "lastools" in tools:
         from alsdb.benchmark import lastools
 
         out = scene_dir / "lastools"
         shutil.rmtree(out, ignore_errors=True)
-        t = time.perf_counter()
-        lastools.run(laz, out, veg_classes=(5,), lastools_dir=lastools_dir, products=("spikefree",))
-        timings["lastools"] = time.perf_counter() - t
-        preds["lastools_spikefree"] = tif(out / "spikefree" / f"SYN_{year}_scene.tif")
+
+        def lastools_spikefree():
+            lastools.run(laz, out, veg_classes=(5,), lastools_dir=lastools_dir,
+                         products=("spikefree",), timeout=timeout)  # fmt: skip
+            preds["lastools_spikefree"] = tif(out / "spikefree" / f"SYN_{year}_scene.tif")
+
+        external("lastools", lastools_spikefree)
     np.savez_compressed(scene_dir / "preds.npz", **preds)
-    (scene_dir / "timings.json").write_text(json.dumps(timings, indent=2))
+    (scene_dir / "timings.json").write_text(json.dumps({**timings, "failed": failed}, indent=2))
     return preds
 
 

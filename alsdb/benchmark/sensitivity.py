@@ -92,13 +92,24 @@ def sweep_scene(scene, keep=False):
     return rows
 
 
-def run(scenes_dir, out_csv, *, workers=1, keep=False):
-    """Sweep every unfinished scene under *scenes_dir*; append rows to *out_csv*."""
+def scenes_to_sweep(scenes_dir, out_csv):
+    """(scenes still to sweep, all eligible scenes) under *scenes_dir*."""
     scenes = sorted(
         p for p in Path(scenes_dir).iterdir() if (p / "truth.npz").exists() and (p / "laz").is_dir()
     )
+    # A benchmark still running in the same folder writes scenes as it goes:
+    # take only those it has finished and scored.
+    scored = Path(scenes_dir) / "results.csv"
+    if scored.exists():
+        finished = synthetic.finished_scenarios(scored)
+        scenes = [s for s in scenes if s.name in finished]
     done = synthetic.finished_scenarios(out_csv)
-    todo = [s for s in scenes if s.name not in done]
+    return [s for s in scenes if s.name not in done], scenes
+
+
+def run(scenes_dir, out_csv, *, workers=1, keep=False):
+    """Sweep every unfinished scene under *scenes_dir*; append rows to *out_csv*."""
+    todo, scenes = scenes_to_sweep(scenes_dir, out_csv)
     print(f"{len(todo)} of {len(scenes)} scenes to sweep", flush=True)
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(sweep_scene, s, keep): s for s in todo}

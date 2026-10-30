@@ -167,9 +167,18 @@ def _succeeded(result, target):
     return ok and Path(target).is_file()
 
 
-def _call(command, env, target):
-    result = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
+def _call(command, env, target, timeout=None):
     target = Path(target)
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, env=env, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:  # the child is killed by subprocess.run
+        target.unlink(missing_ok=True)  # a hung las2dem leaves an empty output behind
+        raise RuntimeError(
+            f"LAStools timed out after {timeout} s for {target}\n"
+            f"command: {' '.join(map(str, command))}"
+        ) from exc
     if not _succeeded(result, target):
         # LAStools often prints only warnings; say which check failed and what
         # did appear, so a renamed or missing output is distinguishable from a crash.
@@ -199,6 +208,7 @@ def run(
     hag_dir=None,
     n_workers=1,
     tiles=None,
+    timeout=3600,
 ):
     """Reference CHM tiles from classified LAS/LAZ with LAStools, one file per tile.
 
@@ -217,6 +227,8 @@ def run(
     alsdb's buffered tiles. Finished outputs are skipped, so rerunning resumes.
     *hag_dir* reuses existing ``lasheight -replace_z`` outputs named like the
     input tiles; tiles missing there are normalized into ``<out_dir>/hag/``.
+    Each LAStools call is killed after *timeout* seconds (``None``: no limit);
+    a synthetic-grid ``las2dem -spike_free`` once hung for two days.
     """
     products = tuple(products)
     if not set(products) <= set(PRODUCTS):
@@ -247,6 +259,7 @@ def run(
                 [lasheight, "-i", str(path), "-replace_z", "-olaz", "-o", str(hag), "-fail"],
                 env,
                 hag,
+                timeout,
             )
         row = {"tile": path.name, "freeze_distance": freeze_distance}
         if "spikefree" in products and not targets["spikefree"].is_file():
@@ -263,7 +276,7 @@ def run(
                 "-kill", str(max_triangle_edge), "-step", str(resolution),
                 "-nbits", "32", "-no_kml", "-fail", "-o", str(targets["spikefree"]),
             ]  # fmt: skip
-            _call(command, env, targets["spikefree"])
+            _call(command, env, targets["spikefree"], timeout)
         if "max" in products and not targets["max"].is_file():
             # lascanopy appends "_max" to the output name it is given.
             stub = targets["max"].with_name(f"{stem}.tif")
@@ -273,7 +286,7 @@ def run(
                 "-max", "-height_cutoff", "0", "-step", str(resolution), "-fail",
                 "-o", str(stub),
             ]  # fmt: skip
-            _call(command, env, written)
+            _call(command, env, written, timeout)
             written.rename(targets["max"])
         return row
 

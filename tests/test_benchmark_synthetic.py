@@ -73,7 +73,7 @@ def test_valley_crowns_are_not_clipped():
              "r": np.array([1.5]), "base": np.array([1.5]), "cone": np.array([False])}  # fmt: skip
     ground = terrain_height("rolling", 125.7, 188.5)
     assert ground < terrain_height("rolling", *np.meshgrid([0, size], [0, size])).min() - 5
-    occ, origin, zmin = synthetic.voxelise(trees, "rolling", size, voxel)
+    occ, _origin, zmin = synthetic.voxelise(trees, "rolling", size, voxel)
     k = np.nonzero(occ.any(axis=(0, 1)))[0]
     assert zmin + k.min() * voxel <= ground + 1.5 + voxel  # crown base kept
     assert zmin + (k.max() + 1) * voxel >= ground + 5.0 - voxel  # crown top kept
@@ -86,3 +86,55 @@ def test_crown_density_gives_the_stand_plant_area_index(scene):
     assert meta["pad"] * meta["voxels"] * voxel**3 / size**2 == pytest.approx(meta["pai"])
     first = (out / "forest.vox").read_text().splitlines()[6].split()
     assert float(first[3]) == pytest.approx(meta["pad"], rel=1e-5)
+
+
+def _hanging_lastools(tmp_path):
+    """Fake LAStools: answers -version, otherwise hangs like las2dem did on the grid."""
+    bin_dir = tmp_path / "lastools_bin"
+    bin_dir.mkdir()
+    for name in ("lasheight64", "las2dem64", "lascanopy64"):
+        exe = bin_dir / name
+        exe.write_text('#!/bin/sh\n[ "$1" = "-version" ] && echo fake && exit 0\nsleep 30\n')
+        exe.chmod(0o755)
+    return bin_dir
+
+
+def test_hung_lastools_call_is_killed_and_its_empty_output_removed(tmp_path):
+    from alsdb.benchmark import lastools
+
+    target = tmp_path / "out.tif"
+    target.touch()
+    with pytest.raises(RuntimeError, match="timed out after 0.5 s"):
+        lastools._call(["sleep", "30"], None, target, timeout=0.5)
+    assert not target.exists()
+
+
+def test_scene_is_scored_without_a_hung_external_tool(scene, tmp_path):
+    import pdal
+
+    out, _ = scene
+    laz = out / "laz"
+    laz.mkdir(exist_ok=True)
+    pts = np.zeros(10, dtype=[("X", "f8"), ("Y", "f8"), ("Z", "f8"), ("Classification", "u1")])
+    pts["X"], pts["Y"], pts["Z"] = synthetic.X0 + 20 + np.arange(10), synthetic.Y0 + 20, 300.0
+    pts["Classification"] = 2
+    pdal.Pipeline(json.dumps([{"type": "writers.las", "filename": str(laz / "SYN_2020_scene.laz"),
+                               "a_srs": synthetic.CRS}]), arrays=[pts]).execute()  # fmt: skip
+    preds = synthetic.run_tools(out, ("lastools",), lastools_dir=_hanging_lastools(tmp_path),
+                                timeout=1)  # fmt: skip
+    assert preds == {}
+    failed = json.loads((out / "timings.json").read_text())["failed"]
+    assert "timed out" in failed["lastools"]
+
+
+def test_sensitivity_takes_only_scenes_the_grid_has_scored(tmp_path):
+    from alsdb.benchmark import sensitivity
+
+    for name in ("done", "swept", "running"):
+        (tmp_path / name / "laz").mkdir(parents=True)
+        (tmp_path / name / "truth.npz").write_bytes(b"")
+    synthetic.append_results(tmp_path / "results.csv", [{"scenario": n} for n in ("done", "swept")])
+    synthetic.append_results(tmp_path / "out.csv", [{"scenario": "swept"}])
+    todo, eligible = sensitivity.scenes_to_sweep(tmp_path, tmp_path / "out.csv")
+    assert [p.name for p in todo] == ["done"]
+    assert [p.name for p in eligible] == ["done", "swept"]
