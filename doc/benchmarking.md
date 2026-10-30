@@ -13,6 +13,8 @@ processes; alsdb never installs or links them.
 | `alsdb.benchmark.synthetic` | HELIOS++ surveys of generated forests, scored against exact truth | `pixi install -e helios` |
 | `alsdb.benchmark.uls` | real canopies from UAV laser scanning at ALS densities, thinned and via HELIOS++ | ULS tiles with GPS time; `helios` for the HELIOS++ variant |
 | `alsdb.benchmark.timing` | compute time of all three tools on the same work | licensed LAStools, `lasr` |
+| `alsdb.benchmark.decimated` | decimated copies of a dense ALS survey scored against its full density | the survey and its decimated copies |
+| `alsdb.benchmark.sensitivity` | spike-free freeze distances on finished synthetic or ULS scenes | `spikefree` |
 
 ## Reference tiles
 
@@ -170,6 +172,44 @@ many pulses (only 32% of pulses complete on DE-Eco), so the thinned samples
 have fewer late returns than a real survey. Existing CHMs delivered with ULS
 data are often made with one of the tools under test (e.g. LAStools
 spike-free) and must not be used as truth.
+
+### Decimated aircraft ALS
+
+```bash
+pixi run -e spikefree python -m alsdb.benchmark decimated <out_dir> \
+    --original <site>/original --site PetitBuech --x0 937650 --y0 6396650 --core 200 \
+    --crs EPSG:2154 --tools alsdb lasr
+```
+
+For sites delivered as a dense survey plus decimated copies (`pd_00p5/` ...
+`pd_08/`, `pd_04_ft_*/` next to `original/`; or `--versions NAME=DIR ...`),
+each copy of the area becomes one scene. The reference comes from the
+original as for ULS, with the centre truth over 0.4 m (enough returns at ~30
+pulses/m2); only ground, water and vegetation classes are used, vegetation
+written as class 5. Unlike thinned ULS, the input keeps the aircraft sensor
+and footprint. `--tools` without names only builds the scenes (for
+`sensitivity`).
+
+### Robustness
+
+lasR and LAStools run as external programs. Each LAStools call is killed after
+an hour (`timeout`): `las2dem -spike_free` once looped on a synthetic scene
+(`WARNING: using brute_locate`). A failed or hung external tool is recorded
+under `"failed"` in the scene's `timings.json` and the scene is scored without
+it, so compare tools only on scenes where all of them succeeded.
+
+### Freeze-distance sensitivity
+
+```bash
+pixi run -e spikefree python -m alsdb.benchmark sensitivity <scenes_dir> <out.csv> --workers 8
+```
+
+reruns alsdb spike-free on every finished scene of a `synthetic` or `uls`
+folder with freeze distances of 2, 3 (`"auto"`) and 5 first-return spacings,
+`max(3 spacings, 1.5 m)` and a fixed 1.5 m, and scores each like the
+benchmark (one row per scene and setting; resumable). Scenes that the
+benchmark in the same folder has not scored yet are skipped. Results:
+[chm_methods.md](chm_methods.md#how-sensitive-is-the-freeze-distance).
 
 ## What agreement to expect
 

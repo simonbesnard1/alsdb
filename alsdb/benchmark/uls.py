@@ -153,8 +153,16 @@ class Scan:
     nadir_pulses_per_m2: float
 
 
-def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=8):
-    """Stream the area's points once; see :class:`Scan`."""
+def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=8, voxels=True,
+              keep_classes=None):  # fmt: skip
+    """Stream the area's points once; see :class:`Scan`.
+
+    ``voxels=False`` skips the voxel profiles (only the HELIOS++ variant needs
+    them; on steep terrain they take gigabytes) and ``candidate_fraction=0``
+    the pulse candidates (only the thinned variant needs them).
+    *keep_classes* restricts every product to those classes (default: all
+    but noise).
+    """
     import pdal
 
     bx0, by0, bx1, by1 = area.box
@@ -165,7 +173,9 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
     ns = round(size / SURFACE_CELL)
     ng = round(size / GROUND_CELL)
     nv = round(size / VOXEL) + 1  # voxel columns centred on multiples of VOXEL from bx0
-    nz = int(np.ceil((zhi + 1 - zmin) / VOXEL))
+    nz = int(np.ceil((zhi + 1 - zmin) / VOXEL)) if voxels else 0
+    if not voxels:
+        nv = 0
     surface = np.full(ns * ns, -np.inf)
     veg = np.zeros(nv * nv * nz)
     ground_w = np.zeros(nv * nv)
@@ -175,7 +185,10 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
     for f in files:
         pipe = pdal.Pipeline(json.dumps([str(f), {"type": "filters.crop", "bounds": bounds}]))
         for a in pipe.iterator(chunk_size=CHUNK):
-            a = a[~np.isin(a["Classification"], NOISE_CLASSES)]
+            if keep_classes is None:
+                a = a[~np.isin(a["Classification"], NOISE_CLASSES)]
+            else:
+                a = a[np.isin(a["Classification"], keep_classes)]
             points += a.size
             x, y, z = a["X"], a["Y"], a["Z"]
             inbox = (x >= bx0) & (x < bx1) & (y >= by0) & (y < by1)
@@ -194,22 +207,24 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
                 ground_parts.append(np.column_stack((cell[o][first], x[g][o][first],
                                                      y[g][o][first], z[g][o][first])))  # fmt: skip
             nadir = np.abs(a["ScanAngleRank"]) <= max_angle
-            # voxel profiles from near-nadir returns, each weighted 1 / its pulse's returns
-            v = nadir & (x >= bx0 - VOXEL / 2) & (x < bx1 + VOXEL / 2) \
-                & (y >= by0 - VOXEL / 2) & (y < by1 + VOXEL / 2)  # fmt: skip
-            iv = np.floor((x[v] - bx0) / VOXEL + 0.5).astype(np.int64)
-            jv = np.floor((y[v] - by0) / VOXEL + 0.5).astype(np.int64)
-            kv = np.clip(((z[v] - zmin) / VOXEL).astype(np.int64), 0, nz - 1)
-            w = 1.0 / np.maximum(a["NumberOfReturns"][v], 1)
-            gv = ground[v]
-            col = iv * nv + jv
-            ground_w += np.bincount(col[gv], w[gv], minlength=nv * nv)
-            veg += np.bincount(col[~gv] * nz + kv[~gv], w[~gv], minlength=nv * nv * nz)
             nadir_first += int(np.sum(nadir & inbox & (a["ReturnNumber"] == 1)))
-            # pulses preselected by hash: all their returns, wherever they are stored
-            t, tag = pulse_keys(a[nadir])
-            keep = pulse_hash(t, tag, seed) < candidate_fraction
-            cand_parts.append(a[nadir][keep])
+            if voxels:
+                # voxel profiles from near-nadir returns, each weighted 1 / its pulse's returns
+                v = nadir & (x >= bx0 - VOXEL / 2) & (x < bx1 + VOXEL / 2) \
+                    & (y >= by0 - VOXEL / 2) & (y < by1 + VOXEL / 2)  # fmt: skip
+                iv = np.floor((x[v] - bx0) / VOXEL + 0.5).astype(np.int64)
+                jv = np.floor((y[v] - by0) / VOXEL + 0.5).astype(np.int64)
+                kv = np.clip(((z[v] - zmin) / VOXEL).astype(np.int64), 0, nz - 1)
+                w = 1.0 / np.maximum(a["NumberOfReturns"][v], 1)
+                gv = ground[v]
+                col = iv * nv + jv
+                ground_w += np.bincount(col[gv], w[gv], minlength=nv * nv)
+                veg += np.bincount(col[~gv] * nz + kv[~gv], w[~gv], minlength=nv * nv * nz)
+            if candidate_fraction > 0:
+                # pulses preselected by hash: all their returns, wherever they are stored
+                t, tag = pulse_keys(a[nadir])
+                keep = pulse_hash(t, tag, seed) < candidate_fraction
+                cand_parts.append(a[nadir][keep])
     ground = np.concatenate(ground_parts) if ground_parts else np.zeros((0, 4))
     o = np.lexsort((ground[:, 3], ground[:, 0]))  # lowest per cell across chunks
     ground = ground[o][np.r_[True, ground[o][1:, 0] != ground[o][:-1, 0]]][:, 1:]
@@ -217,7 +232,8 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
     return Scan(
         box=area.box, zmin=zmin, ground=ground, surface=surface.reshape(ns, ns),
         veg=veg.reshape(nv, nv, nz), ground_weight=ground_w.reshape(nv, nv),
-        candidates=np.concatenate(cand_parts), crs=area.crs or crs, points=points,
+        candidates=np.concatenate(cand_parts) if cand_parts else np.zeros(0),
+        crs=area.crs or crs, points=points,
         nadir_pulses_per_m2=nadir_first / size**2,
     )  # fmt: skip
 
@@ -244,8 +260,13 @@ def _terrain(ground, box):
     return at
 
 
-def reference(scan, area):
-    """Full-density DTM and CHM truths on the core (1 m, north-up) and the 1 m terrain grid."""
+def reference(scan, area, centre=0.2):
+    """Full-density DTM and CHM truths on the core (1 m, north-up) and the 1 m terrain grid.
+
+    ``chm_centre`` is the highest return within the *centre* x *centre* m
+    around each cell centre (0.2 m for ULS; ~0.4 m for 30 pulses/m2 ALS, so
+    that most windows hold a return).
+    """
     at = _terrain(scan.ground, scan.box)
     size = scan.box[2] - scan.box[0]
     g = np.arange(round(size) + 1, dtype=float)
@@ -256,7 +277,10 @@ def reference(scan, area):
     hag = scan.surface - at(cx, cy)  # [y, x], 10 cm
     m0, nc, per = round(area.margin), round(area.core), round(1 / SURFACE_CELL)
     core = hag[m0 * per : (m0 + nc) * per, m0 * per : (m0 + nc) * per].reshape(nc, per, nc, per)
-    mid = slice(per // 2 - 1, per // 2 + 1)  # the 20 cm around the cell centre
+    half = round(centre / SURFACE_CELL / 2)
+    if half < 1 or 2 * half > per:
+        raise ValueError(f"centre must be between {2 * SURFACE_CELL} and 1 m")
+    mid = slice(per // 2 - half, per // 2 + half)  # the centre x centre m around the cell centre
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # empty cells stay NaN
         chm_max = np.nanmax(core, axis=(1, 3))

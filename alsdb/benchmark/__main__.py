@@ -124,6 +124,25 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser(
+        "decimated", help="decimated copies of a dense ALS survey vs its full density"
+    )
+    p.add_argument("out_dir")
+    p.add_argument("--original", required=True, help="folder of the dense LAZ tiles")
+    p.add_argument("--versions", nargs="*", metavar="NAME=DIR",
+                   help="decimated copies; default: the pd_* folders beside --original")  # fmt: skip
+    p.add_argument("--site", required=True)
+    p.add_argument("--x0", type=float, required=True, help="core lower-left x (whole metres)")
+    p.add_argument("--y0", type=float, required=True)
+    p.add_argument("--core", type=float, default=200.0)
+    p.add_argument("--margin", type=float, default=15.0)
+    p.add_argument("--year", type=int, default=2020, help="label only")
+    p.add_argument("--crs", help="default: from the LAZ headers")
+    p.add_argument("--tools", nargs="*", default=["alsdb", "lasr"],
+                   choices=["alsdb", "lasr", "lastools"], help="none given: only build the scenes")  # fmt: skip
+    p.add_argument("--lastools-dir")
+    p.add_argument("--keep", action="store_true", help="keep tool products")
+
     p = sub.add_parser("sensitivity", help="spike-free freeze distances on finished scenes")
     p.add_argument("scenes_dir", help="folder of synthetic or uls scenes")
     p.add_argument("out_csv")
@@ -222,6 +241,19 @@ def main(argv=None):
         print(run_area(args.out_dir, area, densities=args.density, variants=args.variants,
                        tools=args.tools, lastools_dir=args.lastools_dir,
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep))  # fmt: skip
+    elif args.command == "decimated":
+        from alsdb.benchmark import decimated
+        from alsdb.benchmark.uls import Area
+
+        area = Area(site=args.site, laz_dir=args.original, x0=args.x0, y0=args.y0,
+                    core=args.core, margin=args.margin, year=args.year, crs=args.crs)  # fmt: skip
+        versions = _pairs(args.versions) if args.versions else None
+        if args.tools:
+            print(decimated.run_area(args.out_dir, area, versions, tools=args.tools,
+                                     lastools_dir=args.lastools_dir, keep=args.keep))  # fmt: skip
+        else:
+            for scene in decimated.build_area(args.out_dir, area, versions):
+                print(scene)
     elif args.command == "sensitivity":
         from alsdb.benchmark.sensitivity import run
 

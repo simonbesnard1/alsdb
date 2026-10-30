@@ -83,6 +83,61 @@ insertion elevation rather than LAStools' configurable height intervals. High
 outliers still need classification/filtering; triangle freezing prevents downward
 pits rather than identifying all erroneous high returns.
 
+### How sensitive is the freeze distance?
+
+Measured with `python -m alsdb.benchmark sensitivity` (see
+[benchmarking.md](benchmarking.md)): alsdb spike-free with the freeze distance
+at 2, 3 (`k3` = `"auto"`) and 5 first-return spacings, `max(3 spacings, 1.5 m)`
+and a fixed 1.5 m. Scores are against a truth at each 1 m cell centre.
+
+**Real aircraft ALS, decimated** (`python -m alsdb.benchmark decimated`): 9
+areas of 200 m (Chapitre Petit Buech, French Alps: beech and mixed forest on
+17-42 degree slopes, 58-100% cover; Robson Creek, Queensland: tropical
+rainforest), each at 0.5, 1, 2, 4 and 8 pulses/m2 plus three 4 pulses/m2
+copies with fewer returns per pulse, scored against the full-density survey
+(28-33 pulses/m2). Cell MAE, m:
+
+| areas | scenes | k2 | k3 (auto) | k5 | max(k3, 1.5 m) | fixed 1.5 m |
+|---|---|---|---|---|---|---|
+| Petit Buech, cover 58-82% | 32 | 0.93 | 0.73 | 0.90 | 0.73 | 0.89 |
+| Petit Buech, cover 99-100% | 16 | 1.28 | 0.91 | 1.13 | 0.91 | 1.26 |
+| Robson Creek | 24 | 2.50 | 1.75 | 2.10 | 1.75 | 2.37 |
+
+Three spacings had the lowest MAE in 60 of 72 scenes, at every density,
+slope and footprint variant. At 8 pulses/m2 a slightly larger value was
+better in all 9 areas: `max(k3, 1.5 m)` (about 4 spacings there) lowered the
+MAE by 0.01-0.10 m and moved the mean height from 0.2-0.6 m low to about
+unbiased; below about 4 pulses/m2 it equals `"auto"`. Thinned UAV laser
+scanning (DE-Eco beech, DE-Tha spruce) showed the same at high density.
+
+**Synthetic HELIOS++ scenes** (48 scenes: 4 terrains x 4 forest types x 0.5 /
+2 / 10 pulses/m2; seeds 1-4 on flat open and conifer scenes varied by at most
+0.1 m). |Mean CHM height error| / cell MAE, m, mean over the four terrains:
+
+| forest | pulses/m2 | k2 | k3 (auto) | k5 | fixed 1.5 m |
+|---|---|---|---|---|---|
+| open | 0.5 | 0.21 / 0.60 | 0.03 / 0.66 | 0.53 / 1.07 | 0.91 / 1.23 |
+| open | 10 | 0.09 / 0.25 | 0.02 / 0.28 | 0.03 / 0.32 | 0.02 / 0.31 |
+| conifer | 0.5 | 0.32 / 1.85 | 1.61 / 2.72 | 4.40 / 4.86 | 3.36 / 4.09 |
+| conifer | 10 | 0.24 / 0.73 | 0.08 / 0.84 | 0.57 / 1.19 | 0.41 / 1.06 |
+| broadleaf | 0.5 | 0.89 / 1.30 | 0.28 / 1.28 | 0.63 / 1.73 | 6.70 / 6.84 |
+| broadleaf | 10 | 0.80 / 0.94 | 0.52 / 0.79 | 0.38 / 0.83 | 0.41 / 0.81 |
+| tropical | 0.5 | 0.74 / 1.58 | 0.10 / 1.69 | 1.27 / 2.35 | 6.90 / 7.15 |
+| tropical | 10 | 0.72 / 1.01 | 0.39 / 0.89 | 0.14 / 1.00 | 0.20 / 0.96 |
+
+Terrain hardly mattered. The synthetic open and conical crowns favoured two
+spacings, closed canopies three to five. A rule built on that (two spacings
+below 90% first-return cover, three above) was tested on the real ALS above
+and rejected: where it switched to two spacings, Petit Buech MAE rose from
+0.73 to 0.93 m. The idealised synthetic crowns (cones, ellipsoids, uniform
+plant density) do not carry over here; prefer the real-data results.
+
+Conclusions: keep `"auto"` (three spacings). A fixed 1.5 m fails on sparse
+data (several metres low on closed canopy at 0.5 pulses/m2).
+`max(3 spacings, 1.5 m)` is a candidate for dense data (8+ pulses/m2): small
+gains on both real sites and in UAV data, but the synthetic conifers
+disagreed, so it is not the default yet.
+
 ## Terrain, holes, and pixel support
 
 Ground TIN interpolation is shared between CHM normalization and TIN DTM output.
