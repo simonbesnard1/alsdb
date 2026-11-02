@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -169,18 +170,38 @@ def _succeeded(result, target):
     return ok and Path(target).is_file()
 
 
+# A licensed LAStools occasionally reports itself "unlicensed" for one call in
+# a long run (lascanopy on Barcelona after hundreds of good tiles), probably
+# when the licence file on the network share cannot be read. Such calls are
+# retried after a pause that grows with each attempt.
+LICENCE_RETRIES = 5
+LICENCE_WAIT = 30.0  # s, times the attempt number
+
+
+def _licence_failure(result):
+    text = result.stderr + result.stdout
+    return "license failure" in text or "(unlicensed)" in text
+
+
 def _call(command, env, target, timeout=None):
     target = Path(target)
-    try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, env=env, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:  # the child is killed by subprocess.run
-        target.unlink(missing_ok=True)  # a hung las2dem leaves an empty output behind
-        raise RuntimeError(
-            f"LAStools timed out after {timeout} s for {target}\n"
-            f"command: {' '.join(map(str, command))}"
-        ) from exc
+    for attempt in range(1, LICENCE_RETRIES + 2):
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, env=env, check=False, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:  # the child is killed by subprocess.run
+            target.unlink(missing_ok=True)  # a hung las2dem leaves an empty output behind
+            raise RuntimeError(
+                f"LAStools timed out after {timeout} s for {target}\n"
+                f"command: {' '.join(map(str, command))}"
+            ) from exc
+        if not _licence_failure(result) or attempt > LICENCE_RETRIES:
+            break
+        target.unlink(missing_ok=True)
+        logger.warning("LAStools licence failure for %s (attempt %d), retrying in %.0f s",
+                       target.name, attempt, LICENCE_WAIT * attempt)  # fmt: skip
+        time.sleep(LICENCE_WAIT * attempt)
     if not _succeeded(result, target):
         # LAStools often prints only warnings; say which check failed and what
         # did appear, so a renamed or missing output is distinguishable from a crash.

@@ -342,3 +342,32 @@ def test_lastools_exit_code_one_with_only_warnings_is_success(
     else:
         with pytest.raises(RuntimeError, match=f"exit code {code}"):
             lastools._call(["las2dem64"], {}, target)
+
+
+def test_lastools_retries_licence_failures(tmp_path, monkeypatch):
+    from alsdb.benchmark import lastools
+
+    target = tmp_path / "tile.tif"
+    unlicensed = SimpleNamespace(
+        returncode=3, stdout="",
+        stderr="ERROR: LAStools lascanopy version 260123 (unlicensed)\nERROR: license failure.",
+    )  # fmt: skip
+    calls = []
+
+    def fake_run(*a, **k):
+        calls.append(1)
+        if len(calls) < 3:
+            return unlicensed
+        target.write_bytes(b"x")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    waits = []
+    monkeypatch.setattr(lastools.subprocess, "run", fake_run)
+    monkeypatch.setattr(lastools.time, "sleep", waits.append)
+    lastools._call(["lascanopy64"], {}, target)
+    assert len(calls) == 3 and waits == [lastools.LICENCE_WAIT, 2 * lastools.LICENCE_WAIT]
+
+    calls.clear()
+    monkeypatch.setattr(lastools.subprocess, "run", lambda *a, **k: unlicensed)
+    with pytest.raises(RuntimeError, match="license failure"):
+        lastools._call(["lascanopy64"], {}, tmp_path / "other.tif")
