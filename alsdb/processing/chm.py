@@ -710,6 +710,8 @@ def compute_chm(
     freeze_distance: float | str = "auto",
     spikefree_first_returns: bool = False,
     height_buffer: float = 0.5,
+    min_pulse_density: float | None = 2.0,
+    max_scan_angle: float | None = 20.0,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",
     lastools_demo: bool = False,
@@ -719,11 +721,14 @@ def compute_chm(
 ) -> None:
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
-    ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    ``method`` (CHM/all): "max", "pitfree", "tin" (first-return TIN),
+    "highest_subcell_tin", or "spikefree" (compiled constrained Delaunay; all
+    eligible return numbers,
     first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
     number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
-    from the pulse density, Fischer et al. 2024).
+    from the pulse density, Fischer et al. 2024). Quality flags mark cells
+    below ``min_pulse_density`` pulses/m2 (5 m cells) and above
+    ``max_scan_angle`` degrees (mean of first returns); ``None`` disables a flag.
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -767,11 +772,14 @@ def compute_dtm(
 ) -> None:
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
-    ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    ``method`` (CHM/all): "max", "pitfree", "tin" (first-return TIN),
+    "highest_subcell_tin", or "spikefree" (compiled constrained Delaunay; all
+    eligible return numbers,
     first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
     number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
-    from the pulse density, Fischer et al. 2024).
+    from the pulse density, Fischer et al. 2024). Quality flags mark cells
+    below ``min_pulse_density`` pulses/m2 (5 m cells) and above
+    ``max_scan_angle`` degrees (mean of first returns); ``None`` disables a flag.
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -812,11 +820,14 @@ def compute_dsm(
 ) -> None:
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
-    ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    ``method`` (CHM/all): "max", "pitfree", "tin" (first-return TIN),
+    "highest_subcell_tin", or "spikefree" (compiled constrained Delaunay; all
+    eligible return numbers,
     first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
     number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
-    from the pulse density, Fischer et al. 2024).
+    from the pulse density, Fischer et al. 2024). Quality flags mark cells
+    below ``min_pulse_density`` pulses/m2 (5 m cells) and above
+    ``max_scan_angle`` degrees (mean of first returns); ``None`` disables a flag.
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -873,6 +884,8 @@ def compute_all(
     freeze_distance: float | str = "auto",
     spikefree_first_returns: bool = False,
     height_buffer: float = 0.5,
+    min_pulse_density: float | None = 2.0,
+    max_scan_angle: float | None = 20.0,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",
     lastools_demo: bool = False,
@@ -882,11 +895,14 @@ def compute_all(
 ) -> None:
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
-    ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    ``method`` (CHM/all): "max", "pitfree", "tin" (first-return TIN),
+    "highest_subcell_tin", or "spikefree" (compiled constrained Delaunay; all
+    eligible return numbers,
     first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
     number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
-    from the pulse density, Fischer et al. 2024).
+    from the pulse density, Fischer et al. 2024). Quality flags mark cells
+    below ``min_pulse_density`` pulses/m2 (5 m cells) and above
+    ``max_scan_angle`` degrees (mean of first returns); ``None`` disables a flag.
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 

@@ -17,6 +17,8 @@ NO_OBSERVATIONS = 16
 EXTRAPOLATED = 32
 NEGATIVE_HAG = 64
 REJECTED = 128
+LOW_PULSE_DENSITY = 256
+HIGH_SCAN_ANGLE = 512
 QUALITY_FLAGS = {
     "observed": OBSERVED,
     "interpolated": INTERPOLATED,
@@ -26,7 +28,29 @@ QUALITY_FLAGS = {
     "terrain_extrapolated": EXTRAPOLATED,
     "negative_hag": NEGATIVE_HAG,
     "rejected_height_or_outlier": REJECTED,
+    "low_pulse_density": LOW_PULSE_DENSITY,
+    "high_scan_angle": HIGH_SCAN_ANGLE,
 }
+PULSE_DENSITY_CELL = 5.0  # m, cells for the pulse-density layer and local freeze
+
+# CHMConfig fields added after stores were written. At these defaults they are
+# left out of the provenance fingerprint, so existing runs still resume.
+COMPATIBLE_DEFAULTS = {
+    "spikefree_first_returns": False,
+    "min_pulse_density": 2.0,
+    "max_scan_angle": 20.0,
+}
+
+
+def provenance_settings(config):
+    """CHM settings recorded in a run's provenance fingerprint."""
+    from dataclasses import asdict
+
+    return {
+        k: v
+        for k, v in asdict(config).items()
+        if not (k in COMPATIBLE_DEFAULTS and v == COMPATIBLE_DEFAULTS[k])
+    }
 
 
 @dataclass(frozen=True)
@@ -56,9 +80,21 @@ class CHMConfig:
     lastools_executable: str = "las2dem64"
     lastools_demo: bool = False
     freeze_interval: float = 0.25
+    # Quality flags only (nothing is removed): Fischer et al. (2024) recommend
+    # masking below 2 pulses/m2 (4 in rugged terrain with dense vegetation)
+    # and scan angles above 20 degrees.
+    min_pulse_density: float | None = 2.0
+    max_scan_angle: float | None = 20.0
 
     def __post_init__(self):
-        if self.method not in ("max", "pitfree", "highest_subcell_tin", "spikefree", "lastools"):
+        if self.method not in (
+            "max",
+            "pitfree",
+            "tin",
+            "highest_subcell_tin",
+            "spikefree",
+            "lastools",
+        ):
             raise ValueError("Unknown CHM method: " + self.method)
         for name in (
             "max_ground_distance",
@@ -67,6 +103,8 @@ class CHMConfig:
             "max_triangle_edge",
             "outlier_multiplier",
             "freeze_interval",
+            "min_pulse_density",
+            "max_scan_angle",
         ):
             value = getattr(self, name)
             if value is not None and (not np.isfinite(value) or value <= 0):
@@ -151,6 +189,23 @@ def surface_mask(arr, config):
     if config.method == "spikefree" and config.spikefree_first_returns:
         mask &= arr["ReturnNumber"] == 1
     return mask
+
+
+def pulse_density_grid(pulses, bbox, cell=PULSE_DENSITY_CELL):
+    """Pulses per m2 in *cell* squares on multiples of *cell* covering *bbox*.
+
+    *pulses* holds one return per pulse (first returns). Returns
+    ``(density[row, col], x0, y1)`` north-up; aligned cells give neighbouring
+    tiles the same values.
+    """
+    x0, y0 = np.floor(bbox[0] / cell) * cell, np.floor(bbox[1] / cell) * cell
+    x1, y1 = np.ceil(bbox[2] / cell) * cell, np.ceil(bbox[3] / cell) * cell
+    nx, ny = max(1, round((x1 - x0) / cell)), max(1, round((y1 - y0) / cell))
+    col = np.floor((pulses["X"] - x0) / cell).astype(np.int64)
+    row = np.floor((y1 - pulses["Y"]) / cell).astype(np.int64)
+    inside = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
+    counts = np.bincount(row[inside] * nx + col[inside], minlength=nx * ny)
+    return counts.reshape(ny, nx) / cell**2, float(x0), float(y1)
 
 
 def auto_freeze_distance(points):
@@ -272,6 +327,7 @@ def reconstruct_chm(
     count = bin_counts(points)
     canopy_count = bin_counts(points, point_is_canopy) if diagnostics else None
     out = np.full(grid.shape, np.nan, np.float32)
+    pulses = arr[arr["ReturnNumber"] == 1] if "ReturnNumber" in arr.dtype.names else arr
     freeze_distance = config.freeze_distance
     if freeze_distance == "auto" and len(points):
         freeze_distance = auto_freeze_distance(points)
@@ -279,7 +335,6 @@ def reconstruct_chm(
         from alsdb.processing.spikefree import local_freeze_grid
 
         # Pulses: first returns of every non-noise class in the buffered tile.
-        pulses = arr[arr["ReturnNumber"] == 1] if "ReturnNumber" in arr.dtype.names else arr
         extent = (
             min(points["X"].min(), bbox[0]),
             min(points["Y"].min(), bbox[1]),
@@ -298,6 +353,16 @@ def reconstruct_chm(
                 thresholds=config.pitfree_thresholds,
                 max_edge=config.pitfree_max_edge,
                 base_max_edge=config.max_triangle_edge,
+            )
+        elif config.method == "tin":
+            from alsdb.processing.chm import _delaunay_raster
+
+            out = _delaunay_raster(
+                points,
+                bbox,
+                resolution,
+                value_field="HeightAboveGround",
+                max_edge=config.max_triangle_edge,
             )
         elif config.method == "highest_subcell_tin":
             out = _spikefree_rasterise(
@@ -359,6 +424,28 @@ def reconstruct_chm(
     negative = bin_counts(candidates, candidates["NegativeHAG"] > 0) > 0
     flags[negative] |= NEGATIVE_HAG
     flags[rejected] |= REJECTED
+    # Pulse density per 5 m cell of the buffered tile, read at cell centres.
+    if len(pulses):
+        extent = (pulses["X"].min(), pulses["Y"].min(), pulses["X"].max(), pulses["Y"].max())
+        density, dx0, dy1 = pulse_density_grid(pulses, extent)
+    else:
+        density, dx0, dy1 = np.zeros((1, 1)), bbox[0], bbox[3]
+    dcol = np.clip(((gx - dx0) // PULSE_DENSITY_CELL).astype(np.int64), 0, density.shape[1] - 1)
+    drow = np.clip(((dy1 - gy) // PULSE_DENSITY_CELL).astype(np.int64), 0, density.shape[0] - 1)
+    pulse_density = density[drow, dcol].reshape(grid.shape).astype(np.float32)
+    scan_angle = np.full(grid.shape, np.nan, np.float32)
+    if "ScanAngleRank" in pulses.dtype.names and len(pulses):
+        inside, cells = grid.point_bins(pulses)
+        n = np.bincount(cells, minlength=grid.nx * grid.ny)
+        total = np.bincount(
+            cells, weights=np.abs(pulses["ScanAngleRank"][inside].astype(float)), minlength=n.size
+        )
+        with np.errstate(invalid="ignore", divide="ignore"):
+            scan_angle = np.where(n > 0, total / n, np.nan).reshape(grid.shape).astype(np.float32)
+    if config.min_pulse_density is not None:
+        flags[pulse_density < config.min_pulse_density] |= LOW_PULSE_DENSITY
+    if config.max_scan_angle is not None:
+        flags[scan_angle > config.max_scan_angle] |= HIGH_SCAN_ANGLE
     return {
         "chm": out,
         "chm_quality": flags.astype(np.float32),
@@ -370,4 +457,6 @@ def reconstruct_chm(
         "chm_terrain_slope": terrain.slope(np.column_stack((gx.ravel(), gy.ravel())))
         .reshape(grid.shape)
         .astype(np.float32),
+        "chm_pulse_density": pulse_density,
+        "chm_scan_angle": scan_angle,
     }

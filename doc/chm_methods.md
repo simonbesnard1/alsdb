@@ -15,6 +15,7 @@ All horizontal and vertical coordinates must use compatible metric units.
 |---|---|---|
 | `max` | Bin normalized eligible returns; `height_statistic` can select another statistic | `first_returns_only`, `height_statistic` |
 | `pitfree` | Maximum of height-threshold TIN layers (Khosravipour 2014, as lidR `pitfree()`) | `pitfree_thresholds`, `pitfree_max_edge`, optional `max_triangle_edge` |
+| `tin` | Delaunay TIN of all first returns (vegetation and ground), no pit protection; as Fischer et al. (2024) `CHMtin` and lidR `dsmtin(max_edge = 0, highest = FALSE)` | optional `max_triangle_edge` |
 | `highest_subcell_tin` | Legacy: highest return per small subcell, followed by a TIN; has no pit protection (mean CHM 2.0 m below LAStools on Barcelona NFI plots), prefer `spikefree` | `spikefree_subcell_resolution`, optional `max_triangle_edge` |
 | `spikefree` | Incremental constrained Delaunay with triangle freezing (Khosravipour 2016) | `freeze_distance` (`"auto"` default, `"local"` = Fischer et al. 2024, or metres), `spikefree_first_returns`, `height_buffer`, optional `max_triangle_edge` |
 | `lastools` | Explicit external las2dem spike-free backend | `lastools_executable`, `freeze_interval`, `freeze_distance`, `height_buffer` |
@@ -231,6 +232,10 @@ from a whole-scene TIN in sparse areas. Mismatched store grids/CRSs are rejected
 - `chm_ground_count`: local retained ground returns.
 - `chm_ground_distance`: nearest retained ground point from the cell centre, metres.
 - `chm_terrain_slope`: local ground-TIN slope, degrees; missing outside the TIN.
+- `chm_pulse_density`: pulses per m² (first returns of all non-noise classes)
+  in 5 m cells aligned to multiples of 5 m, read at the cell centre.
+- `chm_scan_angle`: mean absolute scan angle of the first returns in the cell,
+  degrees; missing without first returns.
 - `chm_quality`: bit mask, stored as exactly representable float32 integers.
 
 | Bit | Meaning |
@@ -243,6 +248,15 @@ from a whole-scene TIN in sparse areas. Mismatched store grids/CRSs are rejected
 | 32 | Cell-centre terrain outside the ground TIN / degenerate ground support |
 | 64 | A candidate canopy return had negative HAG before clamping |
 | 128 | Surface rejected by `max_height` or all local supported returns rejected as outliers |
+| 256 | Pulse density below `min_pulse_density` (default 2 pulses/m²) |
+| 512 | Mean scan angle above `max_scan_angle` (default 20°) |
+
+Bits 256 and 512 follow Fischer et al. (2024), who recommend masking areas
+below 2 pulses/m² averaged over 5-10 m (4 pulses/m² in rugged terrain with
+dense vegetation) and scan angles above 20° when comparing forest structure
+across surveys. alsdb only flags these cells; nothing is removed. Set
+`min_pulse_density=4.0` for steep, dense forest, or `None` to disable a flag.
+Their thresholds come from mostly flat Australian sites.
 
 Flags may coexist. They describe evidence and processing, not a categorical
 land-cover map or uncertainty in metres. Undefined nearest-ground distance is

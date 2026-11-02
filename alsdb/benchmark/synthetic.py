@@ -40,7 +40,20 @@ CRS = "EPSG:25831"
 YEAR = 2020
 TERRAINS = ("flat", "rolling", "steep", "rough")
 FORESTS = ("open", "conifer", "broadleaf", "tropical")
-METHODS = ("pitfree", "spikefree")
+METHODS = ("pitfree", "spikefree")  # run by alsdb and lasR
+# alsdb outputs: name -> compute_all options. "tin" is the first-return TIN
+# and "lspikefree" the locally adaptive first-return spike-free of Fischer et
+# al. (2024), https://doi.org/10.1111/2041-210X.14416.
+ALSDB_METHODS = {
+    "pitfree": {"method": "pitfree"},
+    "spikefree": {"method": "spikefree"},
+    "tin": {"method": "tin"},
+    "lspikefree": {
+        "method": "spikefree",
+        "freeze_distance": "local",
+        "spikefree_first_returns": True,
+    },
+}
 FLIGHT_HEIGHT = 1000.0  # m above the highest terrain point
 SCAN_HALF_ANGLE = 15.0  # degrees; HELIOS++ scanAngle_deg is the half angle
 SPEED = 60.0  # m/s
@@ -448,11 +461,11 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
         db = ALSDatabase(storage_type="local", uri=str(uri))
         db.create(crs=crs)
         db.ingest_many(sorted(laz.glob("*.laz")))
-        for method in METHODS:
+        for method, options in ALSDB_METHODS.items():
             store = scene_dir / "alsdb" / f"{method}.zarr"
             t = time.perf_counter()
             compute_all(db, ALSZarrStore(str(store)), resolution=1.0, year=year, bbox=bounds,
-                        method=method, tile_size=float(n), quality=False)  # fmt: skip
+                        tile_size=float(n), quality=False, **options)  # fmt: skip
             timings[f"alsdb_{method}"] = time.perf_counter() - t
             g = zarr.open(str(store), mode="r")["1m"]
             preds[f"alsdb_{method}"] = np.asarray(g["chm"][0, :n, :n], np.float32)

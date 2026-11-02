@@ -1,7 +1,6 @@
 """Compute forest rasters with one query and terrain normalization per tile."""
 
 import uuid
-from dataclasses import asdict
 
 import numpy as np
 
@@ -13,7 +12,12 @@ from alsdb.processing._products import (
     software_versions,
     surface_tile,
 )
-from alsdb.processing._surface import QUALITY_FLAGS, CHMConfig, clean_points
+from alsdb.processing._surface import (
+    QUALITY_FLAGS,
+    CHMConfig,
+    clean_points,
+    provenance_settings,
+)
 from alsdb.processing._terrain import normalize_points
 from alsdb.processing._tiling import (
     _filter_ground_outliers,
@@ -154,7 +158,12 @@ def compute_forest_products(
         )
     if chm:
         configurations["chm"] = dict(
-            base, settings=asdict(config), quality=quality, backend=backend_versions(config)
+            base,
+            settings=provenance_settings(config),
+            quality=quality,
+            backend=backend_versions(config),
+            # 2: pulse density and scan angle layers and flags (Fischer et al. 2024).
+            **({"quality_layers": 2} if quality else {}),
         )
     needed = [
         name
@@ -239,6 +248,8 @@ def compute_forest_products(
             attrs = ("Z", "Classification", "ReturnNumber", "Withheld")
             if chm and config.method in ("spikefree", "lastools"):
                 attrs += ("NumberOfReturns", "GpsTime", "PointSourceId")
+            if chm:
+                attrs += ("ScanAngleRank",)
             arr = clean_points(query_to_array(provider, query_bbox, year=year, attributes=attrs))
             if ground_outlier_removal:
                 arr = clean_points(_filter_ground_outliers(arr))

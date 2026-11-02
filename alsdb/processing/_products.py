@@ -1,6 +1,5 @@
 """Shared buffered workers, provenance and restart handling for surface products."""
 
-from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
@@ -10,6 +9,7 @@ from alsdb.processing._surface import (
     QUALITY_FLAGS,
     CHMConfig,
     clean_points,
+    provenance_settings,
     reconstruct_chm,
     surface_mask,
 )
@@ -32,6 +32,8 @@ CHM_VARIABLES = (
     "chm_ground_count",
     "chm_ground_distance",
     "chm_terrain_slope",
+    "chm_pulse_density",
+    "chm_scan_angle",
 )
 
 
@@ -110,6 +112,8 @@ def _worker(
     attributes = ("Z", "Classification", "ReturnNumber", "Withheld")
     if "chm" in products and config.method in ("spikefree", "lastools"):
         attributes += ("NumberOfReturns", "GpsTime", "PointSourceId")
+    if "chm" in products and quality:
+        attributes += ("ScanAngleRank",)
     arr = clean_points(
         query_to_array(provider, query_bbox, year=year, attributes=attributes), drop_noise=False
     )
@@ -213,7 +217,7 @@ def compute_products(provider, store, products, options):
     configurations = {}
     for product in products:
         settings = (
-            asdict(config)
+            provenance_settings(config)
             if product == "chm"
             else {
                 "method": dtm_method,
@@ -228,6 +232,8 @@ def compute_products(provider, store, products, options):
             base,
             settings=settings,
             quality=quality if product == "chm" else False,
+            # 2: pulse density and scan angle layers and flags (Fischer et al. 2024).
+            **({"quality_layers": 2} if product == "chm" and quality else {}),
             backend=backend if product == "chm" else {},
         )
     needed = [

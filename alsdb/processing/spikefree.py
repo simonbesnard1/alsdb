@@ -34,7 +34,7 @@ import numpy as np
 
 from alsdb.processing._grid import GridSpec
 
-LOCAL_FREEZE_CELL = 5.0  # m, cells for the local pulse density
+LOCAL_FREEZE_CELL = 5.0  # m, cells for the local pulse density (as PULSE_DENSITY_CELL)
 # Fischer et al. (2024): freeze = m / ln(s * pd + o) + 1, pd in pulses/m2,
 # m = 3.1, s = 1.75, o = 2.1. The paper prints m / (ln(s * pd + o) + 1); the
 # authors' R workflow computes the form above, which lidR's lspikefree()
@@ -67,15 +67,10 @@ def local_freeze_grid(pulses, bbox, cell=LOCAL_FREEZE_CELL):
     Cells lie on multiples of *cell*, so neighbouring tiles share them; cells
     without pulses count as the lowest density of :data:`LOCAL_DENSITY_RANGE`.
     """
-    x0, y0 = np.floor(bbox[0] / cell) * cell, np.floor(bbox[1] / cell) * cell
-    x1, y1 = np.ceil(bbox[2] / cell) * cell, np.ceil(bbox[3] / cell) * cell
-    nx, ny = max(1, round((x1 - x0) / cell)), max(1, round((y1 - y0) / cell))
-    col = np.floor((pulses["X"] - x0) / cell).astype(np.int64)
-    row = np.floor((y1 - pulses["Y"]) / cell).astype(np.int64)
-    inside = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
-    counts = np.bincount(row[inside] * nx + col[inside], minlength=nx * ny)
-    density = counts.reshape(ny, nx) / cell**2
-    return FreezeGrid(local_freeze_distance(density), float(x0), float(y1), float(cell))
+    from alsdb.processing._surface import pulse_density_grid
+
+    density, x0, y1 = pulse_density_grid(pulses, bbox, cell)
+    return FreezeGrid(local_freeze_distance(density), x0, y1, float(cell))
 
 
 def require_backend():
