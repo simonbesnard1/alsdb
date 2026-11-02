@@ -91,6 +91,27 @@ def main(argv=None):
     p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
     p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
 
+    p = sub.add_parser(
+        "classification-references",
+        help="full-density DTM of every classifier for ULS / decimated scene areas",
+    )
+    p.add_argument("--scenes-dir", nargs="+", required=True)
+    p.add_argument("--source", nargs="+", required=True, metavar="SITE=DIR",
+                   help="full-density survey per site, e.g. PetitBuech=<site>/original")  # fmt: skip
+    p.add_argument(
+        "--tools",
+        nargs="+",
+        default=["csf", "pmf", "smrf", "ptd"],
+        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+    )
+    p.add_argument("--tolerance", type=float, default=0.25, help="agreement tolerance (m)")
+    p.add_argument("--max-density", type=float, help="thin denser surveys to this (points/m2)")
+    p.add_argument("--out-csv", help="agreement table per area and stratum")
+    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
+    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
+    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
+    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
+
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
@@ -248,6 +269,25 @@ def main(argv=None):
                 str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
             ),
             fastgc_executable=args.fastgc_executable,
+            ptd=tuple(
+                PTDParameters(*values)
+                for values in itertools.product(
+                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
+                )
+            ),
+        )
+    elif args.command == "classification-references":
+        import itertools
+
+        from alsdb.benchmark.classification import PTDParameters, build_dtm_references
+
+        build_dtm_references(
+            args.scenes_dir,
+            dict(item.split("=", 1) for item in args.source),
+            methods=tuple(args.tools),
+            tolerance=args.tolerance,
+            out_csv=args.out_csv,
+            max_density=args.max_density,
             ptd=tuple(
                 PTDParameters(*values)
                 for values in itertools.product(

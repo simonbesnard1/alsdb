@@ -268,6 +268,33 @@ synthetic scenes give an unbiased DTM error (no reference classifier), but
 their terrain has no cliffs and their forests no understorey; the real scenes
 have both, against a measured reference.
 
+The reference DTM of real scenes rests on the survey provider's ground
+classification. At full density the classifiers do not agree everywhere
+(Petit Buech: 73% of cells within 0.25 m of each other, 45% on slopes over
+45°; Robson Creek: 27%), so no single classifier, nor their median, is a
+truth. Two more references separate the questions:
+
+```bash
+pixi run -e ptd python -m alsdb.benchmark classification-references \
+    --scenes-dir <decimated_out> <uls_out> --source PetitBuech=<site>/original \
+    RobsonCreek=<site>/original DE-Tha=<ULS tiles> --out-csv agreement.csv
+```
+
+classifies the full-density survey of every scene area with each run and
+stores the DTMs with the scenes (`dtm_references.npz`). `classification-scenes`
+then also reports
+
+- `self_*`: each run against its own full-density DTM — robustness to density
+  without any external truth;
+- `consensus_*`: against the median of the methods' default runs, on the cells
+  where they agree within 0.25 m (`agreed_share`) — accuracy where a
+  defensible truth exists.
+
+`agreement.csv` lists, per area and slope / cover class, the share of agreeing
+cells, the median spread and every method's distance from the provider's DTM.
+On the disputed cells (steep slopes, tropical forest) only an independent
+truth can rank the methods: exact synthetic terrain or field measurements.
+
 Caveat: the reference classification is itself the output of some ground
 filter, often a PTD variant in commercial software; a classifier close to it
 in kind may score better partly for that reason. Ask the data provider how

@@ -68,6 +68,9 @@ SLOPE_BREAKS = (0.0, 15.0, 30.0, 45.0, 90.0)  # degrees
 COVER_BREAKS = (0.0, 0.5, 0.8, 0.95, 1.0)  # share of first returns above COVER_HEIGHT
 COVER_HEIGHT = 2.0  # m above the reference terrain
 DTM_RESOLUTION = 1.0  # m
+# Full-density DTMs of different classifiers within this of each other count
+# as agreeing; their median is then a reference (see build_dtm_references).
+REFERENCE_TOLERANCE = 0.25  # m
 
 
 @dataclass(frozen=True)
@@ -655,15 +658,70 @@ def reference_context(
     )
 
 
+@dataclass
+class DTMReferences:
+    """Full-density DTMs of every classifier run, on a scene's core cells."""
+
+    dtms: dict[str, np.ndarray]  # run id -> DTM (flattened like ReferenceContext.cells_z)
+    consensus: np.ndarray  # median of each method's default run
+    agreed: np.ndarray  # cells where those runs lie within the tolerance
+
+
+def run_id(method: str, parameters: str) -> str:
+    """Stable short id of a method and its parameters JSON."""
+    import hashlib
+
+    return hashlib.sha1(f"{method}|{parameters}".encode()).hexdigest()[:12]
+
+
+def load_dtm_references(scene) -> DTMReferences | None:
+    """The scene's ``dtm_references.npz`` from :func:`build_dtm_references`, if any."""
+    path = Path(scene) / "dtm_references.npz"
+    if not path.exists():
+        return None
+    data = np.load(path)
+    return DTMReferences(
+        dtms={k[4:]: data[k] for k in data.files if k.startswith("run_")},
+        consensus=data["consensus"],
+        agreed=data["agreed"].astype(bool),
+    )
+
+
+def _reference_scores(cz, cells, references, rid):
+    """Self, consensus and agreed / disputed errors of a candidate DTM on *cells*."""
+    if references is None:
+        return {}
+    agreed = references.agreed & cells
+    own = references.dtms.get(rid)
+    own_err = terrain_error(own[cells], cz[cells]) if own is not None else {}
+    cons = terrain_error(references.consensus[agreed], cz[agreed]) if agreed.any() else {}
+    finite = cells & np.isfinite(references.consensus)
+    return {
+        "self_bias": own_err.get("bias", np.nan),
+        "self_mae": own_err.get("mae", np.nan),
+        "self_p95": own_err.get("p95", np.nan),
+        "consensus_mae": cons.get("mae", np.nan),
+        "consensus_bias": cons.get("bias", np.nan),
+        "agreed_share": float(agreed.sum() / finite.sum()) if finite.any() else np.nan,
+    }
+
+
 def score_against_reference(
-    ref: ReferenceContext, points: np.ndarray, is_ground: np.ndarray
+    ref: ReferenceContext,
+    points: np.ndarray,
+    is_ground: np.ndarray,
+    references: DTMReferences | None = None,
+    rid: str | None = None,
 ) -> tuple[dict, list[dict]]:
     """(file-level scores, rows per slope / cover class) for one classifier's ground mask.
 
     Point scores use the scored points; boundary / interior F1 and the strata
     use interior points only, so tile edges do not bias method comparisons.
     The DTM is a TIN of the predicted ground (noise excluded), compared with
-    the reference terrain on interior 1 m cells.
+    the reference terrain on interior 1 m cells. With *references* (full-density
+    DTMs of every classifier), also against the same run at full density
+    (``self_*``: robustness to density) and against the classifiers' median
+    where they agree (``consensus_*``); *rid* is the run's :func:`run_id`.
     """
     from alsdb.processing._terrain import TerrainModel
 
@@ -683,6 +741,7 @@ def score_against_reference(
             score_ground_classification(truth[edge], is_ground[edge]).f1 if edge.any() else np.nan
         ),
         **{f"dtm_{k}": v for k, v in dtm.items()},
+        **_reference_scores(cz, np.ones(len(cz), bool), references, rid),
     }
     strata = []
     groups = [("all", "all", inner, np.ones(len(cz), bool))]
@@ -713,6 +772,7 @@ def score_against_reference(
                 "f1": s.f1,
                 "n_cells": int(cells.sum()),
                 **{f"dtm_{k}": d[k] for k in ("bias", "mae", "rmse", "p95", "coverage")},
+                **_reference_scores(cz, cells, references, rid),
             }
         )
     return row, strata
@@ -917,8 +977,16 @@ def terrain_error(reference: np.ndarray, candidate: np.ndarray) -> dict[str, flo
 # Benchmark scenes: synthetic, ULS and decimated ALS against their truth DTM
 # ---------------------------------------------------------------------------
 
-SCENE_RESULT_FIELDS = (*FILE_RESULT_FIELDS, "scenario")
-SCENE_STRATA_FIELDS = (*STRATA_FIELDS, "scenario")
+REFERENCE_FIELDS = (
+    "self_bias",
+    "self_mae",
+    "self_p95",
+    "consensus_mae",
+    "consensus_bias",
+    "agreed_share",
+)
+SCENE_RESULT_FIELDS = (*FILE_RESULT_FIELDS, *REFERENCE_FIELDS, "scenario")
+SCENE_STRATA_FIELDS = (*STRATA_FIELDS, *REFERENCE_FIELDS, "scenario")
 
 
 def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) -> ReferenceContext:
@@ -997,6 +1065,7 @@ def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
         raise ValueError(f"{scene.name}: expected one LAS/LAZ file in laz/, found {len(laz)}")
     points = _read_las(laz[0])
     ref = reference_from_truth(points, np.load(scene / "truth.npz"))
+    references = load_dtm_references(scene)
     meta = scene / "scene.json"
     scenario = json.dumps(json.loads(meta.read_text()).get("scenario", {})) if meta.exists() else ""
     out = []
@@ -1009,7 +1078,9 @@ def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
                 run = _file_classifier(method, laz[0], points, Path(tmp),
                                        lastools_executable=lastools_executable,
                                        fastgc_executable=fastgc_executable, ptd=settings)  # fmt: skip
-            scores, strata = score_against_reference(ref, points, run.is_ground)
+            scores, strata = score_against_reference(
+                ref, points, run.is_ground, references, run_id(method, parameters)
+            )
             row.update(scores, status="ok", error="", wall_seconds=run.wall_seconds)
         except Exception as exc:  # noqa: BLE001 - one failed tool must not abort a long run
             row.update(status="error", error=f"{type(exc).__name__}: {exc}")
@@ -1080,3 +1151,162 @@ def run_scene_benchmark(
             print(f"{scene.name}: DTM MAE {summary}", flush=True)
     print(f"-> {results}", flush=True)
     return results
+
+
+def _crop_source(laz_dir, box, max_density=None) -> np.ndarray:
+    """Points of the LAS/LAZ files in *laz_dir* inside *box*.
+
+    With *max_density* (points/m2), files denser than that keep every n-th
+    point in file order (``filters.decimation``), so ULS surveys of thousands
+    of points/m2 fit in memory.
+    """
+    from alsdb.benchmark.uls import _files_and_header, _header
+
+    files, _, _ = _files_and_header(laz_dir, box)
+    bounds = f"([{box[0]},{box[2]}],[{box[1]},{box[3]}])"
+    parts = []
+    for f in files:
+        stages = [str(f)]
+        if max_density:
+            h = _header(f)
+            area = max((h["maxx"] - h["minx"]) * (h["maxy"] - h["miny"]), 1e-6)
+            step = int(h["count"] / area // max_density)
+            if step > 1:
+                stages.append({"type": "filters.decimation", "step": step})
+        stages.append({"type": "filters.crop", "bounds": bounds})
+        pipeline = pdal.Pipeline(json.dumps(stages))
+        pipeline.execute()
+        parts.append(pipeline.arrays[0])
+    names = set.intersection(*(set(a.dtype.names) for a in parts))
+    return np.concatenate([a[[n for n in parts[0].dtype.names if n in names]] for a in parts])
+
+
+def build_dtm_references(
+    scenes_dirs,
+    sources: dict[str, str | Path],
+    *,
+    methods: tuple[str, ...] = ("csf", "pmf", "smrf", "ptd"),
+    ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
+    tolerance: float = REFERENCE_TOLERANCE,
+    out_csv: str | Path | None = None,
+    max_density: float | None = None,
+) -> list[dict]:
+    """Classify the full-density survey of every scene area with each method.
+
+    For each area of the ULS and decimated scenes under *scenes_dirs* (scenes
+    sharing site, x0, y0, core and margin), the survey in ``sources[site]`` is
+    cropped to the scene extent and classified with every run; each run's
+    1 m DTM on the core cells goes to ``dtm_references.npz`` in all scenes of
+    the area. Their median over each method's first (default) run is the
+    consensus reference where they lie within *tolerance*. The scene
+    benchmark then also scores every run against its own full-density DTM
+    (robustness to density) and against the consensus.
+
+    Returns (and writes to *out_csv*) one agreement row per area and stratum:
+    share of agreeing cells, median spread, each run's and the consensus's
+    MAE against the scene's truth DTM (the provider's classification).
+    Synthetic scenes (exact truth, no ``site``) are skipped. *max_density*
+    (points/m2) thins denser surveys first: ULS at thousands of points/m2
+    would not fit in memory (DE-Eco: ~15,000 points/m2, 340 M points for a
+    150 m area).
+    """
+    from alsdb.processing._terrain import TerrainModel
+
+    runs = _runs(methods, ptd)
+    defaults = {}
+    for method, _, parameters in runs:
+        defaults.setdefault(method, run_id(method, parameters))
+    areas: dict[tuple, list[Path]] = {}
+    for d in [scenes_dirs] if isinstance(scenes_dirs, (str, Path)) else scenes_dirs:
+        for scene in sorted(Path(d).iterdir()):
+            meta = scene / "scene.json"
+            if not (scene / "truth.npz").exists() or not meta.exists():
+                continue
+            sc = json.loads(meta.read_text()).get("scenario", {})
+            if "site" not in sc:
+                continue
+            key = (sc["site"], sc["x0"], sc["y0"], sc["core"], sc["margin"])
+            areas.setdefault(key, []).append(scene)
+    rows = []
+    for (site, x0, y0, core, margin), members in areas.items():
+        if site not in sources:
+            print(f"{site} {x0} {y0}: no --source, skipped", flush=True)
+            continue
+        t0 = time.perf_counter()
+        truth = np.load(members[0] / "truth.npz")
+        existing = load_dtm_references(members[0])
+        if existing is not None and all((m / "dtm_references.npz").exists() for m in members):
+            # Already built: report agreement from the stored DTMs.
+            empty = np.zeros(0, dtype=[("X", "f8"), ("Y", "f8"), ("Classification", "u1")])
+            ref = reference_from_truth(empty, truth)
+            dtms, consensus, agreed = existing.dtms, existing.consensus, existing.agreed
+            stack = np.stack([dtms[rid] for rid in defaults.values() if rid in dtms])
+            spread = np.nanmax(stack, axis=0) - np.nanmin(stack, axis=0)
+            rows += _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread)
+            print(f"{site} {x0:.0f} {y0:.0f}: references exist, "
+                  f"{agreed.mean():.0%} of cells agree", flush=True)  # fmt: skip
+            continue
+        box = (x0 - margin, y0 - margin, x0 + core + margin, y0 + core + margin)
+        points = _crop_source(sources[site], box, max_density)
+        dtms = {}
+        with tempfile.TemporaryDirectory(prefix="alsdb-ref-") as tmp:
+            laz = Path(tmp) / "area.laz"
+            pdal.Pipeline(
+                json.dumps([{"type": "writers.las", "filename": str(laz), "scale_x": 0.001,
+                             "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
+                             "offset_y": "auto", "offset_z": "auto"}]),
+                arrays=[points],
+            ).execute()  # fmt: skip
+            # Classify the written 1 mm copy, so file-based tools return the same points.
+            points = _read_las(laz)
+            ref = reference_from_truth(points, truth)
+            noise = np.isin(points["Classification"], NOISE_CLASSES)
+            for method, settings, parameters in runs:
+                run = _file_classifier(method, laz, points, Path(tmp), lastools_executable="lasground64",
+                                       fastgc_executable="fastgc", ptd=settings)  # fmt: skip
+                model = TerrainModel(points[run.is_ground & ~noise])
+                dtms[run_id(method, parameters)] = model.evaluate(ref.cells_xy, distances=False)[0]
+        stack = np.stack([dtms[rid] for rid in defaults.values()])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            consensus = np.nanmedian(stack, axis=0)
+            spread = np.nanmax(stack, axis=0) - np.nanmin(stack, axis=0)
+        agreed = np.isfinite(stack).all(axis=0) & (spread <= tolerance)
+        payload = {f"run_{k}": v.astype(np.float32) for k, v in dtms.items()}
+        index = [{"id": run_id(m, prm), "method": m, "parameters": prm,
+                  "default": defaults[m] == run_id(m, prm)} for m, _, prm in runs]  # fmt: skip
+        for scene in members:
+            np.savez_compressed(scene / "dtm_references.npz", consensus=consensus.astype(np.float32),
+                                agreed=agreed, **payload)  # fmt: skip
+            (scene / "dtm_references.json").write_text(
+                json.dumps({"tolerance": tolerance, "runs": index}, indent=2)
+            )
+        rows += _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread)
+        print(f"{site} {x0:.0f} {y0:.0f}: {len(points):,} points, "
+              f"{agreed.mean():.0%} of cells agree within {tolerance} m, "
+              f"{time.perf_counter() - t0:.0f} s", flush=True)  # fmt: skip
+    if out_csv and rows:
+        _append_rows(Path(out_csv), rows, tuple(rows[0]))
+    return rows
+
+
+def _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread):
+    """Agreement and distance from the truth DTM per stratum of one area."""
+    rows = []
+    groups = [("all", "all", np.ones(len(consensus), bool))]
+    for kind in ("slope", "cover"):
+        for label in sorted({v for v in ref.cell_strata[kind] if v},
+                            key=lambda v: float(v.split("-")[0])):  # fmt: skip
+            groups.append((kind, label, ref.cell_strata[kind] == label))
+    for kind, label, cells in groups:
+        ok = cells & np.isfinite(spread)
+        row = {"site": site, "x0": x0, "y0": y0, "stratum": kind, "label": label,
+               "n_cells": int(ok.sum()),
+               "agreed_share": float(agreed[ok].mean()) if ok.any() else np.nan,
+               "median_spread": float(np.median(spread[ok])) if ok.any() else np.nan,
+               "consensus_vs_truth_mae": terrain_error(ref.cells_z[cells],
+                                                       consensus[cells])["mae"]}  # fmt: skip
+        for m, rid in defaults.items():
+            row[f"{m}_vs_truth_mae"] = terrain_error(ref.cells_z[cells], dtms[rid][cells])["mae"]
+        rows.append(row)
+    return rows

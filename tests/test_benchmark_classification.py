@@ -264,3 +264,22 @@ def test_scene_benchmark_scores_and_resumes(tmp_path):
     assert float(rows[0]["dtm_mae"]) < 0.5
     run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("smrf",))
     assert len(list(csv.DictReader(out.open()))) == 1
+
+
+def test_dtm_references_give_self_and_consensus_scores(tmp_path):
+    from alsdb.benchmark.classification import build_dtm_references, run_scene_benchmark
+
+    scene = tmp_path / "scenes" / "area_pd_08"
+    _write_scene(scene)
+    meta = {"scenario": {"site": "S", "x0": 10.0, "y0": 10.0, "core": 40.0, "margin": 10.0}}
+    (scene / "scene.json").write_text(json.dumps(meta))
+    # The scene's own points stand in for the full-density survey.
+    rows = build_dtm_references(tmp_path / "scenes", {"S": scene / "laz"}, methods=("smrf", "pmf"))
+    assert (scene / "dtm_references.npz").exists()
+    assert {r["stratum"] for r in rows} == {"all", "slope", "cover"}
+    assert 0 <= rows[0]["agreed_share"] <= 1
+
+    out = run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("smrf",))
+    row = next(csv.DictReader(out.open()))
+    assert float(row["self_mae"]) < 1e-4  # same points as the reference (float32 storage)
+    assert row["consensus_mae"] != ""
