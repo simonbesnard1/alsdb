@@ -708,6 +708,7 @@ def compute_chm(
     source_version: str | None = None,
     method: str | None = None,
     freeze_distance: float | str = "auto",
+    spikefree_first_returns: bool = False,
     height_buffer: float = 0.5,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",
@@ -719,7 +720,10 @@ def compute_chm(
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
     ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers).
+    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
+    number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
+    from the pulse density, Fischer et al. 2024).
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -764,7 +768,10 @@ def compute_dtm(
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
     ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers).
+    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
+    number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
+    from the pulse density, Fischer et al. 2024).
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -806,7 +813,10 @@ def compute_dsm(
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
     ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers).
+    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
+    number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
+    from the pulse density, Fischer et al. 2024).
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 
@@ -861,6 +871,7 @@ def compute_all(
     source_version: str | None = None,
     method: str | None = None,
     freeze_distance: float | str = "auto",
+    spikefree_first_returns: bool = False,
     height_buffer: float = 0.5,
     max_triangle_edge: float | None = None,
     lastools_executable: str = "las2dem64",
@@ -872,7 +883,10 @@ def compute_all(
     """Compute surface products on one fixed north-up grid and write to Zarr.
 
     ``method`` (CHM/all): "max", "pitfree", "highest_subcell_tin", or
-    "spikefree" (compiled constrained Delaunay; all eligible return numbers).
+    "spikefree" (compiled constrained Delaunay; all eligible return numbers,
+    first returns with ``spikefree_first_returns``). ``freeze_distance`` is a
+    number, "auto" (three pulse spacings per tile) or "local" (per 5 m cell
+    from the pulse density, Fischer et al. 2024).
     Legacy ``spikefree=True`` retains the approximation with a deprecation
     warning. ``pitfree=True`` remains an alias for method="pitfree".
 

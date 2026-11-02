@@ -205,10 +205,12 @@ it, so compare tools only on scenes where all of them succeeded.
 pixi run -e spikefree python -m alsdb.benchmark sensitivity <scenes_dir> <out.csv> --workers 8
 ```
 
-reruns alsdb spike-free on every finished scene of a `synthetic` or `uls`
-folder with freeze distances of 2, 3 (`"auto"`) and 5 first-return spacings,
-`max(3 spacings, 1.5 m)` and a fixed 1.5 m, and scores each like the
-benchmark (one row per scene and setting; resumable). Scenes that the
+reruns alsdb spike-free on every finished scene of a `synthetic`, `uls` or
+`decimated` folder with freeze distances of 2, 3 (`"auto"`) and 5 first-return
+spacings, `max(3 spacings, 1.5 m)`, a fixed 1.5 m, the formula of Fischer et
+al. (2024) at the scene's mean density (`lsf_tile`) and per 5 m cell
+(`lsf_local`), and on first returns only `k3_first` and `lspikefree` (Fischer
+et al.'s full method), and scores each like the benchmark (one row per scene and setting; resumable). Scenes that the
 benchmark in the same folder has not scored yet are skipped. Results:
 [chm_methods.md](chm_methods.md#how-sensitive-is-the-freeze-distance).
 

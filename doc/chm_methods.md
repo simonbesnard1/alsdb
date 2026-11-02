@@ -16,7 +16,7 @@ All horizontal and vertical coordinates must use compatible metric units.
 | `max` | Bin normalized eligible returns; `height_statistic` can select another statistic | `first_returns_only`, `height_statistic` |
 | `pitfree` | Maximum of height-threshold TIN layers (Khosravipour 2014, as lidR `pitfree()`) | `pitfree_thresholds`, `pitfree_max_edge`, optional `max_triangle_edge` |
 | `highest_subcell_tin` | Legacy: highest return per small subcell, followed by a TIN; has no pit protection (mean CHM 2.0 m below LAStools on Barcelona NFI plots), prefer `spikefree` | `spikefree_subcell_resolution`, optional `max_triangle_edge` |
-| `spikefree` | Incremental constrained Delaunay with triangle freezing | `freeze_distance` (default `"auto"`), `height_buffer`, optional `max_triangle_edge` |
+| `spikefree` | Incremental constrained Delaunay with triangle freezing (Khosravipour 2016) | `freeze_distance` (`"auto"` default, `"local"` = Fischer et al. 2024, or metres), `spikefree_first_returns`, `height_buffer`, optional `max_triangle_edge` |
 | `lastools` | Explicit external las2dem spike-free backend | `lastools_executable`, `freeze_interval`, `freeze_distance`, `height_buffer` |
 
 `pitfree` keeps the highest first return per output cell, then triangulates
@@ -72,6 +72,20 @@ points are ordered deterministically by XY. Duplicate XY retains the highest
 height. Degenerate/collinear input produces NoData. `max_triangle_edge` trims
 long triangles in the final mesh independently of the freezing rule.
 
+`freeze_distance="local"` is the locally adaptive spike-free of Fischer et al.
+(2024): the pulse density (first returns of all non-noise classes per m²) is
+counted in 5 m cells aligned to multiples of 5 m over the buffered tile,
+clamped to 0.5-100 pulses/m², and each cell gets
+`freeze = 3.1 / ln(1.75 × pd + 2.1) + 1` m (2.1 m at 8 pulses/m², 3.3 m at 1).
+A triangle uses the cell under its centroid. The paper prints the formula as
+`m / (ln(s × pd + o) + 1)`; the authors' R workflow computes the form above,
+which lidR's `lspikefree()` approximates as 1.42 + 1.96 × spacing. Fischer et
+al. apply it to first returns only: add `spikefree_first_returns=True`. This is
+an independent implementation from the paper and the authors' workflow, not
+lidR code; the authors split tiles into density classes and run LAStools per
+class, alsdb looks the distance up per triangle in one run. The parameters were
+calibrated on Australian TERN sites including Robson Creek.
+
 The input elevation for native CHM is normalized HAG. The low-level
 `rasterize_spikefree(..., value_field="Z")` can instead reconstruct a raw DSM.
 Normalization before triangulation can change insertion order on slopes, so it
@@ -109,6 +123,38 @@ better in all 9 areas: `max(k3, 1.5 m)` (about 4 spacings there) lowered the
 MAE by 0.01-0.10 m and moved the mean height from 0.2-0.6 m low to about
 unbiased; below about 4 pulses/m2 it equals `"auto"`. Thinned UAV laser
 scanning (DE-Eco beech, DE-Tha spruce) showed the same at high density.
+
+**Locally adaptive and first-return variants** on the same 72 scenes
+(`lsf_tile`: Fischer et al. 2024 formula at the scene's mean density;
+`lsf_local`: per 5 m cell; `k3_first`, `lspikefree`: first returns only).
+Cell MAE / mean height bias, m, and the range of the area's mean height across
+0.5-8 pulses/m2 (consistency across densities), m:
+
+| areas | k3 (auto) | k3_first | lsf_tile | lspikefree |
+|---|---|---|---|---|
+| Petit Buech, cover 58-82%: MAE / bias | 0.73 / -0.20 | 0.72 / -0.16 | 0.78 / +0.06 | 0.78 / +0.09 |
+| Petit Buech, cover 99-100%: MAE / bias | 0.91 / -0.01 | 0.89 / +0.06 | 0.99 / +0.32 | 0.98 / +0.37 |
+| Robson Creek: MAE / bias | 1.75 / -0.01 | 1.74 / +0.10 | 1.87 / +0.67 | 1.87 / +0.76 |
+| Petit Buech open / dense: mean-height range | 0.36 / 0.62 | 0.38 / 0.62 | 0.28 / 0.30 | 0.23 / 0.21 |
+| Robson Creek: mean-height range | 1.17 | 1.12 | 0.61 | 0.52 |
+
+- First returns only lowered the MAE slightly in every group (0.01-0.02 m;
+  best single setting in 49 of 72 scenes).
+- The locally adaptive formula was 0.05-0.12 m worse per cell and higher on
+  closed canopy (+0.3 to +0.8 m: its larger freeze distance bridges gaps the
+  full-density reference resolves), but the most consistent across densities:
+  the mean height of an area varied about half as much between 0.5 and
+  8 pulses/m2 as with `"auto"`. This reproduces the trade-off Fischer et al.
+  report: less accurate against the densest survey, more comparable between
+  surveys. Prefer `freeze_distance="local", spikefree_first_returns=True` for
+  comparisons across surveys or years (repeat lidar, mixed archives) and
+  `"auto"` for one survey judged against its own detail.
+- Per-cell and per-scene formula gave the same result here because the
+  decimated copies have homogeneous density within 200 m; the local version
+  matters where density varies within a tile (overlaps, mixed surveys), which
+  these scenes do not test.
+- Robson Creek was among the sites used to calibrate the formula; Petit Buech
+  is independent.
 
 **Synthetic HELIOS++ scenes** (48 scenes: 4 terrains x 4 forest types x 0.5 /
 2 / 10 pulses/m2; seeds 1-4 on flat open and conifer scenes varied by at most

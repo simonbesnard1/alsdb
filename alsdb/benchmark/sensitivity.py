@@ -8,11 +8,17 @@ freeze distance below; the outputs are scored with
 scene and setting). Finished scenes are skipped on rerun.
 
 Freeze settings (``spacing`` is the mean spacing of first surface returns of
-the scene, as alsdb's ``"auto"`` rule computes it):
+the scene, as alsdb's ``"auto"`` rule computes it); all returns unless noted:
 
 - ``k2``, ``k3``, ``k5``: 2, 3 (the current ``"auto"``) and 5 spacings
 - ``floor1.5``: ``max(3 * spacing, 1.5 m)``, the candidate rule
 - ``fixed1.5``: 1.5 m, the old default
+- ``lsf_tile``: the locally adaptive formula of Fischer et al. (2024) at the
+  scene's mean density, one value per scene
+- ``lsf_local``: the same formula per 5 m cell (``freeze_distance="local"``)
+- ``k3_first``: ``k3`` on first returns only
+- ``lspikefree``: ``lsf_local`` on first returns only, the full method of
+  Fischer et al. (2024), https://doi.org/10.1111/2041-210X.14416
 
     python -m alsdb.benchmark sensitivity <scenes_dir> <out.csv> --workers 8
 """
@@ -29,14 +35,22 @@ SURFACE_CLASSES = (2, 5, 9)
 
 
 def freeze_settings(spacing):
-    """{name: freeze distance in m} for a scene with this pulse spacing."""
-    return {
+    """{name: spike-free options of ``compute_chm``} for a scene with this pulse spacing."""
+    from alsdb.processing.spikefree import local_freeze_distance
+
+    scalar = {
         "k2": 2 * spacing,
         "k3": 3 * spacing,
         "k5": 5 * spacing,
         "floor1.5": max(3 * spacing, 1.5),
         "fixed1.5": 1.5,
+        "lsf_tile": float(local_freeze_distance(1 / spacing**2)),
     }
+    settings = {name: {"freeze_distance": d} for name, d in scalar.items()}
+    settings["lsf_local"] = {"freeze_distance": "local"}
+    settings["k3_first"] = {"freeze_distance": 3 * spacing, "spikefree_first_returns": True}
+    settings["lspikefree"] = {"freeze_distance": "local", "spikefree_first_returns": True}
+    return settings
 
 
 def first_return_spacing(laz):
@@ -72,11 +86,11 @@ def sweep_scene(scene, keep=False):
     db.ingest_many(laz)
     settings = freeze_settings(spacing)
     preds = {}
-    for name, freeze in settings.items():
+    for name, options in settings.items():
         store = work / f"spikefree_{name}.zarr"
         compute_chm(db, ALSZarrStore(str(store)), resolution=1.0, year=year, bbox=bounds,
                     method="spikefree", tile_size=float(n), quality=False,
-                    freeze_distance=freeze)  # fmt: skip
+                    **options)  # fmt: skip
         chm = zarr.open(str(store), mode="r")["1m"]["chm"][0, :n, :n]
         preds[f"spikefree_{name}"] = np.asarray(chm, np.float32)
     np.savez_compressed(work / "preds.npz", **preds)
@@ -85,7 +99,10 @@ def sweep_scene(scene, keep=False):
     rows = synthetic.score(work)
     for r in rows:
         name = r["source"].removeprefix("spikefree_")
-        r.update({"scenario": scene.name, "setting": name, "freeze_m": settings[name],
+        freeze = settings[name]["freeze_distance"]
+        r.update({"scenario": scene.name, "setting": name,
+                  "freeze_m": freeze if freeze != "local" else np.nan,
+                  "first_returns": settings[name].get("spikefree_first_returns", False),
                   "spacing": spacing})  # fmt: skip
     if not keep:
         shutil.rmtree(work, ignore_errors=True)

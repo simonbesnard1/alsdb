@@ -50,6 +50,7 @@ class CHMConfig:
     outlier_multiplier: float = 6.0
     spikefree_subcell_resolution: float | None = None
     freeze_distance: float | str = "auto"
+    spikefree_first_returns: bool = False
     height_buffer: float = 0.5
     max_triangle_edge: float | None = None
     lastools_executable: str = "las2dem64"
@@ -72,6 +73,10 @@ class CHMConfig:
                 raise ValueError(name + " must be finite and positive")
         for name in ("pitfree_max_edge", "freeze_distance"):
             value = getattr(self, name)
+            if name == "freeze_distance" and value == "local":
+                if self.method == "lastools":
+                    raise ValueError("freeze_distance='local' needs method='spikefree'")
+                continue
             if value != "auto" and (
                 not isinstance(value, (float, int)) or not np.isfinite(value) or value <= 0
             ):
@@ -131,7 +136,9 @@ def surface_mask(arr, config):
     they pin the CHM to zero in crown gaps. With vegetation only, a TIN
     bridges every gap from crown to crown; on Barcelona NFI plots that
     inflated mean pitfree height by ~2 m. Spike-free variants use all
-    returns by definition. Callers that prepare normalized points for
+    returns by default; ``spikefree_first_returns`` restricts ``spikefree`` to
+    first returns, as Fischer et al. (2024) recommend for robustness across
+    surveys. Callers that prepare normalized points for
     :func:`reconstruct_chm` only need to normalize this subset.
     """
     mask = np.isin(arr["Classification"], (*config.veg_classes, *config.ground_classes))
@@ -141,6 +148,8 @@ def surface_mask(arr, config):
         "lastools",
     ):
         mask &= arr["ReturnNumber"] == 1
+    if config.method == "spikefree" and config.spikefree_first_returns:
+        mask &= arr["ReturnNumber"] == 1
     return mask
 
 
@@ -148,9 +157,9 @@ def auto_freeze_distance(points):
     """Spike-free freeze distance: three pulse spacings, as lidR recommends.
 
     lidR's ``spikefree()`` documentation (Roussel et al. 2020): "3 times the
-    pulse spacing or a little higher". Fischer et al. (2024,
-    https://doi.org/10.1111/2041-210X.14416) set it locally instead, 1.42 m +
-    1.96 x spacing (lidR ``lspikefree()``).
+    pulse spacing or a little higher". ``freeze_distance="local"`` sets it per
+    5 m cell instead (Fischer et al. 2024, https://doi.org/10.1111/2041-210X.14416;
+    see :func:`alsdb.processing.spikefree.local_freeze_distance`).
 
     Pulses are first returns. The old fixed 1.5 m default suits ~4+ pulses/m2;
     on ~1 pulse/m2 PNOA data it froze too little and left pits (mean CHM
@@ -266,6 +275,18 @@ def reconstruct_chm(
     freeze_distance = config.freeze_distance
     if freeze_distance == "auto" and len(points):
         freeze_distance = auto_freeze_distance(points)
+    elif freeze_distance == "local" and len(points):
+        from alsdb.processing.spikefree import local_freeze_grid
+
+        # Pulses: first returns of every non-noise class in the buffered tile.
+        pulses = arr[arr["ReturnNumber"] == 1] if "ReturnNumber" in arr.dtype.names else arr
+        extent = (
+            min(points["X"].min(), bbox[0]),
+            min(points["Y"].min(), bbox[1]),
+            max(points["X"].max(), bbox[2]),
+            max(points["Y"].max(), bbox[3]),
+        )
+        freeze_distance = local_freeze_grid(pulses, extent)
     if len(points):
         if config.method == "max":
             out = raster(points, points["HeightAboveGround"], config.height_statistic)

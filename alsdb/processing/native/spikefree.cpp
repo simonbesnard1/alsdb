@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Incremental constrained-Delaunay spike-free reconstruction, following
 // Khosravipour et al. (2016). Independent implementation, not LAStools code.
+// Optional per-cell freeze distances implement the locally adaptive variant of
+// Fischer et al. (2024), https://doi.org/10.1111/2041-210X.14416, written from
+// the paper and the authors' R workflow, not from lidR's lspikefree code.
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Triangulation_vertex_base_with_info_2.h>
 #include <CGAL/Triangulation_face_base_with_info_2.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <queue>
 #include <vector>
 
@@ -36,10 +41,34 @@ double edge2(VH a, VH b) {
 
 py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array::forcecast> xyz,
                             double x0, double y1, double res, int nx, int ny,
-                            double freeze, double buffer, double max_edge) {
+                            double freeze, double buffer, double max_edge,
+                            std::optional<py::array_t<double, py::array::c_style | py::array::forcecast>> freeze_grid,
+                            double fx0, double fy1, double fcell) {
     if (xyz.ndim() != 2 || xyz.shape(1) != 3 || res <= 0 || nx <= 0 || ny <= 0 ||
         freeze <= 0 || buffer < 0)
         throw std::invalid_argument("Invalid spike-free input");
+    // Locally adaptive freeze distances: a north-up grid of squared distances
+    // with upper-left corner (fx0, fy1) and cell size fcell, in the same
+    // coordinates as xyz; a triangle uses the cell under its centroid,
+    // clamped to the grid. Without a grid every triangle uses *freeze*.
+    std::vector<double> local2;
+    long fnx = 0, fny = 0;
+    if (freeze_grid) {
+        if (freeze_grid->ndim() != 2 || freeze_grid->shape(0) < 1 || freeze_grid->shape(1) < 1 ||
+            !(fcell > 0))
+            throw std::invalid_argument("Invalid freeze-distance grid");
+        auto g = freeze_grid->unchecked<2>();
+        fny = g.shape(0); fnx = g.shape(1);
+        local2.resize(size_t(fnx) * fny);
+        for (long r = 0; r < fny; ++r)
+            for (long c = 0; c < fnx; ++c) {
+                const double d = g(r, c);
+                if (!std::isfinite(d) || d <= 0)
+                    throw std::invalid_argument("Freeze distances must be finite and positive");
+                local2[size_t(r) * fnx + c] = d * d;
+            }
+        fx0 -= x0; fy1 -= y1;
+    }
     auto p = xyz.unchecked<2>();
     py::array_t<float> output({ny, nx});
     auto out = output.mutable_unchecked<2>();
@@ -65,6 +94,16 @@ py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array:
     // 11 s, against 1.3 s with equal heights. A coarse grid remembering the
     // last vertex inserted per cell gives each locate a nearby start. The
     // insertion order is unchanged, so the triangulation is identical.
+    auto freeze2 = [&](VH a, VH b, VH c) {
+        if (local2.empty()) return freeze * freeze;
+        const double x = (CGAL::to_double(a->point().x()) + CGAL::to_double(b->point().x()) +
+                          CGAL::to_double(c->point().x())) / 3;
+        const double y = (CGAL::to_double(a->point().y()) + CGAL::to_double(b->point().y()) +
+                          CGAL::to_double(c->point().y())) / 3;
+        const long col = std::clamp(long(std::floor((x - fx0) / fcell)), 0L, fnx - 1);
+        const long row = std::clamp(long(std::floor((fy1 - y) / fcell)), 0L, fny - 1);
+        return local2[size_t(row) * fnx + col];
+    };
     double gx0 = std::numeric_limits<double>::max(), gy0 = gx0;
     double gx1 = std::numeric_limits<double>::lowest(), gy1 = gx1;
     for (const auto& point: points) {
@@ -127,7 +166,7 @@ py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array:
             if (!tin.is_infinite(f)) {
                 f->info() = false;
                 auto a=f->vertex(0), b=f->vertex(1), c=f->vertex(2);
-                if (std::max({edge2(a,b), edge2(b,c), edge2(c,a)}) < freeze*freeze)
+                if (std::max({edge2(a,b), edge2(b,c), edge2(c,a)}) < freeze2(a, b, c))
                     pending.push({std::min({a->info().z,b->info().z,c->info().z})-buffer, {a,b,c}});
             }
         } while (++faces != start);
@@ -157,6 +196,10 @@ py::array_t<float> rasterize(py::array_t<double, py::array::c_style | py::array:
 
 PYBIND11_MODULE(_spikefree_native, m) {
     m.doc() = "Constrained-Delaunay spike-free surface reconstruction";
-    m.def("rasterize", &rasterize);
+    m.def("rasterize", &rasterize, py::arg("xyz"), py::arg("x0"), py::arg("y1"), py::arg("res"),
+          py::arg("nx"), py::arg("ny"), py::arg("freeze"), py::arg("buffer"), py::arg("max_edge"),
+          py::arg("freeze_grid") = py::none(), py::arg("fx0") = 0.0, py::arg("fy1") = 0.0,
+          py::arg("fcell") = 0.0);
+    m.attr("freeze_grid") = true;
     m.attr("algorithm_version") = "1";
 }
