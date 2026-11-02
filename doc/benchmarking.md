@@ -248,6 +248,26 @@ Several `--ptd-*` values run every combination as separate rows. With
 `--reference-dir` takes terrain and cover from the full-density original, so
 DTM errors at all densities are against the same terrain.
 
+The same classifiers also run on the benchmark scenes, scored against each
+scene's truth DTM:
+
+```bash
+pixi run -e ptd python -m alsdb.benchmark classification-scenes <out_dir> \
+    --scenes-dir <synthetic_grid> <uls_out> <decimated_out> --tools csf pmf smrf ptd --workers 8
+```
+
+| scenes | reference DTM | point labels scored against |
+|---|---|---|
+| `synthetic` | exact terrain mesh | HELIOS++ labels (exact) |
+| `uls` thinned / helios | full-density ULS terrain / exact | ULS provider's classes / exact |
+| `decimated` | full-density ALS terrain | survey provider's classes |
+
+Strata use the truth averaged over 5 m blocks (slope from the DTM, cover from
+the share of the CHM above 2 m), inside the scored core window only. The
+synthetic scenes give an unbiased DTM error (no reference classifier), but
+their terrain has no cliffs and their forests no understorey; the real scenes
+have both, against a measured reference.
+
 Caveat: the reference classification is itself the output of some ground
 filter, often a PTD variant in commercial software; a classifier close to it
 in kind may score better partly for that reason. Ask the data provider how

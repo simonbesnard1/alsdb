@@ -62,6 +62,18 @@ def test_classifier_input_keeps_only_noise_classes():
     assert points["Classification"].tolist() == [2, 5, 7, 18, 1]
 
 
+def test_classifier_input_numbers_unnumbered_returns():
+    from alsdb.benchmark.classification import classifier_input
+
+    points = np.zeros(3, dtype=[("Classification", "u1"), ("ReturnNumber", "u1"),
+                                ("NumberOfReturns", "u1")])  # fmt: skip
+    points["ReturnNumber"] = [0, 2, 1]
+    points["NumberOfReturns"] = [0, 3, 1]
+    out = classifier_input(points)
+    assert out["ReturnNumber"].tolist() == [1, 2, 1]
+    assert out["NumberOfReturns"].tolist() == [1, 3, 1]
+
+
 def test_reference_scoring_skips_unclassified_and_stratifies_slope():
     from alsdb.benchmark.classification import reference_context, score_against_reference
 
@@ -199,3 +211,56 @@ def test_file_benchmark_runs_each_ptd_parameter_set(tmp_path, monkeypatch):
         laz_dir, tmp_path / "out", methods=("ptd",), boundary_width=1, ptd=sets
     )
     assert seen == list(sets)
+
+
+def _write_scene(scene, terrain="rolling"):
+    import pdal
+
+    from alsdb.benchmark.classification import _terrain_height
+
+    points, truth = synthetic_points(
+        SyntheticClassificationScenario(terrain=terrain, size=60, density=4, noise_fraction=0)
+    )
+    points["Classification"] = np.where(truth, 2, 5)
+    (scene / "laz").mkdir(parents=True)
+    pdal.Pipeline(
+        json.dumps([{"type": "writers.las", "filename": str(scene / "laz" / "scene.laz")}]),
+        arrays=[points],
+    ).execute()
+    # Truth on the 40 m core window from x0 = 10, y1 = 50 (north-up rows).
+    cx, cy = np.meshgrid(10 + np.arange(40) + 0.5, 50 - np.arange(40) - 0.5)
+    dtm = _terrain_height(cx, cy, terrain)
+    np.savez(scene / "truth.npz", dtm=dtm, chm_centre=np.full_like(dtm, 20.0), x0=10.0, y1=50.0)
+    (scene / "scene.json").write_text(json.dumps({"scenario": {"terrain": terrain}}))
+
+
+def test_reference_from_truth_uses_the_core_window(tmp_path):
+    from alsdb.benchmark.classification import (
+        _read_las,
+        reference_from_truth,
+        score_against_reference,
+    )
+
+    _write_scene(tmp_path / "s")
+    points = _read_las(tmp_path / "s" / "laz" / "scene.laz")
+    ref = reference_from_truth(points, np.load(tmp_path / "s" / "truth.npz"))
+    assert len(ref.cells_z) == 1600
+    inside = (points["X"] >= 10) & (points["X"] < 50) & (points["Y"] > 10) & (points["Y"] <= 50)
+    np.testing.assert_array_equal(ref.interior, inside)
+    assert set(ref.point_strata["cover"][inside]) == {"95-100"}
+    row, strata = score_against_reference(ref, points, points["Classification"] == 2)
+    assert row["f1"] == 1 and row["dtm_mae"] < 0.1  # TIN of exact ground vs analytic terrain
+    assert {s["stratum"] for s in strata} == {"all", "slope", "cover"}
+
+
+def test_scene_benchmark_scores_and_resumes(tmp_path):
+    from alsdb.benchmark.classification import run_scene_benchmark
+
+    _write_scene(tmp_path / "scenes" / "rolling")
+    out = run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("smrf",))
+    rows = list(csv.DictReader(out.open()))
+    assert [r["status"] for r in rows] == ["ok"]
+    assert json.loads(rows[0]["scenario"]) == {"terrain": "rolling"}
+    assert float(rows[0]["dtm_mae"]) < 0.5
+    run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("smrf",))
+    assert len(list(csv.DictReader(out.open()))) == 1

@@ -50,6 +50,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -253,6 +254,12 @@ def classifier_input(points: np.ndarray) -> np.ndarray:
     """
     prepared = points.copy()
     prepared["Classification"][~np.isin(prepared["Classification"], NOISE_CLASSES)] = 1
+    # PDAL's ground filters refuse files where only some returns are numbered 0
+    # (seen in Robson Creek); count those as single returns.
+    if {"ReturnNumber", "NumberOfReturns"} <= set(prepared.dtype.names):
+        rn, nr = prepared["ReturnNumber"], prepared["NumberOfReturns"]
+        rn[rn == 0] = 1
+        nr[:] = np.maximum(nr, rn)
     return prepared
 
 
@@ -774,6 +781,19 @@ def _file_classifier(
     raise ValueError(f"unknown classification method: {method}")
 
 
+def _runs(methods, ptd):
+    """(method, PTD settings or None, parameters JSON) for every run requested."""
+    valid = {"csf", "pmf", "smrf", "ptd", "fastgc", "lastools"}
+    unknown = set(methods) - valid
+    if unknown:
+        raise ValueError(f"unknown classification methods: {sorted(unknown)}")
+    return [
+        (method, settings, json.dumps(method_parameters(method, settings), sort_keys=True))
+        for method in methods
+        for settings in (ptd if method == "ptd" else (None,))
+    ]
+
+
 def run_file_benchmark(
     laz_dir: str | Path,
     out_dir: str | Path,
@@ -806,11 +826,7 @@ def run_file_benchmark(
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")
-    runs = [
-        (method, settings, json.dumps(method_parameters(method, settings), sort_keys=True))
-        for method in methods
-        for settings in (ptd if method == "ptd" else (None,))
-    ]
+    runs = _runs(methods, ptd)
     laz_dir, out_dir = Path(laz_dir), Path(out_dir)
     files = sorted(path for path in laz_dir.rglob("*") if path.suffix.lower() in (".las", ".laz"))
     if tiles is not None:
@@ -895,3 +911,172 @@ def terrain_error(reference: np.ndarray, candidate: np.ndarray) -> dict[str, flo
         "p95": float(np.percentile(np.abs(residual), 95)),
         "coverage": float(valid.sum() / np.isfinite(reference).sum()),
     }
+
+
+# ---------------------------------------------------------------------------
+# Benchmark scenes: synthetic, ULS and decimated ALS against their truth DTM
+# ---------------------------------------------------------------------------
+
+SCENE_RESULT_FIELDS = (*FILE_RESULT_FIELDS, "scenario")
+SCENE_STRATA_FIELDS = (*STRATA_FIELDS, "scenario")
+
+
+def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) -> ReferenceContext:
+    """Reference of a benchmark scene: the scene's 1 m truth DTM, labels from its points.
+
+    *truth* is a scene's ``truth.npz`` (``dtm`` and ``chm_centre`` north-up from
+    ``x0``, ``y1``): the exact terrain for synthetic scenes, the full-density
+    terrain for ULS and decimated ALS. Slope and cover strata come from the
+    truth averaged over *cell* m blocks; only points and cells of the scored
+    core window are stratified.
+    """
+    dtm = np.asarray(truth["dtm"], dtype=float)
+    ny, nx = dtm.shape
+    x0, y1 = float(truth["x0"]), float(truth["y1"])
+    classes = points["Classification"]
+    scored = ~np.isin(classes, UNSCORED_CLASSES)
+    if "Withheld" in points.dtype.names:
+        scored &= ~points["Withheld"].astype(bool)
+    x, y = points["X"], points["Y"]
+    interior = (x >= x0) & (x < x0 + nx) & (y > y1 - ny) & (y <= y1)
+
+    b = max(1, round(cell))
+    by, bx = max(1, ny // b), max(1, nx // b)
+
+    def blocks(a):
+        a = a[: by * b, : bx * b].reshape(by, min(b, ny), bx, min(b, nx))
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return np.nanmean(a, axis=(1, 3))
+
+    terrain = blocks(dtm)
+    if by > 1 and bx > 1:
+        dzdy, dzdx = np.gradient(terrain, float(b))
+        slope = np.degrees(np.arctan(np.hypot(dzdx, dzdy)))
+    else:
+        slope = np.full_like(terrain, np.nan)
+    chm = np.asarray(truth["chm_centre"], dtype=float) if "chm_centre" in truth else None
+    if chm is not None:
+        canopy = np.where(np.isfinite(chm), (chm > COVER_HEIGHT).astype(float), np.nan)
+        cover = blocks(canopy)
+    else:
+        cover = np.full_like(terrain, np.nan)
+    labels = {"slope": _labels(slope.ravel(), SLOPE_BREAKS),
+              "cover": _labels(cover.ravel(), COVER_BREAKS, scale=100)}  # fmt: skip
+
+    def block_of(px, py):
+        row = np.clip(np.floor((y1 - py) / b).astype(np.int64), 0, by - 1)
+        col = np.clip(np.floor((px - x0) / b).astype(np.int64), 0, bx - 1)
+        return row * bx + col
+
+    point_block = block_of(x, y)
+    point_strata = {}
+    for kind, values in labels.items():
+        point_strata[kind] = values[point_block]
+        point_strata[kind][~interior] = ""
+    cx, cy = np.meshgrid(x0 + np.arange(nx) + 0.5, y1 - np.arange(ny) - 0.5)
+    cells_xy = np.column_stack((cx.ravel(), cy.ravel()))
+    cell_block = block_of(cells_xy[:, 0], cells_xy[:, 1])
+    return ReferenceContext(
+        scored=scored,
+        truth=classes == 2,
+        interior=interior,
+        point_strata=point_strata,
+        cells_xy=cells_xy,
+        cells_z=dtm.ravel(),
+        cell_strata={kind: values[cell_block] for kind, values in labels.items()},
+    )
+
+
+def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
+                   fastgc_executable="fastgc"):  # fmt: skip
+    """[(results row, strata rows)] for each run on one benchmark scene."""
+    scene = Path(scene)
+    laz = sorted(p for p in (scene / "laz").iterdir() if p.suffix.lower() in (".las", ".laz"))
+    if len(laz) != 1:
+        raise ValueError(f"{scene.name}: expected one LAS/LAZ file in laz/, found {len(laz)}")
+    points = _read_las(laz[0])
+    ref = reference_from_truth(points, np.load(scene / "truth.npz"))
+    meta = scene / "scene.json"
+    scenario = json.dumps(json.loads(meta.read_text()).get("scenario", {})) if meta.exists() else ""
+    out = []
+    for method, settings, parameters in runs:
+        row = {"file": scene.name, "method": method, "parameters": parameters,
+               "n_points": len(points), "scenario": scenario}  # fmt: skip
+        strata = []
+        try:
+            with tempfile.TemporaryDirectory(prefix=f"alsdb-{method}-", dir=work_dir) as tmp:
+                run = _file_classifier(method, laz[0], points, Path(tmp),
+                                       lastools_executable=lastools_executable,
+                                       fastgc_executable=fastgc_executable, ptd=settings)  # fmt: skip
+            scores, strata = score_against_reference(ref, points, run.is_ground)
+            row.update(scores, status="ok", error="", wall_seconds=run.wall_seconds)
+        except Exception as exc:  # noqa: BLE001 - one failed tool must not abort a long run
+            row.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        for stratum in strata:
+            stratum.update(file=scene.name, method=method, parameters=parameters,
+                           scenario=scenario)  # fmt: skip
+        out.append((row, strata))
+    return out
+
+
+def run_scene_benchmark(
+    scenes_dirs,
+    out_dir: str | Path,
+    *,
+    methods: tuple[str, ...] = ("csf", "pmf", "smrf"),
+    ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
+    workers: int = 1,
+    lastools_executable: str = "lasground64",
+    fastgc_executable: str = "fastgc",
+) -> Path:
+    """Classify the points of benchmark scenes and score the DTMs against their truth.
+
+    Works on the scene folders of :mod:`alsdb.benchmark.synthetic`,
+    :mod:`~alsdb.benchmark.uls` and :mod:`~alsdb.benchmark.decimated`
+    (``laz/`` with one file, ``truth.npz``, ``scene.json``). The reference DTM
+    is the scene's truth: exact for synthetic scenes, the full-density survey
+    for ULS and decimated ALS. Point labels are scored against the scene's own
+    classes (HELIOS++ labels, or the survey provider's). Rows go to
+    ``results.csv`` and ``strata.csv`` as in :func:`run_file_benchmark`, with
+    the scene's scenario; finished runs are skipped on rerun.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    runs = _runs(methods, ptd)
+    if isinstance(scenes_dirs, (str, Path)):
+        scenes_dirs = [scenes_dirs]
+    scenes = sorted(
+        (p for d in scenes_dirs for p in Path(d).iterdir()
+         if (p / "truth.npz").exists() and (p / "laz").is_dir()),
+        key=lambda p: p.name,
+    )  # fmt: skip
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results, strata_csv = out_dir / "results.csv", out_dir / "strata.csv"
+    completed = _completed_file_runs(results)
+    todo = [(scene, [r for r in runs if (scene.name, r[0], r[2]) not in completed])
+            for scene in scenes]  # fmt: skip
+    todo = [(scene, pending) for scene, pending in todo if pending]
+    print(f"{len(todo)} of {len(scenes)} scenes to classify", flush=True)
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(classify_scene, scene, pending, out_dir, lastools_executable,
+                               fastgc_executable): scene for scene, pending in todo}  # fmt: skip
+        for future in as_completed(futures):
+            scene = futures[future]
+            try:
+                done = future.result()
+            except Exception as exc:  # noqa: BLE001 - one bad scene must not stop the run
+                print(f"{scene.name}: FAILED {exc}", flush=True)
+                continue
+            for row, strata in done:
+                _append_rows(strata_csv, strata, SCENE_STRATA_FIELDS)
+                _append_rows(results, [row], SCENE_RESULT_FIELDS)
+            summary = ", ".join(
+                f"{row['method']} {row.get('dtm_mae', float('nan')):.2f}"
+                if row["status"] == "ok" else f"{row['method']} ERROR"
+                for row, _ in done
+            )  # fmt: skip
+            print(f"{scene.name}: DTM MAE {summary}", flush=True)
+    print(f"-> {results}", flush=True)
+    return results

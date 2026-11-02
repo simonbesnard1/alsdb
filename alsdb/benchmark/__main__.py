@@ -71,6 +71,26 @@ def main(argv=None):
     p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
     p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
 
+    p = sub.add_parser(
+        "classification-scenes",
+        help="classify synthetic / ULS / decimated benchmark scenes; DTM against their truth",
+    )
+    p.add_argument("out_dir")
+    p.add_argument("--scenes-dir", nargs="+", required=True, help="folders of benchmark scenes")
+    p.add_argument(
+        "--tools",
+        nargs="+",
+        default=["csf", "pmf", "smrf", "ptd"],
+        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+    )
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--lastools-dir", help="folder containing lasground64")
+    p.add_argument("--fastgc-executable", default="fastgc")
+    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
+    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
+    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
+    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
+
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
@@ -205,6 +225,28 @@ def main(argv=None):
             tiles=args.tiles,
             reference_dir=args.reference_dir,
             lastools_executable=lasground,
+            fastgc_executable=args.fastgc_executable,
+            ptd=tuple(
+                PTDParameters(*values)
+                for values in itertools.product(
+                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
+                )
+            ),
+        )
+    elif args.command == "classification-scenes":
+        import itertools
+        from pathlib import Path
+
+        from alsdb.benchmark.classification import PTDParameters, run_scene_benchmark
+
+        run_scene_benchmark(
+            args.scenes_dir,
+            args.out_dir,
+            methods=tuple(args.tools),
+            workers=args.workers,
+            lastools_executable=(
+                str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
+            ),
             fastgc_executable=args.fastgc_executable,
             ptd=tuple(
                 PTDParameters(*values)
