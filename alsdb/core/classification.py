@@ -1,4 +1,31 @@
-"""Validated configuration and PDAL stages for point classification."""
+"""Validated configuration and PDAL stages for point classification.
+
+Ground filters are PDAL's (Butler et al. 2021) implementations of CSF (Zhang
+et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al. 2013); the
+optional noise stage is PDAL's extended local minimum filter (Chen et al.
+2012) followed by a radius outlier filter.
+
+References
+----------
+Butler, H., Chambers, B., Hartzell, P., & Glennie, C. (2021). PDAL: An open
+    source library for the processing and analysis of point clouds. Computers
+    & Geosciences, 148, 104680. https://doi.org/10.1016/j.cageo.2020.104680
+Chen, Z., Devereux, B., Gao, B., & Amable, G. (2012). Upward-fusion urban DTM
+    generating method using airborne Lidar data. ISPRS Journal of
+    Photogrammetry and Remote Sensing, 72, 121-130.
+    https://doi.org/10.1016/j.isprsjprs.2012.07.001
+Pingel, T. J., Clarke, K. C., & McBride, W. A. (2013). An improved simple
+    morphological filter for the terrain classification of airborne LIDAR
+    data. ISPRS Journal of Photogrammetry and Remote Sensing, 77, 21-30.
+    https://doi.org/10.1016/j.isprsjprs.2012.12.002
+Zhang, K., Chen, S.-C., Whitman, D., Shyu, M.-L., Yan, J., & Zhang, C. (2003).
+    A progressive morphological filter for removing nonground measurements
+    from airborne LIDAR data. IEEE Transactions on Geoscience and Remote
+    Sensing, 41(4), 872-882. https://doi.org/10.1109/TGRS.2003.810682
+Zhang, W., Qi, J., Wan, P., Wang, H., Xie, D., Wang, X., & Yan, G. (2016). An
+    easy-to-use airborne LiDAR data filtering method based on cloth
+    simulation. Remote Sensing, 8(6), 501. https://doi.org/10.3390/rs8060501
+"""
 
 from __future__ import annotations
 

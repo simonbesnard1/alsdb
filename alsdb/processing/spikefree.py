@@ -1,4 +1,23 @@
-"""Native incremental constrained-Delaunay spike-free canopy reconstruction."""
+"""Native incremental constrained-Delaunay spike-free canopy reconstruction.
+
+Implements the spike-free algorithm of Khosravipour et al. (2016): points are
+inserted from highest to lowest into a TIN, and a point is skipped where the
+triangle above it is "frozen" (all edges shorter than the freeze distance and
+at least the height buffer above the point). Triangulation uses CGAL's
+constrained Delaunay triangulation (The CGAL Project). Unlike LAStools and
+lasR, freezing is evaluated at each insertion rather than seeded from a
+coarse grid of highest points (see doc/chm_methods.md).
+
+References
+----------
+Khosravipour, A., Skidmore, A. K., & Isenburg, M. (2016). Generating
+    spike-free digital surface models using LiDAR raw point clouds: A new
+    approach for forestry applications. International Journal of Applied
+    Earth Observation and Geoinformation, 52, 104-114.
+    https://doi.org/10.1016/j.jag.2016.06.005
+The CGAL Project. CGAL User and Reference Manual, 2D Triangulations.
+    https://doc.cgal.org/latest/Triangulation_2/
+"""
 
 import numpy as np
 

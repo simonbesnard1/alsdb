@@ -62,8 +62,14 @@ def main(argv=None):
     )
     p.add_argument("--boundary-width", type=float, default=5.0)
     p.add_argument("--tiles", type=int, help="only process the first N files")
+    p.add_argument("--reference-dir", help="full-density originals (same file names) for terrain")
     p.add_argument("--lastools-dir", help="folder containing lasground64")
     p.add_argument("--fastgc-executable", default="fastgc")
+    # PTD (Axelsson 2000) via pyLASR; several values run every combination. Defaults: lasR's.
+    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
+    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
+    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
+    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
 
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
@@ -183,9 +189,10 @@ def main(argv=None):
         else:
             print(payload)
     elif args.command == "classification-files":
+        import itertools
         from pathlib import Path
 
-        from alsdb.benchmark.classification import run_file_benchmark
+        from alsdb.benchmark.classification import PTDParameters, run_file_benchmark
 
         lasground = (
             str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
@@ -196,8 +203,15 @@ def main(argv=None):
             methods=tuple(args.tools),
             boundary_width=args.boundary_width,
             tiles=args.tiles,
+            reference_dir=args.reference_dir,
             lastools_executable=lasground,
             fastgc_executable=args.fastgc_executable,
+            ptd=tuple(
+                PTDParameters(*values)
+                for values in itertools.product(
+                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
+                )
+            ),
         )
     elif args.command == "lastools":
         from alsdb.benchmark import lastools

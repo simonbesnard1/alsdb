@@ -5,7 +5,9 @@ already selected and normalized (used by ``method="lastools"`` and the point
 benchmark). :func:`run` builds reference CHM tiles from classified LAS/LAZ
 files with LAStools' own normalization, independent of alsdb.
 
-LAStools is proprietary and not installed by alsdb; executables are called as
+LAStools (rapidlasso GmbH, https://rapidlasso.de; ``las2dem -spike_free``
+implements Khosravipour et al. 2016, https://doi.org/10.1016/j.jag.2016.06.005)
+is proprietary and not installed by alsdb; executables are called as
 separate processes. Without a licence they degrade output on large files, so
 every command passes ``-fail`` to error instead.
 """

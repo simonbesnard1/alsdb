@@ -189,8 +189,12 @@ python -m alsdb.benchmark classification-files results/classification \
     --boundary-width 5
 ```
 
-Results are appended to `results.csv`. Successful file/method pairs are skipped
-when the command is restarted; failures are recorded and retried.
+Results are appended to `results.csv` (point type I / II errors after Sithole &
+Vosselman 2004, and DTM error against the reference terrain) and `strata.csv`
+(the same by slope and canopy cover). Successful file/method/parameter runs are
+skipped when the command is restarted; failures are recorded and retried. See
+[doc/benchmarking.md](doc/benchmarking.md#ground-classification) and its
+references for the classifiers (CSF, PMF, SMRF via PDAL; PTD via lasR).
 
 ---
 

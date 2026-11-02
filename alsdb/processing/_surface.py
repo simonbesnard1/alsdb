@@ -147,6 +147,11 @@ def surface_mask(arr, config):
 def auto_freeze_distance(points):
     """Spike-free freeze distance: three pulse spacings, as lidR recommends.
 
+    lidR's ``spikefree()`` documentation (Roussel et al. 2020): "3 times the
+    pulse spacing or a little higher". Fischer et al. (2024,
+    https://doi.org/10.1111/2041-210X.14416) set it locally instead, 1.42 m +
+    1.96 x spacing (lidR ``lspikefree()``).
+
     Pulses are first returns. The old fixed 1.5 m default suits ~4+ pulses/m2;
     on ~1 pulse/m2 PNOA data it froze too little and left pits (mean CHM
     1.8 m below LAStools on Barcelona NFI plots, vs 0.5 m at 3 m).

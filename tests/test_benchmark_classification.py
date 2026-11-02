@@ -1,4 +1,5 @@
 import csv
+import json
 
 import numpy as np
 import pytest
@@ -30,6 +31,7 @@ def test_classification_scores_known_confusion_matrix():
         1,
     )
     assert score.precision == score.recall == score.f1 == score.balanced_accuracy == 0.5
+    assert score.omission == score.commission == score.total_error == score.ground_fraction == 0.5
 
 
 def test_classification_scores_require_matching_vectors():
@@ -47,8 +49,47 @@ def test_terrain_error_known_values_and_missing_cells():
     assert score["coverage"] == 1.0
 
 
-def test_ptd_parameter_defaults_match_pylasr():
-    assert PTDParameters() == PTDParameters(10.0, 20.0, 3.0, 0.25)
+def test_ptd_parameter_defaults_match_lasr():
+    assert PTDParameters() == PTDParameters(10.0, 30.0, 2.0, 0.25)
+
+
+def test_classifier_input_keeps_only_noise_classes():
+    from alsdb.benchmark.classification import classifier_input
+
+    points = np.zeros(5, dtype=[("Classification", "u1")])
+    points["Classification"] = [2, 5, 7, 18, 1]
+    assert classifier_input(points)["Classification"].tolist() == [1, 1, 7, 18, 1]
+    assert points["Classification"].tolist() == [2, 5, 7, 18, 1]
+
+
+def test_reference_scoring_skips_unclassified_and_stratifies_slope():
+    from alsdb.benchmark.classification import reference_context, score_against_reference
+
+    points, truth = synthetic_points(
+        SyntheticClassificationScenario(terrain="steep", size=40, density=4, noise_fraction=0)
+    )
+    points["Classification"] = np.where(truth, 2, 5)
+    points["Classification"][:10] = 1  # unclassified in the reference
+    ref = reference_context(points, (0, 0, 40, 40), boundary_width=5)
+    assert not ref.scored[:10].any() and ref.scored[10:].all()
+    assert set(ref.point_strata["slope"][ref.interior]) <= {"15-30", "30-45"}
+
+    row, strata = score_against_reference(ref, points, points["Classification"] == 2)
+    assert row["f1"] == 1 and row["omission"] == row["commission"] == 0
+    assert row["dtm_mae"] == pytest.approx(0, abs=1e-9) and row["dtm_coverage"] > 0.9
+    assert row["n_scored"] == len(points) - 10
+    assert strata[0]["stratum"] == "all"
+    assert {s["stratum"] for s in strata} == {"all", "slope", "cover"}
+
+    # Terrain from a denser original: labels still from the decimated points.
+    sparse = points[::4]
+    ref_sparse = reference_context(sparse, (0, 0, 40, 40), 5, reference=points)
+    np.testing.assert_allclose(ref_sparse.cells_z, ref.cells_z)
+    assert ref_sparse.truth.sum() == (sparse["Classification"] == 2).sum()
+
+    # Every reference ground point missed: type I error 1, no DTM.
+    row, _ = score_against_reference(ref, points, np.zeros(len(points), bool))
+    assert row["omission"] == 1 and np.isnan(row["dtm_mae"])
 
 
 def test_synthetic_scenarios_are_reproducible_and_have_exact_labels():
@@ -130,6 +171,31 @@ def test_file_benchmark_writes_results_and_resumes(tmp_path, monkeypatch):
     assert calls == ["pmf", "smrf"]
     assert [row["status"] for row in rows] == ["ok", "ok"]
     assert all(float(row["f1"]) == 1 for row in rows)
+    assert all(json.loads(row["parameters"]) for row in rows)
+    assert (output / "strata.csv").exists()
 
     classification.run_file_benchmark(laz_dir, output, methods=("pmf", "smrf"), boundary_width=1)
     assert calls == ["pmf", "smrf"]
+
+
+def test_file_benchmark_runs_each_ptd_parameter_set(tmp_path, monkeypatch):
+    from alsdb.benchmark import classification
+
+    laz_dir = tmp_path / "input"
+    laz_dir.mkdir()
+    (laz_dir / "tile.laz").touch()
+    points, truth = synthetic_points(SyntheticClassificationScenario(size=10, density=0.2))
+    points["Classification"] = np.where(truth, 2, 5)
+    seen = []
+    monkeypatch.setattr(classification, "_read_las", lambda path: points)
+
+    def classify(method, input_path, source, work_dir, ptd=None, **kwargs):
+        seen.append(ptd)
+        return classification.ClassificationRun(method, truth, 0.1)
+
+    monkeypatch.setattr(classification, "_file_classifier", classify)
+    sets = (classification.PTDParameters(angle=20), classification.PTDParameters(angle=40))
+    classification.run_file_benchmark(
+        laz_dir, tmp_path / "out", methods=("ptd",), boundary_width=1, ptd=sets
+    )
+    assert seen == list(sets)

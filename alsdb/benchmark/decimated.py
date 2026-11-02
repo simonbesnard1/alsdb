@@ -16,6 +16,19 @@ Unlike thinned ULS, the input keeps the aircraft sensor and footprint; only
 the density changes. The reference uses the original's classification, which
 the tools also see.
 
+The Chapitre Petit Buech and Robson Creek surveys and their decimated copies
+were provided by Fabian Fischer (University of Bristol), made with the
+workflow of Fischer et al. (2024): ``pd_X`` keeps X pulses/m2 by removing
+pulses at regular steps in acquisition order (preserving the scan pattern),
+``pd_X_ft_F`` additionally removes a fraction F of higher-order returns.
+The Robson Creek original is TERN data. The reference classification of
+Robson Creek is less reliable than Petit Buech's (F. Fischer, pers. comm.).
+
+Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
+characterisation of forest structure from airborne laser scanning - A
+systematic assessment and sample workflow for ecologists. Methods in Ecology
+and Evolution, 15, 1873-1888. https://doi.org/10.1111/2041-210X.14416
+
     python -m alsdb.benchmark decimated <out_dir> --site PetitBuech \\
         --original <site>/original --x0 937650 --y0 6396650 --core 200
 """

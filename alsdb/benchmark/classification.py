@@ -1,4 +1,46 @@
-"""Ground-classification adapters and accuracy metrics."""
+"""Ground-classification adapters and accuracy metrics.
+
+Classifiers compared (each cited where it is run):
+
+- CSF, cloth simulation filter (Zhang et al. 2016), PMF, progressive
+  morphological filter (Zhang et al. 2003) and SMRF, simple morphological
+  filter (Pingel et al. 2013), as implemented in PDAL (Butler et al. 2021);
+- PTD, progressive TIN densification (Axelsson 2000), as implemented in lasR
+  and its Python binding pyLASR (Roussel et al.);
+- LAStools ``lasground`` (rapidlasso GmbH) and FAST-GC (Fareed et al.),
+  run as external programs.
+
+Point labels are scored with the type I (ground rejected) and type II
+(non-ground accepted) errors of Sithole & Vosselman (2004), and terrain
+models from the predicted ground against the reference terrain model, overall
+and by terrain slope and canopy cover.
+
+References
+----------
+Axelsson, P. (2000). DEM generation from laser scanner data using adaptive TIN
+    models. International Archives of Photogrammetry and Remote Sensing,
+    33(B4), 110-117.
+Butler, H., Chambers, B., Hartzell, P., & Glennie, C. (2021). PDAL: An open
+    source library for the processing and analysis of point clouds. Computers
+    & Geosciences, 148, 104680. https://doi.org/10.1016/j.cageo.2020.104680
+Pingel, T. J., Clarke, K. C., & McBride, W. A. (2013). An improved simple
+    morphological filter for the terrain classification of airborne LIDAR
+    data. ISPRS Journal of Photogrammetry and Remote Sensing, 77, 21-30.
+    https://doi.org/10.1016/j.isprsjprs.2012.12.002
+Sithole, G., & Vosselman, G. (2004). Experimental comparison of filter
+    algorithms for bare-Earth extraction from airborne laser scanning point
+    clouds. ISPRS Journal of Photogrammetry and Remote Sensing, 59(1-2),
+    85-101. https://doi.org/10.1016/j.isprsjprs.2004.05.004
+Zhang, K., Chen, S.-C., Whitman, D., Shyu, M.-L., Yan, J., & Zhang, C. (2003).
+    A progressive morphological filter for removing nonground measurements
+    from airborne LIDAR data. IEEE Transactions on Geoscience and Remote
+    Sensing, 41(4), 872-882. https://doi.org/10.1109/TGRS.2003.810682
+Zhang, W., Qi, J., Wan, P., Wang, H., Xie, D., Wang, X., & Yan, G. (2016). An
+    easy-to-use airborne LiDAR data filtering method based on cloth
+    simulation. Remote Sensing, 8(6), 501. https://doi.org/10.3390/rs8060501
+lasR / pyLASR: Roussel, J.-R., https://github.com/r-lidar/lasR
+FAST-GC: Fareed, N. et al., https://github.com/nadeemfareed/FAST-GC
+"""
 
 from __future__ import annotations
 
@@ -16,6 +58,16 @@ import pdal
 
 from alsdb.core.classification import ClassificationConfig, ground_stage
 
+NOISE_CLASSES = (7, 18)
+# Reference points without a ground / non-ground decision are not scored:
+# never classified (0), unclassified (1) and noise (7, 18).
+UNSCORED_CLASSES = (0, 1, *NOISE_CLASSES)
+STRATUM_CELL = 5.0  # m, cells for terrain slope and canopy cover
+SLOPE_BREAKS = (0.0, 15.0, 30.0, 45.0, 90.0)  # degrees
+COVER_BREAKS = (0.0, 0.5, 0.8, 0.95, 1.0)  # share of first returns above COVER_HEIGHT
+COVER_HEIGHT = 2.0  # m above the reference terrain
+DTM_RESOLUTION = 1.0  # m
+
 
 @dataclass(frozen=True)
 class ClassificationScore:
@@ -32,6 +84,10 @@ class ClassificationScore:
     recall: float
     f1: float
     balanced_accuracy: float
+    ground_fraction: float
+    omission: float  # type I: ground rejected / true ground (Sithole & Vosselman 2004)
+    commission: float  # type II: non-ground accepted / true non-ground
+    total_error: float  # misclassified / all
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -48,11 +104,18 @@ class ClassificationRun:
 
 @dataclass(frozen=True)
 class PTDParameters:
-    """pyLASR progressive TIN densification parameters."""
+    """Progressive TIN densification parameters (Axelsson 2000).
+
+    Defaults are lasR's (``classify_with_ptd`` in R; pyLASR's own defaults
+    differ: angle 20, distance 3): lowest point per *seed_resolution* cell as
+    seeds, iteration *angle* (degrees; lasR suggests ~20 for flat, ~40 for
+    mountainous terrain) and *distance* (m), densification stops at
+    triangles smaller than *spacing* (m).
+    """
 
     seed_resolution: float = 10.0
-    angle: float = 20.0
-    distance: float = 3.0
+    angle: float = 30.0
+    distance: float = 2.0
     spacing: float = 0.25
 
 
@@ -138,6 +201,7 @@ def score_ground_classification(truth, prediction) -> ClassificationScore:
     precision = _ratio(tp, tp + fp)
     recall = _ratio(tp, tp + fn)
     specificity = _ratio(tn, tn + fp)
+    n = tp + fp + fn + tn
     return ClassificationScore(
         true_ground=int(truth.sum()),
         true_non_ground=int((~truth).sum()),
@@ -150,6 +214,10 @@ def score_ground_classification(truth, prediction) -> ClassificationScore:
         recall=recall,
         f1=_ratio(2 * tp, 2 * tp + fp + fn),
         balanced_accuracy=(recall + specificity) / 2,
+        ground_fraction=_ratio(tp + fn, n),
+        omission=_ratio(fn, tp + fn),
+        commission=_ratio(fp, fp + tn),
+        total_error=_ratio(fp + fn, n),
     )
 
 
@@ -177,6 +245,17 @@ def score_boundary_strips(
     }
 
 
+def classifier_input(points: np.ndarray) -> np.ndarray:
+    """Copy of *points* with every class but noise (7, 18) reset to 1.
+
+    Classifiers then start from scratch but still skip the reference's noise,
+    as they would on a delivered survey.
+    """
+    prepared = points.copy()
+    prepared["Classification"][~np.isin(prepared["Classification"], NOISE_CLASSES)] = 1
+    return prepared
+
+
 def run_pdal_ground_classifier(
     points: np.ndarray,
     config: ClassificationConfig,
@@ -186,9 +265,7 @@ def run_pdal_ground_classifier(
     """Run CSF, PMF, or SMRF on an in-memory point array."""
     if config.ground_method not in ("csf", "pmf", "smrf"):
         raise ValueError(f"{config.ground_method!r} is not a PDAL ground method")
-    prepared = points.copy()
-    if reset_classes:
-        prepared["Classification"] = 1
+    prepared = classifier_input(points) if reset_classes else points.copy()
     start = time.perf_counter()
     pipeline = pdal.Pipeline(json.dumps([ground_stage(config)]), arrays=[prepared])
     pipeline.execute()
@@ -242,7 +319,7 @@ def run_pylasr_ptd(
     output_path: str | Path,
     parameters: PTDParameters | None = None,
 ) -> ClassificationRun:
-    """Run PTD through the optional current-source pyLASR package."""
+    """Run PTD (Axelsson 2000) through pyLASR built from lasR source; noise is skipped."""
     try:
         import pylasr
     except ImportError as exc:
@@ -261,7 +338,7 @@ def run_pylasr_ptd(
         distance=parameters.distance,
         spacing=parameters.spacing,
         classification=2,
-        filter=[""],
+        filter=["Classification %out% 7 18"],  # lasR drop_noise()
     ) + pylasr.write_las(str(output_path))
     start = time.perf_counter()
     result = pipeline.execute(str(input_path))
@@ -412,27 +489,243 @@ FILE_RESULT_FIELDS = (
     "recall",
     "f1",
     "balanced_accuracy",
+    "ground_fraction",
+    "omission",
+    "commission",
+    "total_error",
     "boundary_f1",
     "interior_f1",
+    "dtm_bias",
+    "dtm_mae",
+    "dtm_rmse",
+    "dtm_nmad",
+    "dtm_p95",
+    "dtm_coverage",
+    "n_scored",
+    "parameters",
+)
+
+STRATA_FIELDS = (
+    "file",
+    "method",
+    "parameters",
+    "stratum",
+    "label",
+    "n_points",
+    "true_ground",
+    "ground_fraction",
+    "omission",
+    "commission",
+    "total_error",
+    "f1",
+    "n_cells",
+    "dtm_bias",
+    "dtm_mae",
+    "dtm_rmse",
+    "dtm_p95",
+    "dtm_coverage",
 )
 
 
-def _append_file_result(path: Path, row: dict) -> None:
+def _append_rows(path: Path, rows: list[dict], fields: tuple[str, ...]) -> None:
     new = not path.exists()
     with path.open("a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FILE_RESULT_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         if new:
             writer.writeheader()
-        writer.writerow(row)
+        writer.writerows(rows)
 
 
-def _completed_file_runs(path: Path) -> set[tuple[str, str]]:
+def _completed_file_runs(path: Path) -> set[tuple[str, str, str]]:
     if not path.exists():
         return set()
     with path.open(newline="") as handle:
         return {
-            (row["file"], row["method"]) for row in csv.DictReader(handle) if row["status"] == "ok"
+            (row["file"], row["method"], row.get("parameters", ""))
+            for row in csv.DictReader(handle)
+            if row["status"] == "ok"
         }
+
+
+def _labels(values: np.ndarray, breaks: tuple[float, ...], scale: float = 1.0) -> np.ndarray:
+    """Class label ("15-30") per value; "" where undefined. The last class includes its top."""
+    index = np.clip(np.searchsorted(breaks, values, side="right") - 1, 0, len(breaks) - 2)
+    names = np.array(
+        [f"{breaks[i] * scale:g}-{breaks[i + 1] * scale:g}" for i in range(len(breaks) - 1)]
+    )
+    out = names[index].astype(object)
+    out[~np.isfinite(values)] = ""
+    return out
+
+
+@dataclass
+class ReferenceContext:
+    """Per-file reference: scored points, terrain model, strata and DTM cells."""
+
+    scored: np.ndarray  # points with a ground / non-ground reference label
+    truth: np.ndarray  # reference ground (class 2)
+    interior: np.ndarray  # points inside the boundary strip
+    point_strata: dict[str, np.ndarray]  # stratum -> class label per point
+    cells_xy: np.ndarray  # interior DTM cell centres
+    cells_z: np.ndarray  # reference terrain there (NaN outside its TIN)
+    cell_strata: dict[str, np.ndarray]
+
+
+def reference_context(
+    points: np.ndarray, bbox, boundary_width: float, reference: np.ndarray | None = None
+) -> ReferenceContext:
+    """Reference labels, terrain and slope / cover strata of one classified file.
+
+    Slope comes from the reference terrain TIN sampled every
+    :data:`STRATUM_CELL` m; cover is the share of first returns more than
+    :data:`COVER_HEIGHT` m above it in the same cells. Terrain and cover come
+    from *reference* when given (e.g. the full-density original of a
+    decimated copy), otherwise from *points*; point labels always come from
+    *points*.
+    """
+    from alsdb.processing._terrain import TerrainModel
+
+    classes = points["Classification"]
+    scored = ~np.isin(classes, UNSCORED_CLASSES)
+    if "Withheld" in points.dtype.names:
+        scored &= ~points["Withheld"].astype(bool)
+    truth = classes == 2
+    x0, y0, x1, y1 = bbox
+    width = boundary_width if 2 * boundary_width < min(x1 - x0, y1 - y0) else 0.0
+    x, y = points["X"], points["Y"]
+    interior = (x >= x0 + width) & (x < x1 - width) & (y >= y0 + width) & (y < y1 - width)
+    surface = points if reference is None else reference
+    terrain = TerrainModel(surface[surface["Classification"] == 2])
+
+    c = STRATUM_CELL
+    nx, ny = max(1, int(np.ceil((x1 - x0) / c))), max(1, int(np.ceil((y1 - y0) / c)))
+    gx, gy = np.meshgrid(x0 + (np.arange(nx) + 0.5) * c, y0 + (np.arange(ny) + 0.5) * c)
+    z = terrain.evaluate(np.column_stack((gx.ravel(), gy.ravel())), distances=False)[0]
+    z = z.reshape(ny, nx)
+    if nx > 1 and ny > 1:
+        dzdy, dzdx = np.gradient(z, c)
+        slope = np.degrees(np.arctan(np.hypot(dzdx, dzdy)))
+    else:
+        slope = np.full_like(z, np.nan)
+
+    def cell_of(px, py):
+        col = np.clip(((px - x0) // c).astype(np.int64), 0, nx - 1)
+        row = np.clip(((py - y0) // c).astype(np.int64), 0, ny - 1)
+        return row * nx + col
+
+    sx, sy = surface["X"], surface["Y"]
+    first = np.flatnonzero(
+        (surface["ReturnNumber"] == 1) & ~np.isin(surface["Classification"], NOISE_CLASSES)
+    )
+    ground_z = terrain.evaluate(np.column_stack((sx[first], sy[first])), distances=False)[0]
+    canopy = surface["Z"][first] - ground_z > COVER_HEIGHT
+    first_cell = cell_of(sx[first], sy[first])
+    n_first = np.bincount(first_cell, minlength=nx * ny)
+    n_canopy = np.bincount(first_cell[canopy], minlength=nx * ny)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cover = np.where(n_first > 0, n_canopy / n_first, np.nan)
+    cell_labels = {
+        "slope": _labels(slope.ravel(), SLOPE_BREAKS),
+        "cover": _labels(cover, COVER_BREAKS, scale=100),
+    }
+    point_cell = cell_of(x, y)
+
+    r = DTM_RESOLUTION
+    cx = np.arange(x0 + width + r / 2, x1 - width, r)
+    cy = np.arange(y0 + width + r / 2, y1 - width, r)
+    mx, my = np.meshgrid(cx, cy)
+    cells_xy = np.column_stack((mx.ravel(), my.ravel()))
+    cells_z = terrain.evaluate(cells_xy, distances=False)[0]
+    dtm_cell = cell_of(cells_xy[:, 0], cells_xy[:, 1])
+    return ReferenceContext(
+        scored=scored,
+        truth=truth,
+        interior=interior,
+        point_strata={k: v[point_cell] for k, v in cell_labels.items()},
+        cells_xy=cells_xy,
+        cells_z=cells_z,
+        cell_strata={k: v[dtm_cell] for k, v in cell_labels.items()},
+    )
+
+
+def score_against_reference(
+    ref: ReferenceContext, points: np.ndarray, is_ground: np.ndarray
+) -> tuple[dict, list[dict]]:
+    """(file-level scores, rows per slope / cover class) for one classifier's ground mask.
+
+    Point scores use the scored points; boundary / interior F1 and the strata
+    use interior points only, so tile edges do not bias method comparisons.
+    The DTM is a TIN of the predicted ground (noise excluded), compared with
+    the reference terrain on interior 1 m cells.
+    """
+    from alsdb.processing._terrain import TerrainModel
+
+    is_ground = np.asarray(is_ground, bool)
+    truth, scored = ref.truth, ref.scored
+    overall = score_ground_classification(truth[scored], is_ground[scored])
+    inner, edge = scored & ref.interior, scored & ~ref.interior
+    keep = is_ground & ~np.isin(points["Classification"], NOISE_CLASSES)
+    candidate = TerrainModel(points[keep])
+    cz = candidate.evaluate(ref.cells_xy, distances=False)[0]
+    dtm = terrain_error(ref.cells_z, cz)
+    row = {
+        **overall.to_dict(),
+        "n_scored": int(scored.sum()),
+        "interior_f1": score_ground_classification(truth[inner], is_ground[inner]).f1,
+        "boundary_f1": (
+            score_ground_classification(truth[edge], is_ground[edge]).f1 if edge.any() else np.nan
+        ),
+        **{f"dtm_{k}": v for k, v in dtm.items()},
+    }
+    strata = []
+    groups = [("all", "all", inner, np.ones(len(cz), bool))]
+    for kind in ("slope", "cover"):
+        labels = [label for label in dict.fromkeys(ref.point_strata[kind][inner]) if label]
+        for label in sorted(labels, key=lambda v: float(v.split("-")[0])):
+            groups.append(
+                (
+                    kind,
+                    label,
+                    inner & (ref.point_strata[kind] == label),
+                    ref.cell_strata[kind] == label,
+                )
+            )
+    for kind, label, members, cells in groups:
+        s = score_ground_classification(truth[members], is_ground[members])
+        d = terrain_error(ref.cells_z[cells], cz[cells])
+        strata.append(
+            {
+                "stratum": kind,
+                "label": label,
+                "n_points": int(members.sum()),
+                "true_ground": s.true_ground,
+                "ground_fraction": s.ground_fraction,
+                "omission": s.omission,
+                "commission": s.commission,
+                "total_error": s.total_error,
+                "f1": s.f1,
+                "n_cells": int(cells.sum()),
+                **{f"dtm_{k}": d[k] for k in ("bias", "mae", "rmse", "p95", "coverage")},
+            }
+        )
+    return row, strata
+
+
+LASGROUND_OPTIONS = ("-ignore_class", "7", "18")
+
+
+def method_parameters(method: str, ptd: PTDParameters | None = None) -> dict:
+    """Settings a method runs with, recorded next to its scores."""
+    if method in ("csf", "pmf", "smrf"):
+        stage = ground_stage(ClassificationConfig(ground_method=method))
+        return {k: v for k, v in stage.items() if k not in ("type", "ignore")}
+    if method == "ptd":
+        return asdict(ptd or PTDParameters())
+    if method == "lastools":
+        return {"options": list(LASGROUND_OPTIONS)}
+    if method == "fastgc":
+        return {"sensor_mode": "ALS"}
+    raise ValueError(f"unknown classification method: {method}")
 
 
 def _file_classifier(
@@ -443,19 +736,23 @@ def _file_classifier(
     *,
     lastools_executable: str,
     fastgc_executable: str,
+    ptd: PTDParameters | None = None,
 ) -> ClassificationRun:
     if method in ("csf", "pmf", "smrf"):
         return run_pdal_ground_classifier(points, ClassificationConfig(ground_method=method))
     neutral_input = work_dir / f"unclassified{input_path.suffix.lower()}"
     neutral_pipeline = [
         {"type": "readers.las", "filename": str(input_path)},
-        {"type": "filters.assign", "value": "Classification = 1"},
+        {
+            "type": "filters.assign",
+            "value": "Classification = 1 WHERE Classification != 7 && Classification != 18",
+        },
         {"type": "writers.las", "filename": str(neutral_input), "forward": "all"},
     ]
     pdal.Pipeline(json.dumps(neutral_pipeline)).execute()
     if method == "ptd":
         output = work_dir / "ptd.laz"
-        run = run_pylasr_ptd(neutral_input, output)
+        run = run_pylasr_ptd(neutral_input, output, ptd)
         return ClassificationRun(
             run.method, _ground_mask_from_las(output, points), run.wall_seconds
         )
@@ -464,6 +761,7 @@ def _file_classifier(
             neutral_input,
             work_dir / "lastools.laz",
             executable=lastools_executable,
+            options=LASGROUND_OPTIONS,
             reference=points,
         )
     if method == "fastgc":
@@ -485,11 +783,22 @@ def run_file_benchmark(
     tiles: int | None = None,
     lastools_executable: str = "lasground64",
     fastgc_executable: str = "fastgc",
+    ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
+    reference_dir: str | Path | None = None,
 ) -> Path:
     """Compare classifiers with existing class 2 labels in LAS/LAZ files.
 
-    Successful file/method pairs in ``results.csv`` are skipped on reruns.
-    Failures are recorded and retried the next time the command is run.
+    One row per file, method and parameter set goes to ``results.csv``
+    (point scores, type I / II errors, DTM error), and one row per slope and
+    cover class to ``strata.csv``. Each of the *ptd* parameter sets is a
+    separate run. Classifiers see every class reset to 1 except noise; the
+    reference's unclassified and noise points are not scored. With
+    *reference_dir*, the reference terrain and cover of each file come from
+    the file of the same name there (the full-density original of decimated
+    copies), so DTM errors at every density are against the same terrain.
+
+    Successful runs are skipped on reruns. Failures are recorded and retried
+    the next time the command is run.
     """
     if boundary_width <= 0:
         raise ValueError("boundary_width must be positive")
@@ -497,6 +806,11 @@ def run_file_benchmark(
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")
+    runs = [
+        (method, settings, json.dumps(method_parameters(method, settings), sort_keys=True))
+        for method in methods
+        for settings in (ptd if method == "ptd" else (None,))
+    ]
     laz_dir, out_dir = Path(laz_dir), Path(out_dir)
     files = sorted(path for path in laz_dir.rglob("*") if path.suffix.lower() in (".las", ".laz"))
     if tiles is not None:
@@ -505,20 +819,33 @@ def run_file_benchmark(
         raise FileNotFoundError(f"no LAS/LAZ files found in {laz_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
     results = out_dir / "results.csv"
+    strata_csv = out_dir / "strata.csv"
     completed = _completed_file_runs(results)
     for index, input_path in enumerate(files, 1):
         relative = str(input_path.relative_to(laz_dir))
-        pending = [method for method in methods if (relative, method) not in completed]
+        pending = [r for r in runs if (relative, r[0], r[2]) not in completed]
         if not pending:
             continue
         points = _read_las(input_path)
-        truth = np.asarray(points["Classification"] == 2)
-        x0, x1 = float(points["X"].min()), float(points["X"].max())
-        y0, y1 = float(points["Y"].min()), float(points["Y"].max())
+        bbox = (
+            float(points["X"].min()),
+            float(points["Y"].min()),
+            float(points["X"].max()),
+            float(points["Y"].max()),
+        )
         print(f"[{index}/{len(files)}] {relative}: {len(points):,} points", flush=True)
-        for method in pending:
-            print(f"  {method} ...", end="", flush=True)
-            row = {"file": relative, "method": method, "n_points": len(points)}
+        original = _read_las(Path(reference_dir) / input_path.name) if reference_dir else None
+        ref = reference_context(points, bbox, boundary_width, original)
+        del original
+        for method, settings, parameters in pending:
+            print(f"  {method} {parameters} ...", end="", flush=True)
+            row = {
+                "file": relative,
+                "method": method,
+                "parameters": parameters,
+                "n_points": len(points),
+            }
+            strata = []
             try:
                 with tempfile.TemporaryDirectory(prefix=f"alsdb-{method}-", dir=out_dir) as tmp:
                     run = _file_classifier(
@@ -528,23 +855,23 @@ def run_file_benchmark(
                         Path(tmp),
                         lastools_executable=lastools_executable,
                         fastgc_executable=fastgc_executable,
+                        ptd=settings,
                     )
-                score = score_ground_classification(truth, run.is_ground)
-                row.update(score.to_dict())
-                row.update(status="ok", error="", wall_seconds=run.wall_seconds)
-                if 2 * boundary_width < min(x1 - x0, y1 - y0):
-                    strips = score_boundary_strips(
-                        points, truth, run.is_ground, (x0, y0, x1, y1), boundary_width
-                    )
-                    row.update(
-                        boundary_f1=strips["boundary"].f1,
-                        interior_f1=strips["interior"].f1,
-                    )
-                print(f" F1={score.f1:.4f}, {run.wall_seconds:.2f}s", flush=True)
+                scores, strata = score_against_reference(ref, points, run.is_ground)
+                row.update(scores, status="ok", error="", wall_seconds=run.wall_seconds)
+                print(
+                    f" F1={scores['f1']:.4f}, type I {scores['omission']:.3f}, "
+                    f"type II {scores['commission']:.3f}, DTM MAE {scores['dtm_mae']:.2f} m, "
+                    f"{run.wall_seconds:.1f}s",
+                    flush=True,
+                )
             except Exception as exc:  # noqa: BLE001 - one failed tool must not abort a long run
                 row.update(status="error", error=f"{type(exc).__name__}: {exc}")
                 print(f" ERROR: {exc}", flush=True)
-            _append_file_result(results, row)
+            for stratum in strata:
+                stratum.update(file=relative, method=method, parameters=parameters)
+            _append_rows(strata_csv, strata, STRATA_FIELDS)
+            _append_rows(results, [row], FILE_RESULT_FIELDS)
     print(f"-> {results}", flush=True)
     return results
 

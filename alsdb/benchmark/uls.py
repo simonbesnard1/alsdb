@@ -25,6 +25,23 @@ vegetation (5), so the tools need no site-specific class settings.
 Field tree heights (e.g. TLS heights in a GeoPackage) are optional; tree tops
 are then scored against them too.
 
+The ULS surveys used so far (DE-Tha, DE-Eco) are ICOS station data; credit
+them as the ICOS data licence requires.
+
+References
+----------
+MacArthur, R. H., & Horn, H. S. (1969). Foliage profile by vertical
+    measurements. Ecology, 50(5), 802-804. https://doi.org/10.2307/1933693
+de Almeida, D. R. A., Stark, S. C., Shao, G., et al. (2019). Optimizing the
+    remote detection of tropical rainforest structure with airborne lidar:
+    leaf area profile sensitivity to pulse density and spatial sampling.
+    Remote Sensing, 11(1), 92. https://doi.org/10.3390/rs11010092 (leafR)
+Winiwarter, L., Esmorís Pena, A. M., Weiser, H., Anders, K., Martínez Sánchez,
+    J., Searle, M., & Höfle, B. (2022). Virtual laser scanning with HELIOS++:
+    A novel take on ray tracing-based simulation of topographic full-waveform
+    3D laser scanning. Remote Sensing of Environment, 269, 112772.
+    https://doi.org/10.1016/j.rse.2021.112772
+
     python -m alsdb.benchmark uls <out_dir> --laz-dir <tiles> --site DE-Eco \\
         --x0 416700 --y0 5346650 --core 100 --year 2026 --density 0.5 2 10
 """

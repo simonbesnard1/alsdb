@@ -1,7 +1,10 @@
 """lasR reference: pitfree and spike-free CHM tiles from classified LAS/LAZ.
 
-lasR (r-lidar, GPL-3) is an independent C++ implementation of the same
-algorithms with its own normalization. It runs as a separate ``Rscript``
+lasR (Roussel, r-lidar, GPL-3, https://github.com/r-lidar/lasR; successor
+of lidR, Roussel et al. 2020, https://doi.org/10.1016/j.rse.2020.112061) is
+an independent C++ implementation of the same algorithms (pit-free:
+Khosravipour et al. 2014; spike-free: Khosravipour et al. 2016) with its own
+normalization. It runs as a separate ``Rscript``
 process on the bundled ``lasr_chm.R``; nothing of lasR is linked into alsdb.
 Install it with the optional pixi environment::
 

@@ -10,6 +10,24 @@ Native spike-free reconstruction requires the optional CGAL build. The historica
 highest-subcell approximation remains available for reproducibility.
 
 See ``doc/chm_methods.md`` for algorithms, migration and uncertainty examples.
+
+References
+----------
+Khosravipour, A., Skidmore, A. K., Isenburg, M., Wang, T., & Hussin, Y. A.
+    (2014). Generating pit-free canopy height models from airborne lidar.
+    Photogrammetric Engineering & Remote Sensing, 80(9), 863-872.
+    https://doi.org/10.14358/PERS.80.9.863 (``method="pitfree"``)
+Khosravipour, A., Skidmore, A. K., & Isenburg, M. (2016). Generating
+    spike-free digital surface models using LiDAR raw point clouds: A new
+    approach for forestry applications. International Journal of Applied
+    Earth Observation and Geoinformation, 52, 104-114.
+    https://doi.org/10.1016/j.jag.2016.06.005 (``method="spikefree"``)
+Roussel, J.-R., Auty, D., Coops, N. C., Tompalski, P., Goodbody, T. R. H.,
+    Sánchez Meador, A., Bourdon, J.-F., de Boissieu, F., & Achim, A. (2020).
+    lidR: An R package for analysis of Airborne Laser Scanning (ALS) data.
+    Remote Sensing of Environment, 251, 112061.
+    https://doi.org/10.1016/j.rse.2020.112061 (pitfree and spike-free
+    conventions and the three-pulse-spacing freeze distance)
 """
 
 from __future__ import annotations

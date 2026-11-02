@@ -15,6 +15,7 @@ processes; alsdb never installs or links them.
 | `alsdb.benchmark.timing` | compute time of all three tools on the same work | licensed LAStools, `lasr` |
 | `alsdb.benchmark.decimated` | decimated copies of a dense ALS survey scored against its full density | the survey and its decimated copies |
 | `alsdb.benchmark.sensitivity` | spike-free freeze distances on finished synthetic or ULS scenes | `spikefree` |
+| `alsdb.benchmark.classification` | ground classifiers against reference classifications, by slope and cover | `ptd` for PTD (`pixi run -e ptd install-pylasr` once) |
 
 ## Reference tiles
 
@@ -211,6 +212,45 @@ benchmark (one row per scene and setting; resumable). Scenes that the
 benchmark in the same folder has not scored yet are skipped. Results:
 [chm_methods.md](chm_methods.md#how-sensitive-is-the-freeze-distance).
 
+## Ground classification
+
+```bash
+pixi run -e ptd python -m alsdb.benchmark classification-files <out_dir> \
+    --laz-dir <site> --reference-dir <site>/original --tools csf pmf smrf ptd \
+    --ptd-angle 20 30 40
+```
+
+compares ground classifiers with the reference classification of real LAS/LAZ
+files: CSF (Zhang et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al.
+2013) as in PDAL, PTD (Axelsson 2000) via pyLASR, and optionally LAStools
+`lasground` and FAST-GC (Fareed et al.) as external programs. Each classifier
+sees every class reset to 1 except noise (7, 18), which it skips. Unclassified
+(0, 1) and noise points of the reference are not scored.
+
+Per file, method and parameter set, `results.csv` holds:
+
+- point scores: type I error (ground rejected / true ground), type II error
+  (non-ground accepted / true non-ground) and total error (Sithole & Vosselman
+  2004), F1, ground fraction;
+- DTM error: a TIN of the predicted ground against a TIN of the reference
+  ground on 1 m cells (bias, MAE, RMSE, NMAD, 95th percentile, coverage). For
+  canopy heights this is what matters: a few wrong points under a cliff move
+  the terrain by metres, many wrong points next to the ground hardly at all;
+- the settings used (`parameters`) and the runtime.
+
+`strata.csv` splits the same scores by terrain slope (0-15, 15-30, 30-45, >45°)
+and canopy cover (share of first returns above 2 m: 0-50, 50-80, 80-95,
+95-100%) in 5 m cells, on points and cells inside the 5 m edge strip only.
+Several `--ptd-*` values run every combination as separate rows. With
+`--laz-dir` at a site folder, every version (`original/`, `pd_*/`) is scored;
+`--reference-dir` takes terrain and cover from the full-density original, so
+DTM errors at all densities are against the same terrain.
+
+Caveat: the reference classification is itself the output of some ground
+filter, often a PTD variant in commercial software; a classifier close to it
+in kind may score better partly for that reason. Ask the data provider how
+the reference was made.
+
 ## What agreement to expect
 
 On a Barcelona PNOA tile (inner 1 km², same auto parameters), alsdb pitfree
@@ -218,3 +258,64 @@ matched lasR on 99.3% of cells to within 1 cm; spike-free was 80% identical,
 alsdb +0.18 m on average (lasR seeds freezing with the highest point of a
 coarse grid; alsdb freezes at each insertion). Agreement between
 implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
+
+## References
+
+- Axelsson, P. (2000). DEM generation from laser scanner data using adaptive
+  TIN models. *International Archives of Photogrammetry and Remote Sensing*,
+  33(B4), 110–117.
+- Asner, G. P., Scurlock, J. M. O., & Hicke, J. A. (2003). Global synthesis of
+  leaf area index observations. *Global Ecology and Biogeography*, 12, 191–205.
+  <https://doi.org/10.1046/j.1466-822X.2003.00026.x>
+- Butler, H., Chambers, B., Hartzell, P., & Glennie, C. (2021). PDAL: An open
+  source library for the processing and analysis of point clouds. *Computers &
+  Geosciences*, 148, 104680. <https://doi.org/10.1016/j.cageo.2020.104680>
+- de Almeida, D. R. A., et al. (2019). Optimizing the remote detection of
+  tropical rainforest structure with airborne lidar: leaf area profile
+  sensitivity to pulse density and spatial sampling. *Remote Sensing*, 11(1),
+  92. <https://doi.org/10.3390/rs11010092> (leafR)
+- Fareed, N., et al. FAST-GC (preprint, Preprints.org 202609.1631),
+  <https://github.com/nadeemfareed/FAST-GC>
+- Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
+  characterisation of forest structure from airborne laser scanning — A
+  systematic assessment and sample workflow for ecologists. *Methods in Ecology
+  and Evolution*, 15, 1873–1888. <https://doi.org/10.1111/2041-210X.14416>
+- Khosravipour, A., Skidmore, A. K., Isenburg, M., Wang, T., & Hussin, Y. A.
+  (2014). Generating pit-free canopy height models from airborne lidar.
+  *Photogrammetric Engineering & Remote Sensing*, 80(9), 863–872.
+  <https://doi.org/10.14358/PERS.80.9.863>
+- Khosravipour, A., Skidmore, A. K., & Isenburg, M. (2016). Generating
+  spike-free digital surface models using LiDAR raw point clouds.
+  *International Journal of Applied Earth Observation and Geoinformation*, 52,
+  104–114. <https://doi.org/10.1016/j.jag.2016.06.005>
+- MacArthur, R. H., & Horn, H. S. (1969). Foliage profile by vertical
+  measurements. *Ecology*, 50(5), 802–804. <https://doi.org/10.2307/1933693>
+- Pingel, T. J., Clarke, K. C., & McBride, W. A. (2013). An improved simple
+  morphological filter for the terrain classification of airborne LIDAR data.
+  *ISPRS Journal of Photogrammetry and Remote Sensing*, 77, 21–30.
+  <https://doi.org/10.1016/j.isprsjprs.2012.12.002>
+- Roussel, J.-R., et al. (2020). lidR: An R package for analysis of Airborne
+  Laser Scanning (ALS) data. *Remote Sensing of Environment*, 251, 112061.
+  <https://doi.org/10.1016/j.rse.2020.112061>; lasR and pyLASR:
+  <https://github.com/r-lidar/lasR>
+- Sithole, G., & Vosselman, G. (2004). Experimental comparison of filter
+  algorithms for bare-Earth extraction from airborne laser scanning point
+  clouds. *ISPRS Journal of Photogrammetry and Remote Sensing*, 59(1–2), 85–101.
+  <https://doi.org/10.1016/j.isprsjprs.2004.05.004>
+- Winiwarter, L., et al. (2022). Virtual laser scanning with HELIOS++: A novel
+  take on ray tracing-based simulation of topographic full-waveform 3D laser
+  scanning. *Remote Sensing of Environment*, 269, 112772.
+  <https://doi.org/10.1016/j.rse.2021.112772>
+- Zhang, K., Chen, S.-C., Whitman, D., Shyu, M.-L., Yan, J., & Zhang, C. (2003).
+  A progressive morphological filter for removing nonground measurements from
+  airborne LIDAR data. *IEEE Transactions on Geoscience and Remote Sensing*,
+  41(4), 872–882. <https://doi.org/10.1109/TGRS.2003.810682>
+- Zhang, W., Qi, J., Wan, P., Wang, H., Xie, D., Wang, X., & Yan, G. (2016). An
+  easy-to-use airborne LiDAR data filtering method based on cloth simulation.
+  *Remote Sensing*, 8(6), 501. <https://doi.org/10.3390/rs8060501>
+- LAStools: rapidlasso GmbH, <https://rapidlasso.de>
+
+Data: Chapitre Petit Buëch and Robson Creek surveys and their decimated copies
+provided by Fabian Fischer (University of Bristol), decimated with the workflow
+of Fischer et al. (2024); the Robson Creek original is TERN data. ULS surveys
+DE-Tha and DE-Eco: ICOS; credit them as the ICOS data licence requires.

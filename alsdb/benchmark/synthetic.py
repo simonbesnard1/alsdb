@@ -2,8 +2,9 @@
 
 Each :class:`Scenario` (terrain x forest type x pulse density x canopy
 penetration) becomes a scene with an analytic terrain and voxelised crowns.
-HELIOS++ (Winiwarter et al. 2022, LGPL-3, run as an external program from
-the optional ``helios`` pixi environment) flies a survey over it and writes
+HELIOS++ (Winiwarter et al. 2022, https://doi.org/10.1016/j.rse.2021.112772;
+LGPL-3, run as an external program from the optional ``helios`` pixi
+environment) flies a survey over it and writes
 classified LAZ. alsdb, lasR and LAStools then process that LAZ, and every
 output is scored against the truth of the same scene:
 
@@ -96,8 +97,9 @@ def terrain_height(kind, x, y):
 # Forest types: list of layers (stems per ha, height mean/sd, height bounds,
 # crown radius / height, crown base / height, shape, placement), and the
 # stand plant area index (m2 plant area per m2 ground, gaps included; leaf
-# area index values after Asner et al. 2003, Global Ecol. Biogeogr., plus
-# wood). The plant area density inside crowns follows from the crown volume
+# area index values after Asner, Scurlock & Hicke 2003, Global Ecol.
+# Biogeogr. 12, 191-205, https://doi.org/10.1046/j.1466-822X.2003.00026.x,
+# plus wood). The plant area density inside crowns follows from the crown volume
 # (see crown_pad): fixing it directly made deep, filled crowns far too opaque.
 FOREST_TYPES = {
     "open": {"pai": 1.0, "layers": [

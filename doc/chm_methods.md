@@ -334,7 +334,29 @@ operational accuracy.
 - Use a new store or `overwrite=True` when migrating legacy products; incompatible
   spatial grids require a new store.
 
-References: [Khosravipour et al. (2016)](https://doi.org/10.1016/j.jag.2016.06.005),
-[thesis algorithm description](https://research.utwente.nl/files/278716183/khosravipour.pdf),
-[LAStools las2dem parameters](https://downloads.rapidlasso.de/html/las2dem_README.html),
-[CGAL constrained triangulation](https://doc.cgal.org/latest/Triangulation_2/classCGAL_1_1Constrained__Delaunay__triangulation__2.html).
+## References
+
+- Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
+  characterisation of forest structure from airborne laser scanning — A
+  systematic assessment and sample workflow for ecologists. *Methods in Ecology
+  and Evolution*, 15, 1873–1888. <https://doi.org/10.1111/2041-210X.14416>
+  (locally adaptive spike-free; decimated test data)
+- Khosravipour, A., Skidmore, A. K., Isenburg, M., Wang, T., & Hussin, Y. A.
+  (2014). Generating pit-free canopy height models from airborne lidar.
+  *Photogrammetric Engineering & Remote Sensing*, 80(9), 863–872.
+  <https://doi.org/10.14358/PERS.80.9.863>
+- Khosravipour, A., Skidmore, A. K., & Isenburg, M. (2016). Generating spike-free
+  digital surface models using LiDAR raw point clouds: A new approach for
+  forestry applications. *International Journal of Applied Earth Observation
+  and Geoinformation*, 52, 104–114. <https://doi.org/10.1016/j.jag.2016.06.005>
+  ([thesis algorithm description](https://research.utwente.nl/files/278716183/khosravipour.pdf))
+- Roussel, J.-R., Auty, D., Coops, N. C., Tompalski, P., Goodbody, T. R. H.,
+  Sánchez Meador, A., Bourdon, J.-F., de Boissieu, F., & Achim, A. (2020).
+  lidR: An R package for analysis of Airborne Laser Scanning (ALS) data.
+  *Remote Sensing of Environment*, 251, 112061.
+  <https://doi.org/10.1016/j.rse.2020.112061>; lasR:
+  <https://github.com/r-lidar/lasR>
+- [LAStools las2dem parameters](https://downloads.rapidlasso.de/html/las2dem_README.html)
+  (rapidlasso GmbH)
+- [CGAL constrained triangulation](https://doc.cgal.org/latest/Triangulation_2/classCGAL_1_1Constrained__Delaunay__triangulation__2.html)
+  (The CGAL Project)
