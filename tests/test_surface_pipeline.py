@@ -441,3 +441,24 @@ def test_default_outlier_removal_keeps_emergent_crown_and_drops_bird():
     assert np.nanmax(chm) == pytest.approx(22.0)  # bird at 72 m removed
     strict = CHMConfig(remove_outliers=True, outlier_multiplier=2.0)  # the old default
     assert np.isnan(reconstruct_chm(arr[:-1], (0, 0, 40, 40), 1.0, strict)["chm"][19, 20])
+
+
+@pytest.mark.parametrize("method", ["pitfree", "tin", "max", "highest_subcell_tin"])
+def test_chm_does_not_depend_on_point_order(method):
+    # A regular scan pattern with tied heights: several triangulations and
+    # highest-point choices are equally valid; storage order must not pick one.
+    rng = np.random.default_rng(0)
+    x, y = np.meshgrid(np.arange(0.25, 20, 0.5), np.arange(0.25, 20, 0.5))
+    n = x.size
+    arr = np.zeros(2 * n, dtype=scene().dtype)
+    arr["X"], arr["Y"] = np.r_[x.ravel(), x.ravel()], np.r_[y.ravel(), y.ravel()]
+    arr["Z"] = 100 + np.r_[np.zeros(n), np.round(rng.uniform(0, 20, n))]  # ground, then canopy
+    arr["Classification"] = np.r_[np.full(n, 2), np.full(n, 5)]
+    arr["ReturnNumber"] = np.r_[np.full(n, 2), np.ones(n)]
+    arr["PointSourceId"] = 1
+    config = CHMConfig(method=method)
+    first = reconstruct_chm(arr, (0, 0, 20, 20), 1, config)
+    for order in (arr[::-1], arr[rng.permutation(arr.size)]):
+        again = reconstruct_chm(order.copy(), (0, 0, 20, 20), 1, config)
+        for name, layer in first.items():
+            np.testing.assert_array_equal(layer, again[name], err_msg=f"{method} {name}")

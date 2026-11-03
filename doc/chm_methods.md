@@ -383,6 +383,15 @@ operational accuracy.
 - `spikefree=True` still selects the old approximation with a deprecation warning.
   Use `method="highest_subcell_tin"` to name it explicitly or `method="spikefree"`
   for the new native implementation.
+- Surface algorithm 4: points are triangulated (pitfree, tin, highest-subcell
+  TIN, DTM TIN) in a fixed order (X, Y, Z), and equal heights in the
+  highest-point thinning are broken by position. Before, the input order, which
+  TileDB sets by fragment layout and consolidation, picked among equally valid
+  triangulations: a shuffled real tile changed 11.7% of pitfree cells (mean
+  0.01 m, 99th percentile 0.32 m, at most 2.9 m) and 0.1% of TIN cells, with
+  unchanged accuracy. Spike-free, binned max and the terrain model were already
+  order-independent. Products are now identical whatever the storage layout;
+  stores written with algorithm 3 need `overwrite=True`.
 - Surface algorithm 3: ground returns enter the CHM surface, class 9 is ground,
   and pitfree trims upper layers by edge length. `pitfree_max_distance` and
   `spikefree_max_distance` no longer exist; drop them (or set

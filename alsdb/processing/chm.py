@@ -216,8 +216,9 @@ def _thin_highest_per_subcell(
     cell_id = row * (col.max() - col.min() + 1) + col
 
     # Sort by (cell_id, -value) so the first row of each cell_id run is the
-    # max-value_field point in that subcell.
-    order = np.lexsort((-points[value_field], cell_id))
+    # max-value_field point in that subcell; equal heights are broken by X, Y
+    # (not input order), so the choice does not depend on how points were stored.
+    order = np.lexsort((points["Y"], points["X"], -points[value_field], cell_id))
     sorted_cell_id = cell_id[order]
     first_in_group = np.empty(len(order), dtype=bool)
     first_in_group[0] = True
@@ -330,6 +331,11 @@ def _delaunay_raster(
     if value_field != "Z":
         arr = arr.copy()
         arr["Z"] = arr[value_field]
+    # Triangulate in a fixed order (X, Y, Z): with points on regular scan
+    # patterns several Delaunay triangulations are equally valid and PDAL picks
+    # one by input order, which TileDB sets by fragment layout. Unsorted, a
+    # shuffled real tile changed 11.7% of pitfree cells (up to 2.9 m).
+    arr = arr[np.lexsort((arr["Z"], arr["Y"], arr["X"]))]
 
     from rasterio.io import MemoryFile
 

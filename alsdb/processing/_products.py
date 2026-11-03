@@ -57,7 +57,8 @@ def software_versions():
         except PackageNotFoundError:
             versions[name] = "unknown"
     # 3: ground returns in the CHM surface, pitfree edge trimming, class 9 ground.
-    versions["surface_algorithm"] = "3"
+    # 4: triangulation and highest-point thinning independent of point order.
+    versions["surface_algorithm"] = "4"
     return versions
 
 
