@@ -4,6 +4,7 @@
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -74,6 +75,14 @@ def _short_crs(crs_str: str) -> str:
         name = m2.group(1)
         return name if len(name) <= 40 else name[:37] + "..."
     return crs_str[:40]
+
+
+def _available_cpus() -> int:
+    """CPUs this process may use (its affinity, e.g. a Slurm allocation)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # not on Linux
+        return os.cpu_count() or 1
 
 
 class ALSDatabase(TileDBProvider):
@@ -378,6 +387,7 @@ class ALSDatabase(TileDBProvider):
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
         classification_context: tuple[Path, ...] = (),
+        classification_workers: int = 1,
     ) -> tuple[int, dict]:
         """
         Read a LAZ file and write its points to the array.
@@ -400,6 +410,7 @@ class ALSDatabase(TileDBProvider):
             reproject_to=reproject_to,
             classification_config=classification_config,
             classification_context=classification_context,
+            classification_workers=classification_workers,
         )
         tile_name = tile.name  # metadata cached on first access
         year = tile_name.year
@@ -504,6 +515,7 @@ class ALSDatabase(TileDBProvider):
         denoise: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
+        classification_workers: int | None = None,
     ) -> None:
         """
         Ingest a single LAZ tile into the TileDB array.
@@ -537,9 +549,14 @@ class ALSDatabase(TileDBProvider):
             CRS and reprojects to the appropriate UTM zone; an explicit
             ``"EPSG:XXXX"`` string reprojects to that CRS; ``None`` (default)
             keeps the native CRS.
+        classification_workers:
+            Threads for the runs of the PTD tilt ensemble (default: the CPUs
+            available to this process). The labels do not depend on it.
         """
         laz_path = Path(laz_path)
         filename = laz_path.name
+        if classification_workers is None:
+            classification_workers = _available_cpus()
         classification_config = resolve_classification_config(
             classification_config,
             reclassify=reclassify,
@@ -581,6 +598,7 @@ class ALSDatabase(TileDBProvider):
             classification_filter=classification_filter,
             reproject_to=reproject_to,
             classification_config=classification_config,
+            classification_workers=classification_workers,
         )
         tile_crs = tile.target_crs
 
@@ -633,6 +651,7 @@ class ALSDatabase(TileDBProvider):
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
         optimize: bool = True,
+        classification_workers: int | None = None,
     ) -> dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -665,6 +684,11 @@ class ALSDatabase(TileDBProvider):
             files were written. ``False`` leaves that to a separate
             :meth:`optimize` call, e.g. to time or schedule it on its own;
             it is the memory peak of an ingest (~7 GB on large arrays).
+        classification_workers:
+            Threads per file for the runs of the PTD tilt ensemble (default:
+            the CPUs available to this process divided by *n_workers*, so
+            files and runs together do not oversubscribe the machine). The
+            labels do not depend on it.
 
         Returns
         -------
@@ -672,6 +696,8 @@ class ALSDatabase(TileDBProvider):
             ``{filename: n_points_written}`` for every path in *laz_paths*.
             Skipped files have value 0.
         """
+        if classification_workers is None:
+            classification_workers = max(1, _available_cpus() // max(1, n_workers))
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
         classification_config = resolve_classification_config(
             classification_config,
@@ -756,6 +782,7 @@ class ALSDatabase(TileDBProvider):
                 reproject_to=reproject_to,
                 classification_config=classification_config,
                 classification_context=neighbors[path],
+                classification_workers=classification_workers,
             )
             return path.name, total, entry
 

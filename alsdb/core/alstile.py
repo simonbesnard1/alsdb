@@ -139,8 +139,10 @@ class ALSTile:
         hag_high: float = _HAG_HIGH,
         classification_config: ClassificationConfig | None = None,
         classification_context: tuple[str | Path, ...] = (),
+        classification_workers: int = 1,
     ) -> None:
         self._tile = Tile(path)
+        self._classification_workers = max(1, int(classification_workers))
         self._classification_filter = classification_filter
         self._classification = resolve_classification_config(
             classification_config,
@@ -267,7 +269,8 @@ class ALSTile:
         if self._classification.ground_method == "ptd":
             from alsdb.core.ptd import ptd_ground
 
-            ground = ptd_ground(data, **self._classification.ptd_parameters)
+            ground = ptd_ground(data, workers=self._classification_workers,
+                                **self._classification.ptd_parameters)  # fmt: skip
             data = data.copy()
             noise = np.isin(original, (7, 18))
             data["Classification"][~noise] = 1

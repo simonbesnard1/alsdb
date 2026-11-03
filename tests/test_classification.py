@@ -214,6 +214,7 @@ def test_tile_reclassification_with_ptd():
     pytest.importorskip("alsdb.processing._ptd_native")
     tile = ALSTile.__new__(ALSTile)
     tile._classification = ClassificationConfig(ground_method="ptd")
+    tile._classification_workers = 4
     points, ground = _terrain_and_canopy()
     data = np.zeros(len(points), dtype=[*points.dtype.descr, ("HeightAboveGround", "f8")])
     for name in points.dtype.names:
@@ -265,20 +266,17 @@ def test_native_ptd_does_not_depend_on_point_order():
 
 
 def test_ptd_tilt_is_rigid_about_the_centre():
-    from alsdb.core.ptd import _tilted
+    from alsdb.core.ptd import _tilt_xyz
 
     points, _ = _terrain_and_canopy(n=50)
     centre = np.array([30.0, 30.0, 110.0])
-    out = _tilted(points, centre, 10.0, 77.0)
     xyz = np.column_stack([points[n] for n in ("X", "Y", "Z")])
-    new = np.column_stack([out[n] for n in ("X", "Y", "Z")])
+    new = np.column_stack(_tilt_xyz(*xyz.T, centre, 10.0, 77.0))
     np.testing.assert_allclose(np.linalg.norm(new - centre, axis=1),
                                np.linalg.norm(xyz - centre, axis=1))  # fmt: skip
     # tilted by 10 degrees: the +Z axis now leans 10 degrees off vertical
-    up = _tilted(np.array([(30.0, 30.0, 111.0)], dtype=[("X", "f8"), ("Y", "f8"), ("Z", "f8")]),
-                 centre, 10.0, 77.0)  # fmt: skip
-    assert np.degrees(np.arccos(up["Z"][0] - 110.0)) == pytest.approx(10.0)
-    np.testing.assert_array_equal(out["Classification"], points["Classification"])
+    up = _tilt_xyz(np.array([30.0]), np.array([30.0]), np.array([111.0]), centre, 10.0, 77.0)
+    assert np.degrees(np.arccos(up[2][0] - 110.0)) == pytest.approx(10.0)
 
 
 def test_ptd_ensemble_votes():
@@ -293,3 +291,24 @@ def test_ptd_ensemble_votes():
     assert not default[0]  # noise
     assert (default == ground)[1:].mean() > 0.98
     np.testing.assert_array_equal(default, ptd_ground(points, workers=4))
+
+
+def test_tile_passes_classification_workers_to_ptd(monkeypatch):
+    from alsdb.core import ptd
+
+    seen = []
+
+    def fake(points, *, workers=1, **parameters):
+        seen.append(workers)
+        return np.zeros(len(points), bool)
+
+    monkeypatch.setattr(ptd, "ptd_ground", fake)
+    tile = ALSTile.__new__(ALSTile)
+    tile._classification = ClassificationConfig(ground_method="ptd")
+    tile._classification_workers = 6
+    points, _ = _terrain_and_canopy(n=200)
+    data = np.zeros(len(points), dtype=[*points.dtype.descr, ("HeightAboveGround", "f8")])
+    for name in points.dtype.names:
+        data[name] = points[name]
+    tile._apply_reclassification(data)
+    assert seen == [6]

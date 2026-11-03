@@ -167,8 +167,9 @@ ground (`ptd_tilt_runs`, `ptd_tilt`, `ptd_votes`; `ptd_tilt_runs=1` is a single
 run). Classifying rotated copies of the point cloud was Fabian Fischer's
 (University of Bristol) suggestion. On held-out steep-terrain tiles the ensemble
 cut the DTM error of lasR's default PTD by 17-26%, most at low density, and was
-never worse than a single run; it costs 8 PTD runs, which
-`alsdb.core.ptd.ptd_ground(..., workers=8)` runs in parallel
+never worse than a single run; it costs 8 PTD runs, which run in parallel
+threads (`classification_workers` of `ingest`/`ingest_many`, by default the
+available CPUs divided by `n_workers`; `workers` of `alsdb.core.ptd.ptd_ground`)
 ([doc/benchmarking.md](doc/benchmarking.md#ptd-tilt-ensemble)). On the benchmark's steep and tropical sites PTD gave the lowest DTM and
 CHM errors from about 1 pulse/m² up and is recommended; CSF held up best across densities
 (best at 0.5 pulses/m² in tropical forest); SMRF was good at full density but

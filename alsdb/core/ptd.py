@@ -164,32 +164,42 @@ def ptd_ground(
     check_ensemble(runs, tilt, votes)
     if not len(points):
         return np.zeros(len(points), bool)
-    single = _ptd_ground_native if backend == "native" else _ptd_ground_pylasr
     if runs == 1:
-        return single(points, settings)
-    usable = ~np.isin(points["Classification"], (7, 18))
-    if not usable.any():
+        if backend == "native":
+            return _ptd_ground_native(points, settings)
+        return _ptd_ground_pylasr(points, settings)
+    usable = np.flatnonzero(~np.isin(points["Classification"], (7, 18)))
+    if not len(usable):
         return np.zeros(len(points), bool)
+    # Only the coordinates of the usable points are tilted, not whole records.
+    xyz = tuple(np.ascontiguousarray(points[n][usable], dtype=np.float64) for n in ("X", "Y", "Z"))
     # Tilt about the centre of the bounding box (not the mean, which depends on
     # the order the points are summed in).
-    centre = np.array([(points[n][usable].min() + points[n][usable].max()) / 2
-                       for n in ("X", "Y", "Z")])  # fmt: skip
+    centre = np.array([(c.min() + c.max()) / 2 for c in xyz])
     azimuths = [360.0 * i / (runs - 1) for i in range(runs - 1)]
 
     def run(azimuth):
-        if azimuth is None:
-            return single(points, settings)
-        return single(_tilted(points, centre, tilt, azimuth), settings)
+        coords = xyz if azimuth is None else _tilt_xyz(*xyz, centre, tilt, azimuth)
+        if backend == "native":
+            return _classify_xyz(*coords, settings)
+        tilted = points[usable].copy()  # pyLASR reads files: it needs whole records
+        tilted["X"], tilted["Y"], tilted["Z"] = coords
+        return _ptd_ground_pylasr(tilted, settings)
 
     jobs = [None, *azimuths]
+    votes_for = np.zeros(len(usable), np.uint8)
     if workers > 1:
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(min(workers, runs)) as pool:  # the native PTD releases the GIL
-            masks = list(pool.map(run, jobs))
+            for mask in pool.map(run, jobs):
+                votes_for += mask
     else:
-        masks = [run(job) for job in jobs]
-    return np.sum(masks, axis=0) >= votes
+        for job in jobs:
+            votes_for += run(job)
+    ground = np.zeros(len(points), bool)
+    ground[usable] = votes_for >= votes
+    return ground
 
 
 def check_ensemble(runs, tilt, votes) -> None:
@@ -206,32 +216,38 @@ def check_ensemble(runs, tilt, votes) -> None:
         raise ValueError("tilt must be in degrees, above 0 (with several runs) and below 45")
 
 
-def _tilted(points: np.ndarray, centre, tilt: float, azimuth: float) -> np.ndarray:
-    """Copy of *points* rotated by *tilt* degrees about the horizontal axis
+def _tilt_xyz(x, y, z, centre, tilt: float, azimuth: float):
+    """*x*, *y*, *z* rotated by *tilt* degrees about the horizontal axis
     through *centre* perpendicular to *azimuth* (degrees from +X towards +Y)."""
-    out = points.copy()
-    x, y, z = (points[n] - c for n, c in zip(("X", "Y", "Z"), centre))
+    x, y, z = x - centre[0], y - centre[1], z - centre[2]
     t, a = np.radians(tilt), np.radians(azimuth)
-    u, v = x * np.cos(a) + y * np.sin(a), -x * np.sin(a) + y * np.cos(a)
-    u, z = u * np.cos(t) - z * np.sin(t), u * np.sin(t) + z * np.cos(t)
-    out["X"] = u * np.cos(a) - v * np.sin(a) + centre[0]
-    out["Y"] = u * np.sin(a) + v * np.cos(a) + centre[1]
-    out["Z"] = z + centre[2]
-    return out
+    ca, sa, ct, st = np.cos(a), np.sin(a), np.cos(t), np.sin(t)
+    u, v = x * ca + y * sa, -x * sa + y * ca
+    u, z = u * ct - z * st, u * st + z * ct
+    return u * ca - v * sa + centre[0], u * sa + v * ca + centre[1], z + centre[2]
 
 
-def _ptd_ground_native(points: np.ndarray, parameters: dict) -> np.ndarray:
-    noise = np.isin(points["Classification"], (7, 18))
-    keep = np.flatnonzero(~noise)
+def _classify_xyz(x, y, z, parameters: dict) -> np.ndarray:
+    """Native PTD ground mask of the points *x*, *y*, *z* (none of them noise)."""
     # PTD depends on input order (ties in its lowest point per cell and in
     # its height sort; shuffling a real tile changed 0.5% of labels):
     # classify in X, Y, Z order so the result does not depend on how the
     # points were stored or read.
-    keep = keep[np.lexsort((points["Z"][keep], points["Y"][keep], points["X"][keep]))]
-    xyz = np.column_stack((points["X"][keep], points["Y"][keep], points["Z"][keep]))
+    order = np.lexsort((z, y, x))
+    ground = np.zeros(len(x), bool)
+    if len(x):
+        ground[order] = require_native().classify(
+            np.column_stack((x[order], y[order], z[order])), **parameters
+        )
+    return ground
+
+
+def _ptd_ground_native(points: np.ndarray, parameters: dict) -> np.ndarray:
+    keep = np.flatnonzero(~np.isin(points["Classification"], (7, 18)))
     ground = np.zeros(len(points), bool)
-    if len(keep):
-        ground[keep] = require_native().classify(xyz, **parameters)
+    ground[keep] = _classify_xyz(
+        *(np.asarray(points[n][keep], dtype=np.float64) for n in ("X", "Y", "Z")), parameters
+    )
     return ground
 
 
