@@ -238,6 +238,8 @@ def steps_for(tool, subset, out, cores, args):
         return [
             ("setup", "ingest", [*worker, "ingest", str(subset), str(tiledb), "--crs", args.crs,
                                  "--workers", str(cores)]),
+            # Fragment compaction timed on its own: it was the ingest's memory peak.
+            ("setup", "optimize", [*worker, "optimize", str(tiledb)]),
             *[("run", method, [*worker, "chm", str(tiledb), str(out / f"{method}.zarr"),
                                "--method", method, "--year", str(args.year),
                                "--workers", str(cores)])
@@ -267,6 +269,8 @@ def _worker(argv):
     p.add_argument("tiledb")
     p.add_argument("--crs", required=True)
     p.add_argument("--workers", type=int, default=1)
+    p = sub.add_parser("optimize")
+    p.add_argument("tiledb")
     p = sub.add_parser("chm")
     p.add_argument("tiledb")
     p.add_argument("zarr")
@@ -283,7 +287,10 @@ def _worker(argv):
             p for p in Path(args.laz_dir).iterdir() if p.suffix.lower() in (".las", ".laz")
         )
         db.create(crs=args.crs)
-        db.ingest_many(files, n_workers=args.workers)
+        db.ingest_many(files, n_workers=args.workers, optimize=False)
+        return
+    if args.what == "optimize":
+        db.optimize()
         return
     from alsdb.processing.chm import compute_chm
     from alsdb.storage.zarr_store import ALSZarrStore

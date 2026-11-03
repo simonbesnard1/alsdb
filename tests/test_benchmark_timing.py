@@ -101,9 +101,11 @@ def test_full_alsdb_run_resumes_and_reports(tiles, tmp_path, capsys):
     rows = list(csv.DictReader((work / "timings.csv").open()))
     assert [(r["n_tiles"], r["step"]) for r in rows] == [
         ("1", "ingest"),
+        ("1", "optimize"),
         ("1", "pitfree"),
         ("1", "spikefree"),
         ("4", "ingest"),
+        ("4", "optimize"),
         ("4", "pitfree"),
         ("4", "spikefree"),
     ]
@@ -111,7 +113,7 @@ def test_full_alsdb_run_resumes_and_reports(tiles, tmp_path, capsys):
     assert float(rows[0]["area_km2"]) == pytest.approx(0.01)
     assert (local / "tiles").is_dir() and not (local / "runs" / "local_1t_1c_r1_alsdb").exists()
     timing.main(argv)  # everything done: nothing rerun
-    assert len(list(csv.DictReader((work / "timings.csv").open()))) == 6
+    assert len(list(csv.DictReader((work / "timings.csv").open()))) == 8
     text = timing.report(work / "timings.csv")
     assert "alsdb" in text and "km2/core-h" in text
 

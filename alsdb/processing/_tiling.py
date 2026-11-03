@@ -86,11 +86,10 @@ def query_to_array(
     dtype = [(name, PDAL_DTYPES[name]) for name in fields]
     out = np.empty(n, dtype=dtype)
     for name in fields:
-        np_dtype = PDAL_DTYPES[name]
         if name in data:
-            out[name] = data[name].astype(np_dtype)
+            out[name] = data[name]  # assignment casts to the field type; no astype copy
         else:
-            out[name] = np.zeros(n, dtype=np_dtype)
+            out[name] = 0  # attribute absent from the array: zeros
     return out
 
 

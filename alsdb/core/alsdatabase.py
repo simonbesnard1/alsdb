@@ -447,23 +447,27 @@ class ALSDatabase(TileDBProvider):
                 entry["classification_hash"] = tile.classification_config.fingerprint
             return 0, entry
 
-        x_all = np.concatenate(xs)
-        y_all = np.concatenate(ys)
+        def joined(parts):  # a whole tile usually arrives as one chunk: no copy then
+            return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+        x_all = joined(xs)
+        y_all = joined(ys)
         total = len(x_all)
         year_arr = np.full(total, year, dtype=np.int16)
 
-        # Merge per-chunk attribute dicts and fill any missing attributes with zeros.
-        with tiledb.open(self.array_uri, mode="r", ctx=self.ctx) as rdr:
-            schema_attrs = {
-                rdr.schema.attr(i).name: rdr.schema.attr(i) for i in range(rdr.schema.nattr)
-            }
+        # Merge per-chunk attribute dicts; attributes a file lacks are zeros.
+        # The schema is cached (it used to be reopened for every file), and zero
+        # arrays are made only for missing attributes (dict.get built one per
+        # attribute and chunk even when the attribute was there).
+        schema = self.schema
         attrs_all: dict[str, np.ndarray] = {}
-        for name, a in schema_attrs.items():
-            parts = [
-                ch.get(name, np.zeros(len(xs[i]), dtype=a.dtype))
-                for i, ch in enumerate(attr_chunks)
-            ]
-            attrs_all[name] = np.concatenate(parts)
+        for attr in (schema.attr(i) for i in range(schema.nattr)):
+            attrs_all[attr.name] = joined(
+                [
+                    ch[attr.name] if attr.name in ch else np.zeros(len(xs[i]), dtype=attr.dtype)
+                    for i, ch in enumerate(attr_chunks)
+                ]
+            )
 
         self._write_to_tiledb((x_all, y_all, year_arr), attrs_all)
 
@@ -628,6 +632,7 @@ class ALSDatabase(TileDBProvider):
         denoise: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
+        optimize: bool = True,
     ) -> dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -655,6 +660,11 @@ class ALSDatabase(TileDBProvider):
             If ``True``, wipe the array and re-ingest all files from scratch,
             ignoring the manifest.  If ``False`` (default), files already
             marked ``"ok"`` in the manifest are skipped.
+        optimize:
+            Merge the per-file fragments at the end (:meth:`optimize`) when
+            files were written. ``False`` leaves that to a separate
+            :meth:`optimize` call, e.g. to time or schedule it on its own;
+            it is the memory peak of an ingest (~7 GB on large arrays).
 
         Returns
         -------
@@ -824,26 +834,33 @@ class ALSDatabase(TileDBProvider):
             f"  |  {n_failed} FAILED" if n_failed else "",
         )
 
-        # Iterative fragment compaction: merge in small steps until stable.
-        # Each pass merges at most step_max_frags fragments; multiple passes
-        # converge the fragment count without exhausting memory.
-        if newly_written > 0:
-            logger.info("Starting iterative fragment compaction…")
-            prev = None
-            for pass_num in range(1, 201):
-                n_frags = self.fragment_count()
-                if n_frags <= 1 or (prev is not None and n_frags >= prev):
-                    break
-                prev = n_frags
-                logger.info("  Compaction pass %d: %d fragments remaining", pass_num, n_frags)
-                self.consolidate(
-                    mode="fragments",
-                    fragment_size=100_000_000,
-                    memory_budget=8_000_000_000,
-                    step_max_frags=50,
-                    step_size_ratio=0.5,
-                )
-            final_frags = self.fragment_count()
-            logger.info("Compaction complete: %d fragment(s) remaining", final_frags)
-
+        if newly_written > 0 and optimize:
+            self.optimize()
         return results
+
+    def optimize(self, memory_budget: int = 8_000_000_000, max_passes: int = 200) -> int:
+        """Merge fragments for faster reads; return the number left.
+
+        Iterative compaction: each pass merges at most 50 fragments of similar
+        size, and passes repeat until the count stops falling, so memory stays
+        bounded (*memory_budget* per pass) even with thousands of fragments.
+        Run after ingesting; reading works without it, only slower.
+        """
+        logger.info("Starting iterative fragment compaction…")
+        prev = None
+        for pass_num in range(1, max_passes + 1):
+            n_frags = self.fragment_count()
+            if n_frags <= 1 or (prev is not None and n_frags >= prev):
+                break
+            prev = n_frags
+            logger.info("  Compaction pass %d: %d fragments remaining", pass_num, n_frags)
+            self.consolidate(
+                mode="fragments",
+                fragment_size=100_000_000,
+                memory_budget=memory_budget,
+                step_max_frags=50,
+                step_size_ratio=0.5,
+            )
+        final_frags = self.fragment_count()
+        logger.info("Compaction complete: %d fragment(s) remaining", final_frags)
+        return final_frags

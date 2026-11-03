@@ -46,3 +46,22 @@ def test_tile_with_a_different_crs_is_still_rejected(tmp_path):
     assert entry["status"] == "failed" and "CRS mismatch" in entry["error"]
     with pytest.raises(ValueError, match="CRS mismatch"):
         db.ingest(las)
+
+
+def test_ingest_many_optimize_is_optional_and_data_identical(tmp_path):
+    """Compaction only merges fragments: same points with or without it."""
+    files = [_write_las(tmp_path / f"SITE_2017_t{i}.las") for i in range(3)]
+    data = {}
+    for optimize in (True, False):
+        db = ALSDatabase(storage_type="local", uri=str(tmp_path / f"db_{optimize}"))
+        db.create(crs="EPSG:25831")
+        assert sum(db.ingest_many(files, optimize=optimize).values()) == 1500
+        if not optimize:
+            assert db.fragment_count() == 3  # one per file until optimized
+            assert db.optimize() == 1
+        with db.open("r") as arr:
+            out = arr[:]
+        order = np.lexsort((out["Z"], out["Y"], out["X"]))
+        data[optimize] = {k: v[order] for k, v in out.items()}
+    for name, values in data[True].items():
+        np.testing.assert_array_equal(values, data[False][name], err_msg=name)
