@@ -27,7 +27,9 @@ def test_truth_is_consistent(scene):
     # DTM: exact terrain at the cell centres, north-up
     x = float(t["x0"]) - synthetic.X0 + 0.5
     y = float(t["y1"]) - synthetic.Y0 - 0.5
-    assert t["dtm"][0, 0] == pytest.approx(terrain_height("rolling", x, y), abs=0.01)  # mesh vs function
+    assert t["dtm"][0, 0] == pytest.approx(
+        terrain_height("rolling", x, y), abs=0.01
+    )  # mesh vs function
     assert meta["voxels"] > 0 and meta["trees"] > 0
 
 
@@ -55,7 +57,11 @@ def test_survey_settings_follow_swath_geometry():
 def test_scenario_validation_and_names():
     assert Scenario().name == "rolling_conifer_d2_p1_r4_s0"
     with pytest.raises(ValueError):
-        Scenario(terrain="cliff")
+        Scenario(terrain="canyon")
+    with pytest.raises(ValueError):
+        Scenario(placement="grid")
+    # Newer options only add suffixes, so earlier scenes keep their names.
+    assert Scenario(understorey=True, placement="clumped").name == "rolling_conifer_d2_p1_r4_s0_u_c"
     with pytest.raises(ValueError):
         Scenario(voxel=0.3)
 
@@ -138,3 +144,52 @@ def test_sensitivity_takes_only_scenes_the_grid_has_scored(tmp_path):
     todo, eligible = sensitivity.scenes_to_sweep(tmp_path, tmp_path / "out.csv")
     assert [p.name for p in todo] == ["done"]
     assert [p.name for p in eligible] == ["done", "swept"]
+
+
+@pytest.mark.parametrize(("kind", "steeper_than_45"), [("cliff", 0.05), ("ravine", 0.05)])
+def test_new_terrains_have_sharp_breaks(kind, steeper_than_45):
+    g = np.arange(0, 211.0)
+    z = terrain_height(kind, *np.meshgrid(g, g))
+    gy, gx = np.gradient(z)
+    slope = np.degrees(np.arctan(np.hypot(gx, gy)))
+    assert (slope > 45).mean() > steeper_than_45
+    assert np.isfinite(z).all()
+
+
+def test_default_trees_are_unchanged_by_the_new_options():
+    rng = np.random.default_rng(3)
+    plain = synthetic.make_trees("conifer", 60.0, np.random.default_rng(3))
+    assert not plain["low"].any()
+    with_shrubs = synthetic.make_trees("conifer", 60.0, rng, understorey=True)
+    canopy = ~with_shrubs["low"]
+    np.testing.assert_array_equal(with_shrubs["x"][canopy], plain["x"])  # same draws first
+    shrubs = with_shrubs["h"][with_shrubs["low"]]
+    assert shrubs.size > 0 and shrubs.max() <= 3.0
+
+
+def test_clumped_trees_leave_bigger_gaps():
+    from scipy.spatial import cKDTree
+
+    def mean_nearest(placement):
+        t = synthetic.make_trees("broadleaf", 200.0, np.random.default_rng(1), placement=placement)
+        d, _ = cKDTree(np.column_stack((t["x"], t["y"]))).query(
+            np.column_stack((t["x"], t["y"])), k=2
+        )
+        return d[:, 1].mean()
+
+    assert mean_nearest("clumped") < 0.75 * mean_nearest("regular")
+
+
+def test_understorey_gets_its_own_plant_area_index(tmp_path):
+    meta = make_scene(Scenario(terrain="cliff", forest="conifer", core=40.0, margin=10.0,
+                               understorey=True), tmp_path)  # fmt: skip
+    assert set(meta["pad"]) == {"canopy", "understorey"} and meta["shrubs"] > 0
+    pads = np.array(
+        [float(r.split()[3]) for r in (tmp_path / "forest.vox").read_text().splitlines()[6:]]
+    )
+    low = np.isclose(pads, meta["pad"]["understorey"], rtol=1e-5)
+    assert low.any() and (~low).any()
+    assert low.sum() * 0.5**3 * meta["pad"]["understorey"] / 60.0**2 == pytest.approx(
+        synthetic.UNDERSTOREY["pai"], rel=1e-3)  # fmt: skip
+    t = np.load(tmp_path / "truth.npz")
+    assert t["tree_h"].min() > 3.0  # shrubs are not scored as trees

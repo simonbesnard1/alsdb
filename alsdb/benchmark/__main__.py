@@ -151,6 +151,9 @@ def main(argv=None):
                    help="multiplies the forest type's plant area index")  # fmt: skip
     p.add_argument("--max-returns", type=int, default=4)
     p.add_argument("--seeds", type=int, nargs="+", default=[0])
+    p.add_argument("--understorey", nargs="+", default=["no"], choices=["no", "yes"],
+                   help="low vegetation 0.5-3 m under the forest")  # fmt: skip
+    p.add_argument("--placement", nargs="+", default=["regular"], choices=["regular", "clumped"])
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
                    choices=["alsdb", "lasr", "lastools"])  # fmt: skip
     p.add_argument("--lastools-dir")
@@ -330,12 +333,14 @@ def main(argv=None):
 
         scenarios = [
             Scenario(
-                terrain=t, forest=f, density=d, pad_scale=p, max_returns=args.max_returns, seed=s
+                terrain=t, forest=f, density=d, pad_scale=p, max_returns=args.max_returns, seed=s,
+                understorey=u == "yes", placement=pl,
             )
-            for t, f, d, p, s in itertools.product(
-                args.terrain, args.forest, args.density, args.pad_scale, args.seeds
+            for t, f, d, p, s, u, pl in itertools.product(
+                args.terrain, args.forest, args.density, args.pad_scale, args.seeds,
+                args.understorey, args.placement,
             )
-        ]
+        ]  # fmt: skip
         print(run_grid(args.out_dir, scenarios, tools=args.tools, lastools_dir=args.lastools_dir,
                        threads=args.threads, keep=args.keep))  # fmt: skip
     elif args.command == "uls":

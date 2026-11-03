@@ -139,6 +139,18 @@ volume. One flight line at 1000 m, Leica ALS50-II geometry, up to four
 returns per pulse. HELIOS++ needs about 4.5 KB of memory per voxel: a 210 m
 broadleaf or tropical scene needs more than 22 GB.
 
+Terrains: `flat`; `rolling` (±15 m hills); `steep` (a smooth 35° plane);
+`rough` (hills plus ±1 m micro-relief); `cliff` (a 20° slope broken every 45 m
+by 6-14 m scarps with 70-80° faces); `ravine` (hills cut by two V-shaped
+channels 7 and 10 m deep with 50° sides). Only `cliff` and `ravine` have
+slopes above 45° and sharp breaks, which is where ground filters differ.
+`--understorey yes` adds low vegetation (0.5-3 m shrubs, ~60% cover, its own
+plant area index of 1) under any forest type, the classic source of a DTM
+lifted by vegetation read as ground. `--placement clumped` places the trees in
+groups (a Thomas cluster process) instead of a jittered grid, so canopy gaps
+vary in size. Both only add suffixes (`_u`, `_c`) to the scene names; the
+default scenes are unchanged.
+
 ### ULS canopies
 
 ```bash

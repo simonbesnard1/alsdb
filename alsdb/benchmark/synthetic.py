@@ -38,7 +38,8 @@ import numpy as np
 X0, Y0 = 500_000.0, 4_600_000.0  # scene origin; written as EPSG:25831
 CRS = "EPSG:25831"
 YEAR = 2020
-TERRAINS = ("flat", "rolling", "steep", "rough")
+TERRAINS = ("flat", "rolling", "steep", "rough", "cliff", "ravine")
+PLACEMENTS = ("regular", "clumped")
 FORESTS = ("open", "conifer", "broadleaf", "tropical")
 METHODS = ("pitfree", "spikefree")  # run by alsdb and lasR
 # alsdb outputs: name -> compute_all options. "tin" is the first-return TIN
@@ -70,10 +71,14 @@ class Scenario:
     margin: float = 30.0  # simulated around the core, not scored
     voxel: float = 0.5
     seed: int = 0
+    understorey: bool = False  # add low vegetation (UNDERSTOREY)
+    placement: str = "regular"  # "clumped": trees in groups (CLUMP_SIZE, CLUMP_SPREAD)
 
     def __post_init__(self):
         if self.terrain not in TERRAINS or self.forest not in FORESTS:
             raise ValueError(f"terrain in {TERRAINS}, forest in {FORESTS}")
+        if self.placement not in PLACEMENTS:
+            raise ValueError(f"placement in {PLACEMENTS}")
         if self.density <= 0 or self.pad_scale <= 0 or self.max_returns < 1:
             raise ValueError("density, pad_scale and max_returns must be positive")
         if abs(1.0 / self.voxel - round(1.0 / self.voxel)) > 1e-9 or round(1.0 / self.voxel) % 2:
@@ -81,8 +86,10 @@ class Scenario:
 
     @property
     def name(self):
+        # Suffixes only for the newer options, so earlier scenes keep their names.
+        extra = ("_u" if self.understorey else "") + ("_c" if self.placement == "clumped" else "")
         return (f"{self.terrain}_{self.forest}_d{self.density:g}_p{self.pad_scale:g}"
-                f"_r{self.max_returns}_s{self.seed}")  # fmt: skip
+                f"_r{self.max_returns}_s{self.seed}{extra}")  # fmt: skip
 
     @property
     def size(self):
@@ -103,8 +110,33 @@ def terrain_height(kind, x, y):
         return rolling
     if kind == "steep":  # ~35 degree slope along x, gentle cross-slope undulation
         return 300.0 + math.tan(math.radians(35.0)) * x + 3.0 * np.sin(y / 40.0)
-    # rough: rolling hills plus metre-scale micro-topography
-    return rolling + 0.6 * np.sin(x / 3.1 + 1.0) * np.cos(y / 2.7) + 0.4 * np.sin((x + y) / 1.9)
+    if kind == "rough":  # rolling hills plus metre-scale micro-topography
+        return (rolling + 0.6 * np.sin(x / 3.1 + 1.0) * np.cos(y / 2.7)
+                + 0.4 * np.sin((x + y) / 1.9))  # fmt: skip
+    if kind == "cliff":
+        # A 20 degree slope rising along x, broken every 45 m by a scarp of 6, 10 or
+        # 14 m whose face is ~70-80 degrees (rise over 3 m), with a gently curving
+        # crest line: the sharp convex / concave breaks ground filters cut off or fill.
+        # (+10 m keeps the pattern positive: no scarp is cut at the scene edge)
+        x = np.asarray(x, dtype=float) + 10.0 - 2.0 * np.sin(np.asarray(y, dtype=float) / 25.0)
+        period, width = 45.0, 3.0
+        step = np.floor(x / period)
+        heights = np.array([6.0, 10.0, 14.0])
+        below = np.cumsum(np.r_[0.0, np.resize(heights, 64)])  # scarps fully climbed
+        k = np.clip(step.astype(int), 0, 63)
+        ramp = np.clip((x - step * period - (period - width)) / width, 0.0, 1.0)
+        return 300.0 + math.tan(math.radians(20.0)) * x + below[k] + heights[k % 3] * ramp
+    if kind == "ravine":
+        # Rolling hills cut by two meandering V-shaped channels 10 and 7 m deep
+        # with ~50 degree sides: sharp concave breaks at the channel floor.
+        y = np.asarray(y, dtype=float)
+        side = math.tan(math.radians(50.0))
+        out = rolling
+        for centre, depth in ((60.0 + 15.0 * np.sin(y / 40.0), 10.0),
+                              (150.0 + 12.0 * np.cos(y / 50.0), 7.0)):  # fmt: skip
+            out = out - np.maximum(0.0, depth - np.abs(np.asarray(x) - centre) * side)
+        return out
+    raise ValueError(f"unknown terrain {kind!r}")
 
 
 # Forest types: list of layers (stems per ha, height mean/sd, height bounds,
@@ -126,14 +158,36 @@ FOREST_TYPES = {
         {"per_ha": 160, "h": (30.0, 4.0), "hb": (20.0, 38.0), "r": 0.22, "base": 0.55, "shape": "ellipsoid", "place": "grid"},
         {"per_ha": 400, "h": (10.0, 2.5), "hb": (5.0, 16.0), "r": 0.25, "base": 0.3, "shape": "ellipsoid", "place": "random"}]},
 }  # fmt: skip
+# Optional low vegetation under any forest type (shrubs, regeneration, scrub):
+# 0.5-3 m tall, ~60% cover, its own plant area index. The classic ground-filter
+# error: returns from it read as ground lift the DTM.
+UNDERSTOREY = {"pai": 1.0, "layers": [
+    {"per_ha": 2500, "h": (1.8, 0.6), "hb": (0.5, 3.0), "r": 0.5, "base": 0.05, "shape": "ellipsoid", "place": "random"}]}  # fmt: skip
+# Clumped placement (a Thomas cluster process): trees in groups of about 8
+# around random centres, spread over 1.2 times the regular spacing, leaving
+# gaps of varied size instead of the regular grid's uniform ones.
+CLUMP_SIZE, CLUMP_SPREAD = 8, 1.2
 
 
-def make_trees(forest, size, rng):
-    """Stems of every layer: dict of arrays x, y (scene-local), h, r, base, cone (bool)."""
-    out = {k: [] for k in ("x", "y", "h", "r", "base", "cone")}
-    for layer in FOREST_TYPES[forest]["layers"]:
+def make_trees(forest, size, rng, *, placement="regular", understorey=False):
+    """Stems of every layer: dict of arrays x, y (scene-local), h, r, base, cone, low (bool).
+
+    ``low`` marks the understorey. With the defaults the trees (and the random
+    draws) are those of earlier versions, so existing scenarios are unchanged.
+    """
+    out = {k: [] for k in ("x", "y", "h", "r", "base", "cone", "low")}
+    layers = [(layer, False) for layer in FOREST_TYPES[forest]["layers"]]
+    if understorey:
+        layers += [(layer, True) for layer in UNDERSTOREY["layers"]]
+    for layer, low in layers:
         n = round(layer["per_ha"] * size * size / 1e4)
-        if layer["place"] == "grid":
+        if placement == "clumped" and not low:
+            spacing = math.sqrt(1e4 / layer["per_ha"])
+            centres = rng.uniform(0, size, (2, max(1, round(n / CLUMP_SIZE))))
+            pick = rng.integers(0, centres.shape[1], n)
+            offset = rng.normal(0.0, CLUMP_SPREAD * spacing, (2, n))
+            x, y = (centres[:, pick] + offset) % size
+        elif layer["place"] == "grid":
             spacing = math.sqrt(1e4 / layer["per_ha"])
             g = np.arange(spacing / 2, size, spacing)
             x, y = (a.ravel() for a in np.meshgrid(g, g))
@@ -150,6 +204,7 @@ def make_trees(forest, size, rng):
         out["r"].append(layer["r"] * h * rng.uniform(0.8, 1.2, x.size))
         out["base"].append(layer["base"] * h)
         out["cone"].append(np.full(x.size, layer["shape"] == "cone"))
+        out["low"].append(np.full(x.size, low))
     return {k: np.concatenate(v) for k, v in out.items()}
 
 
@@ -339,29 +394,53 @@ def make_scene(scenario, out_dir):
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(scenario.seed)
     size, voxel = scenario.size, scenario.voxel
-    trees = make_trees(scenario.forest, size, rng)
+    trees = make_trees(scenario.forest, size, rng, placement=scenario.placement,
+                       understorey=scenario.understorey)  # fmt: skip
+    canopy = {k: v[~trees["low"]] for k, v in trees.items()}
     occ, origin, zmin = voxelise(trees, scenario.terrain, size, voxel)
-    pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
-    pad = crown_pad(pai, occ, size, voxel)
     g = np.arange(int(size) + 1, dtype=float)
     zgrid = terrain_height(scenario.terrain, *np.meshgrid(g, g))  # 1 m mesh, [y, x]
+    # Crowns are placed relative to the ground at the stem; on cliffs and in
+    # ravines they can reach into the terrain: drop voxels below the mesh.
+    centres = origin + (np.arange(occ.shape[0]) + 0.5) * voxel
+    ground = mesh_height(zgrid, *np.meshgrid(centres, centres, indexing="ij"))
+    cz = zmin + (np.arange(occ.shape[2]) + 0.5) * voxel
+    occ &= cz[None, None, :] > ground[:, :, None]
+    pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
+    if scenario.understorey:
+        # The canopy keeps its stand PAI over its own voxels, the understorey gets
+        # UNDERSTOREY["pai"] over the voxels only it fills.
+        upper, _, upper_zmin = voxelise(canopy, scenario.terrain, size, voxel)
+        if upper.shape != occ.shape or upper_zmin != zmin:  # the shrubs are never the tallest
+            raise RuntimeError("canopy and understorey voxel grids differ")
+        upper &= occ
+        lower = occ & ~upper
+        pad_canopy = crown_pad(pai, upper, size, voxel)
+        pad_low = crown_pad(UNDERSTOREY["pai"] * scenario.pad_scale, lower, size, voxel)
+        pad_grid = np.where(upper, pad_canopy, pad_low)
+        pad = pad_grid[np.nonzero(occ)]
+        pad_meta = {"canopy": pad_canopy, "understorey": pad_low}
+    else:
+        pad = crown_pad(pai, occ, size, voxel)
+        pad_meta = pad
 
     truth = voxel_truth(occ, origin, zmin, voxel, zgrid, scenario.margin, scenario.core)
     m0, nc = round(scenario.margin), round(scenario.core)
-    in_core = ((trees["x"] >= m0) & (trees["x"] < m0 + nc)
-               & (trees["y"] >= m0) & (trees["y"] < m0 + nc))  # fmt: skip
+    in_core = ((canopy["x"] >= m0) & (canopy["x"] < m0 + nc)
+               & (canopy["y"] >= m0) & (canopy["y"] < m0 + nc))  # fmt: skip
     np.savez_compressed(
         out / "truth.npz", **truth, x0=X0 + m0, y1=Y0 + m0 + nc,
-        tree_x=X0 + trees["x"][in_core], tree_y=Y0 + trees["y"][in_core],
-        tree_h=trees["h"][in_core],
+        tree_x=X0 + canopy["x"][in_core], tree_y=Y0 + canopy["y"][in_core],
+        tree_h=canopy["h"][in_core],
     )  # fmt: skip
     prf, scan_freq = write_helios_scene(
         out, name=scenario.name, zgrid=zgrid, voxels=np.nonzero(occ), pad=pad, origin=origin,
         zmin=zmin, shape=occ.shape, voxel=voxel, xy0=(X0, Y0), density=scenario.density,
         max_returns=scenario.max_returns, seed=scenario.seed,
     )  # fmt: skip
-    meta = {"scenario": asdict(scenario), "crs": CRS, "year": YEAR, "trees": int(trees["x"].size),
-            "voxels": int(occ.sum()), "pai": pai, "pad": pad, "pulse_rate_hz": prf,
+    meta = {"scenario": asdict(scenario), "crs": CRS, "year": YEAR, "trees": int(canopy["x"].size),
+            "shrubs": int(trees["low"].sum()),
+            "voxels": int(occ.sum()), "pai": pai, "pad": pad_meta, "pulse_rate_hz": prf,
             "scan_freq_hz": scan_freq}  # fmt: skip
     (out / "scene.json").write_text(json.dumps(meta, indent=2))
     return meta
