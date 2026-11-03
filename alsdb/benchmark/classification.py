@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -330,44 +329,11 @@ def run_pylasr_ptd(
     output_path: str | Path,
     parameters: PTDParameters | None = None,
 ) -> ClassificationRun:
-    """Run PTD (Axelsson 2000) through pyLASR built from lasR source; noise is skipped."""
-    try:
-        import pylasr
-    except ImportError as exc:
-        raise ImportError(
-            "PTD benchmarking requires pyLASR built from current lasR source; "
-            "the PyPI 0.17.4 wheel does not expose classify_with_ptd"
-        ) from exc
+    """Run PTD (Axelsson 2000) through pyLASR (:func:`alsdb.core.ptd.run_ptd`); noise is skipped."""
+    from alsdb.core.ptd import run_ptd
 
-    if not hasattr(pylasr, "classify_with_ptd"):
-        raise ImportError("Installed pyLASR does not expose classify_with_ptd")
     parameters = parameters or PTDParameters()
-    input_path, output_path = Path(input_path), Path(output_path)
-    pipeline = pylasr.classify_with_ptd(
-        res=parameters.seed_resolution,
-        angle=parameters.angle,
-        distance=parameters.distance,
-        spacing=parameters.spacing,
-        classification=2,
-        filter=["Classification %out% 7 18"],  # lasR drop_noise()
-    ) + pylasr.write_las(str(output_path))
-    # pyLASR writes its pipeline to <temp dir>/pipeline.json, a fixed name:
-    # parallel runs overwrote each other's (JSON parse errors, missing outputs).
-    # std::filesystem::temp_directory_path follows TMPDIR, so give each call its own.
-    with tempfile.TemporaryDirectory(prefix="alsdb-pylasr-") as private:
-        previous = os.environ.get("TMPDIR")
-        os.environ["TMPDIR"] = private
-        try:
-            start = time.perf_counter()
-            result = pipeline.execute(str(input_path))
-            elapsed = time.perf_counter() - start
-        finally:
-            if previous is None:
-                os.environ.pop("TMPDIR", None)
-            else:
-                os.environ["TMPDIR"] = previous
-    if not result.get("success") or not output_path.is_file():
-        raise RuntimeError(f"pyLASR PTD failed: {result}")
+    elapsed = run_ptd(input_path, output_path, **asdict(parameters))
     reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(output_path)}]))
     reader.execute()
     classified = reader.arrays[0]

@@ -122,9 +122,16 @@ cgal-cpp = ">=6,<7"
 hdf5 = ">=2"
 pybind11 = ">=2.13"
 cxx-compiler = "*"
+# To build pyLASR (PTD ground classification, ground_method="ptd") in the
+# same environment as the spike-free backend: pixi run -e spikefree install-pylasr
+pip = "*"
+setuptools = "*"
+wheel = "*"
+cmake = "*"
 
 [tool.pixi.feature.spikefree.tasks]
 build-spikefree = "python -m alsdb.processing._build_spikefree"
+install-pylasr = "python -m pip install --no-build-isolation 'pylasr @ git+https://github.com/r-lidar/lasR.git@9b3048eff7d77a3fb4b93c5b33a662ea561cebfb#subdirectory=python'"
 
 # Optional R + lasR (r-lidar, GPL-3) for the alsdb.benchmark.lasr reference.
 # lasR is compiled from r-universe into the env: pixi run -e lasr install-lasr

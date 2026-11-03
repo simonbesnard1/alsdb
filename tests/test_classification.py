@@ -17,7 +17,7 @@ from alsdb.core.classification import (
 
 def test_default_config_matches_existing_classifier_defaults():
     config = ClassificationConfig()
-    assert config.ground_method == "csf"
+    assert config.ground_method == "smrf"
     assert config.vegetation_low == 0.5
     assert config.vegetation_medium == 2.0
     assert config.vegetation_high == 5.0
@@ -50,7 +50,7 @@ def test_fingerprint_is_stable_and_sensitive_to_parameters():
 
 
 def test_ground_stage_uses_selected_method_and_parameters():
-    csf = ground_stage(ClassificationConfig(csf_resolution=0.75))
+    csf = ground_stage(ClassificationConfig(ground_method="csf", csf_resolution=0.75))
     pmf = ground_stage(ClassificationConfig(ground_method="pmf", pmf_slope=0.8))
     smrf = ground_stage(ClassificationConfig(ground_method="smrf", smrf_window=24))
     assert csf["type"] == "filters.csf" and csf["resolution"] == 0.75
@@ -153,3 +153,61 @@ def test_buffered_tile_uses_neighbor_context_but_returns_only_owned_points(monke
     chunks = list(tile.iter_chunks())
     assert observed == [3]
     assert sum(len(x) for x, _, _ in chunks) == 2
+
+
+def test_ptd_settings_stay_out_of_other_fingerprints():
+    csf = ClassificationConfig(ground_method="csf")
+    assert "ptd_angle" not in csf.to_dict()
+    assert csf.fingerprint == ClassificationConfig(ground_method="csf", ptd_angle=20).fingerprint
+    ptd = ClassificationConfig(ground_method="ptd")
+    assert ptd.to_dict()["ptd_angle"] == 30.0
+    assert ptd.fingerprint != ClassificationConfig(ground_method="ptd", ptd_angle=20).fingerprint
+    assert ptd.ptd_parameters == {"seed_resolution": 10.0, "angle": 30.0, "distance": 2.0,
+                                  "spacing": 0.25}  # fmt: skip
+
+
+def test_ptd_pipeline_has_no_pdal_ground_stage():
+    stages = classification_stages(ClassificationConfig(ground_method="ptd"))
+    assert stages[0]["type"] == "filters.hag_nn"
+    with pytest.raises(ValueError, match="not a PDAL stage"):
+        ground_stage(ClassificationConfig(ground_method="ptd"))
+
+
+def _terrain_and_canopy(n=4000, seed=0):
+    rng = np.random.default_rng(seed)
+    points = np.zeros(n, dtype=[("X", "f8"), ("Y", "f8"), ("Z", "f8"), ("Classification", "u1"),
+                                ("ReturnNumber", "u1"), ("NumberOfReturns", "u1")])  # fmt: skip
+    points["X"], points["Y"] = rng.uniform(0, 60, (2, n))
+    ground = rng.random(n) < 0.4
+    points["Z"] = 100 + 0.3 * points["X"] + np.where(ground, 0, rng.uniform(3, 20, n))
+    points["Classification"] = 1
+    points["ReturnNumber"] = points["NumberOfReturns"] = 1
+    points["Classification"][0] = 7  # noise is never ground
+    points["Z"][0] = 50
+    return points, ground
+
+
+def test_ptd_ground_finds_the_terrain_in_input_order():
+    pytest.importorskip("pylasr")
+    from alsdb.core.ptd import ptd_ground
+
+    points, ground = _terrain_and_canopy()
+    shuffled = points[::-1].copy()
+    mask = ptd_ground(shuffled)
+    truth = ground[::-1]
+    assert not mask[-1]  # the noise point (first in the original order)
+    assert (mask == truth)[:-1].mean() > 0.98
+
+
+def test_tile_reclassification_with_ptd():
+    pytest.importorskip("pylasr")
+    tile = ALSTile.__new__(ALSTile)
+    tile._classification = ClassificationConfig(ground_method="ptd")
+    points, ground = _terrain_and_canopy()
+    data = np.zeros(len(points), dtype=[*points.dtype.descr, ("HeightAboveGround", "f8")])
+    for name in points.dtype.names:
+        data[name] = points[name]
+    out = tile._apply_reclassification(data)
+    assert out["Classification"][0] == 7
+    assert np.mean((out["Classification"] == 2) == ground) > 0.98
+    assert np.isin(out["Classification"][~ground][1:], (1, 3, 4, 5)).all()

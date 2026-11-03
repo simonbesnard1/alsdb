@@ -136,7 +136,7 @@ alsdb info tile.laz
 alsdb ingest tile.laz my_array -c 2 -c 3 -c 4 -c 5
 
 # Classify an unclassified survey during ingestion
-alsdb ingest tile.laz my_array --classify --ground-method csf --denoise
+alsdb ingest tile.laz my_array --classify --ground-method smrf --denoise
 ```
 
 The Python API accepts a validated, reusable classification configuration:
@@ -145,7 +145,7 @@ The Python API accepts a validated, reusable classification configuration:
 from alsdb import ALSDatabase, ClassificationConfig
 
 classification = ClassificationConfig(
-    ground_method="csf",
+    ground_method="smrf",
     denoise=True,
     buffer=30.0,
     vegetation_low=0.5,
@@ -154,6 +154,16 @@ classification = ClassificationConfig(
 )
 db.ingest("tile.laz", classification_config=classification)
 ```
+
+Ground methods: `smrf` (default; PDAL, Pingel et al. 2013), `ptd` (progressive
+TIN densification, Axelsson 2000, through lasR's pyLASR, built once into the
+`spikefree` environment with `pixi run -e spikefree install-pylasr`; settings
+`ptd_seed_resolution`, `ptd_angle`, `ptd_distance`, `ptd_spacing`, lasR's
+defaults), `csf` and `pmf` (PDAL). On the benchmark's steep and tropical sites
+PTD gave the lowest DTM errors and SMRF beat CSF at a twentieth of its runtime
+([doc/benchmarking.md](doc/benchmarking.md#ground-classification)). Before
+2026-11 the default was `csf`: arrays classified with that default need
+`ground_method="csf"` (or `overwrite=True`) when more files are ingested.
 
 Enabled classification settings and their stable fingerprint are recorded in
 the ingestion manifest. Re-ingesting a file with different settings requires

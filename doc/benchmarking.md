@@ -15,7 +15,7 @@ processes; alsdb never installs or links them.
 | `alsdb.benchmark.timing` | compute time of all three tools on the same work | licensed LAStools, `lasr` |
 | `alsdb.benchmark.decimated` | decimated copies of a dense ALS survey scored against its full density | the survey and its decimated copies |
 | `alsdb.benchmark.sensitivity` | spike-free freeze distances on finished synthetic or ULS scenes | `spikefree` |
-| `alsdb.benchmark.classification` | ground classifiers against reference classifications, by slope and cover | `ptd` for PTD (`pixi run -e ptd install-pylasr` once) |
+| `alsdb.benchmark.classification` | ground classifiers against reference classifications, by slope and cover | pyLASR for PTD (`pixi run -e spikefree install-pylasr` once) |
 
 ## Reference tiles
 
@@ -217,7 +217,7 @@ benchmark in the same folder has not scored yet are skipped. Results:
 ## Ground classification
 
 ```bash
-pixi run -e ptd python -m alsdb.benchmark classification-files <out_dir> \
+pixi run -e spikefree python -m alsdb.benchmark classification-files <out_dir> \
     --laz-dir <site> --reference-dir <site>/original --tools csf pmf smrf ptd \
     --ptd-angle 20 30 40
 ```
@@ -252,7 +252,7 @@ The same classifiers also run on the benchmark scenes, scored against each
 scene's truth DTM:
 
 ```bash
-pixi run -e ptd python -m alsdb.benchmark classification-scenes <out_dir> \
+pixi run -e spikefree python -m alsdb.benchmark classification-scenes <out_dir> \
     --scenes-dir <synthetic_grid> <uls_out> <decimated_out> --tools csf pmf smrf ptd --workers 8
 ```
 
@@ -275,7 +275,7 @@ classification. At full density the classifiers do not agree everywhere
 truth. Two more references separate the questions:
 
 ```bash
-pixi run -e ptd python -m alsdb.benchmark classification-references \
+pixi run -e spikefree python -m alsdb.benchmark classification-references \
     --scenes-dir <decimated_out> <uls_out> --source PetitBuech=<site>/original \
     RobsonCreek=<site>/original DE-Tha=<ULS tiles> --out-csv agreement.csv
 ```

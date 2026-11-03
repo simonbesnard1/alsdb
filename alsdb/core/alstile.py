@@ -100,12 +100,13 @@ class ALSTile:
     ground_classifier:
         Algorithm used for ground classification when ``reclassify=True``.
 
-        - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016).
-          Good general-purpose choice; handles gentle-to-moderate terrain well.
-        - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003),
-          PDAL's ``filters.pmf``.  More robust on steep or complex terrain.
-          Morphological opening, not TIN densification: neither option is
-          Axelsson's (2000) PTD used by TerraScan/lasground.
+        - ``"smrf"`` (default) — Simple Morphological Filter (Pingel et al.
+          2013), PDAL's ``filters.smrf``.
+        - ``"ptd"`` — progressive TIN densification (Axelsson 2000) through
+          the optional pyLASR package; best DTMs on steep and dense benchmark
+          sites (see doc/benchmarking.md).
+        - ``"csf"`` — Cloth Simulation Filter (Zhang et al. 2016).
+        - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003).
     denoise:
         If ``True``, run noise detection before reclassification:
 
@@ -129,7 +130,7 @@ class ALSTile:
         path: str | Path,
         classification_filter: list[int] | None = None,
         reclassify: bool = False,
-        ground_classifier: str = "csf",
+        ground_classifier: str = "smrf",
         denoise: bool = False,
         reproject_to: str | None = None,
         hag_low: float = _HAG_LOW,
@@ -255,13 +256,21 @@ class ALSTile:
 
     def _apply_reclassification(self, data: np.ndarray) -> np.ndarray:
         """
-        Classify ground and vegetation points using CSF or PMF + HAG.
+        Classify ground (CSF, PMF, SMRF or PTD) and vegetation by HAG.
 
         Thresholds are in metres.  Data must already be in a metric CRS
         (use reproject_to to ensure this for feet-based source files).
         Only unclassified (class 1) points are relabelled.
         """
         original = data["Classification"].copy()
+        if self._classification.ground_method == "ptd":
+            from alsdb.core.ptd import ptd_ground
+
+            ground = ptd_ground(data, **self._classification.ptd_parameters)
+            data = data.copy()
+            noise = np.isin(original, (7, 18))
+            data["Classification"][~noise] = 1
+            data["Classification"][ground] = 2
         stages = classification_stages(self._classification)
         p = pdal.Pipeline(json.dumps(stages), arrays=[data])
         p.execute()
