@@ -1058,7 +1058,11 @@ def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) 
 
 def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
                    fastgc_executable="fastgc"):  # fmt: skip
-    """[(results row, strata rows)] for each run on one benchmark scene."""
+    """[(results row, strata rows)] for each run on one benchmark scene.
+
+    Each run's ground mask is also kept in ``<work_dir>/ground_masks/<scene>.npz``
+    for :func:`run_scene_chm`.
+    """
     scene = Path(scene)
     laz = sorted(p for p in (scene / "laz").iterdir() if p.suffix.lower() in (".las", ".laz"))
     if len(laz) != 1:
@@ -1068,7 +1072,7 @@ def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
     references = load_dtm_references(scene)
     meta = scene / "scene.json"
     scenario = json.dumps(json.loads(meta.read_text()).get("scenario", {})) if meta.exists() else ""
-    out = []
+    out, masks = [], {}
     for method, settings, parameters in runs:
         row = {"file": scene.name, "method": method, "parameters": parameters,
                "n_points": len(points), "scenario": scenario}  # fmt: skip
@@ -1082,13 +1086,37 @@ def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
                 ref, points, run.is_ground, references, run_id(method, parameters)
             )
             row.update(scores, status="ok", error="", wall_seconds=run.wall_seconds)
+            masks[run_id(method, parameters)] = (method, parameters, run.is_ground)
         except Exception as exc:  # noqa: BLE001 - one failed tool must not abort a long run
             row.update(status="error", error=f"{type(exc).__name__}: {exc}")
         for stratum in strata:
             stratum.update(file=scene.name, method=method, parameters=parameters,
                            scenario=scenario)  # fmt: skip
         out.append((row, strata))
+    if masks:
+        _save_ground_masks(
+            Path(work_dir) / "ground_masks" / f"{scene.name}.npz", len(points), masks
+        )
     return out
+
+
+def _save_ground_masks(path, n, masks):
+    """Add {run id: (method, parameters, ground mask)} to *path* (bit-packed)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = dict(np.load(path)) if path.exists() else {}
+    index = json.loads(str(data.pop("index"))) if "index" in data else {}
+    data.pop("n", None)
+    for rid, (method, parameters, mask) in masks.items():
+        data[f"run_{rid}"] = np.packbits(np.asarray(mask, bool))
+        index[rid] = [method, parameters]
+    np.savez_compressed(path, n=n, index=json.dumps(index), **data)
+
+
+def load_ground_masks(path) -> dict[str, tuple[str, str, np.ndarray]]:
+    """{run id: (method, parameters, ground mask)} saved by :func:`classify_scene`."""
+    data = np.load(path)
+    n, index = int(data["n"]), json.loads(str(data["index"]))
+    return {rid: (*index[rid], np.unpackbits(data[f"run_{rid}"])[:n].astype(bool)) for rid in index}
 
 
 def run_scene_benchmark(
@@ -1310,3 +1338,107 @@ def _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread
             row[f"{m}_vs_truth_mae"] = terrain_error(ref.cells_z[cells], dtms[rid][cells])["mae"]
         rows.append(row)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# End to end: CHMs on each classifier's own ground
+# ---------------------------------------------------------------------------
+
+CHM_FIELDS = ("file", "method", "parameters", "chm_method", "chm_mae", "chm_bias",
+              "chm_within05", "chm_coverage", "mean_height_bias", "scenario")  # fmt: skip
+
+
+def chm_on_ground(points, truth, ground, config=None):
+    """CHM of the scene's core window with *ground* as the only ground (class 2).
+
+    Every other non-noise point becomes vegetation (5), so the CHM differs from
+    the provider's only through the ground. Scored against ``chm_centre``.
+    """
+    from alsdb.processing._surface import CHMConfig, reconstruct_chm
+
+    config = config or CHMConfig(method="spikefree")
+    arr = points.copy()
+    noise = np.isin(arr["Classification"], NOISE_CLASSES)
+    arr["Classification"][~noise] = 5
+    arr["Classification"][np.asarray(ground, bool) & ~noise] = 2
+    ref = np.asarray(truth["chm_centre"], dtype=float)
+    ny, nx = ref.shape
+    x0, y1 = float(truth["x0"]), float(truth["y1"])
+    chm = reconstruct_chm(arr, (x0, y1 - ny, x0 + nx, y1), 1.0, config, diagnostics=False)["chm"]
+    chm = np.asarray(chm, dtype=float)[:ny, :nx]
+    ok = np.isfinite(chm) & np.isfinite(ref)
+    if not ok.any():
+        return {"chm_mae": np.nan, "chm_bias": np.nan, "chm_within05": np.nan,
+                "chm_coverage": 0.0, "mean_height_bias": np.nan}  # fmt: skip
+    d = chm[ok] - ref[ok]
+    return {
+        "chm_mae": float(np.abs(d).mean()),
+        "chm_bias": float(d.mean()),
+        "chm_within05": float(np.mean(np.abs(d) <= 0.5)),
+        "chm_coverage": float(ok.sum() / np.isfinite(ref).sum()),
+        "mean_height_bias": float(chm[ok].mean() - ref[ok].mean()),
+    }
+
+
+def _scene_chm_rows(scene, masks_path, done):
+    from alsdb.processing._surface import GROUND_CLASSES
+
+    scene = Path(scene)
+    laz = sorted(p for p in (scene / "laz").iterdir() if p.suffix.lower() in (".las", ".laz"))
+    points = _read_las(laz[0])
+    truth = np.load(scene / "truth.npz")
+    meta = scene / "scene.json"
+    scenario = json.dumps(json.loads(meta.read_text()).get("scenario", {})) if meta.exists() else ""
+    runs = {"provider": ("provider", "", np.isin(points["Classification"], GROUND_CLASSES))}
+    runs.update(load_ground_masks(masks_path))
+    rows = []
+    for method, parameters, ground in runs.values():
+        if (scene.name, method, parameters) in done:
+            continue
+        if len(ground) != len(points):
+            raise ValueError(f"{scene.name}: ground mask of {method} does not match the points")
+        rows.append({"file": scene.name, "method": method, "parameters": parameters,
+                     "chm_method": "spikefree", "scenario": scenario,
+                     **chm_on_ground(points, truth, ground)})  # fmt: skip
+    return rows
+
+
+def run_scene_chm(scenes_dirs, out_dir, *, workers: int = 1) -> Path:
+    """alsdb spike-free CHMs on each classifier's ground, for the scenes classified in *out_dir*.
+
+    Reads the ground masks :func:`run_scene_benchmark` saved in
+    ``<out_dir>/ground_masks`` and writes ``<out_dir>/chm.csv``: one row per
+    scene and classifier run, plus ``provider`` (the scene's own classes), so
+    the CHM error splits into the canopy step and the ground classification.
+    Needs the native spike-free backend (``spikefree`` environment).
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    out_dir = Path(out_dir)
+    out_csv = out_dir / "chm.csv"
+    done = set()
+    if out_csv.exists():
+        with out_csv.open(newline="") as handle:
+            done = {(r["file"], r["method"], r["parameters"]) for r in csv.DictReader(handle)}
+    if isinstance(scenes_dirs, (str, Path)):
+        scenes_dirs = [scenes_dirs]
+    scenes = {
+        p.name: p for d in scenes_dirs for p in Path(d).iterdir() if (p / "truth.npz").exists()
+    }
+    todo = [(scenes[m.stem], m) for m in sorted((out_dir / "ground_masks").glob("*.npz"))
+            if m.stem in scenes]  # fmt: skip
+    print(f"{len(todo)} classified scenes", flush=True)
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_scene_chm_rows, scene, masks, done): scene for scene, masks in todo}
+        for future in as_completed(futures):
+            scene = futures[future]
+            try:
+                rows = future.result()
+            except Exception as exc:  # noqa: BLE001 - one bad scene must not stop the run
+                print(f"{scene.name}: FAILED {exc}", flush=True)
+                continue
+            if rows:
+                _append_rows(out_csv, rows, CHM_FIELDS)
+                print(f"{scene.name}: " + ", ".join(f"{r['method']} {r['chm_mae']:.2f}" for r in rows),
+                      flush=True)  # fmt: skip
+    return out_csv

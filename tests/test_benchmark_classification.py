@@ -283,3 +283,31 @@ def test_dtm_references_give_self_and_consensus_scores(tmp_path):
     row = next(csv.DictReader(out.open()))
     assert float(row["self_mae"]) < 1e-4  # same points as the reference (float32 storage)
     assert row["consensus_mae"] != ""
+
+
+def test_ground_masks_round_trip(tmp_path):
+    from alsdb.benchmark.classification import _save_ground_masks, load_ground_masks
+
+    path = tmp_path / "m" / "scene.npz"
+    a, b = np.array([1, 0, 1], bool), np.array([0, 0, 1], bool)
+    _save_ground_masks(path, 3, {"r1": ("smrf", "{}", a)})
+    _save_ground_masks(path, 3, {"r2": ("ptd", '{"angle": 30}', b)})  # resumed run adds
+    masks = load_ground_masks(path)
+    assert set(masks) == {"r1", "r2"}
+    np.testing.assert_array_equal(masks["r1"][2], a)
+    assert masks["r2"][:2] == ("ptd", '{"angle": 30}')
+
+
+def test_scene_chm_on_each_classifiers_ground(tmp_path):
+    pytest.importorskip("alsdb.processing._spikefree_native")
+    from alsdb.benchmark.classification import run_scene_benchmark, run_scene_chm
+
+    _write_scene(tmp_path / "scenes" / "rolling")
+    run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("smrf",))
+    assert (tmp_path / "out" / "ground_masks" / "rolling.npz").exists()
+    out = run_scene_chm(tmp_path / "scenes", tmp_path / "out")
+    rows = list(csv.DictReader(out.open()))
+    assert {r["method"] for r in rows} == {"provider", "smrf"}
+    assert all(r["chm_mae"] != "" for r in rows)
+    run_scene_chm(tmp_path / "scenes", tmp_path / "out")  # resumes: nothing added
+    assert len(list(csv.DictReader(out.open()))) == 2

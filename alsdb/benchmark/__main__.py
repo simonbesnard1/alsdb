@@ -112,6 +112,14 @@ def main(argv=None):
     p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
     p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
 
+    p = sub.add_parser(
+        "classification-chm",
+        help="alsdb spike-free CHM on each classifier's ground (after classification-scenes)",
+    )
+    p.add_argument("out_dir", help="the classification-scenes output folder")
+    p.add_argument("--scenes-dir", nargs="+", required=True)
+    p.add_argument("--workers", type=int, default=1)
+
     p = sub.add_parser("lastools", help="LAStools reference CHM tiles from LAS/LAZ")
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
@@ -295,6 +303,10 @@ def main(argv=None):
                 )
             ),
         )
+    elif args.command == "classification-chm":
+        from alsdb.benchmark.classification import run_scene_chm
+
+        run_scene_chm(args.scenes_dir, args.out_dir, workers=args.workers)
     elif args.command == "lastools":
         from alsdb.benchmark import lastools
 
