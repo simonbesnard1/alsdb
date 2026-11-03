@@ -307,6 +307,16 @@ cells, the median spread and every method's distance from the provider's DTM.
 On the disputed cells (steep slopes, tropical forest) only an independent
 truth can rank the methods: exact synthetic terrain or field measurements.
 
+`classification-chm` then builds alsdb spike-free CHMs on each run's ground
+and on the provider's (`chm.csv`), so the CHM error splits into the canopy
+step and the ground classification. On the thinned real ALS (benchmark run of
+2026-11) the classifier's own ground added a median of +0.1 m (PTD, Petit
+Buech) to +2.8 m (SMRF, Robson Creek) to the CHM error, and far more in the
+worst 10% of scenes; on the synthetic and ULS scenes (gentle terrain) it added
+nothing. PTD was best end to end from about 1 pulse/m² up, CSF at
+0.5 pulses/m² in tropical forest, and SMRF (best at full density) failed below
+about 2 pulses/m², so alsdb's default stays CSF.
+
 Caveat: the reference classification is itself the output of some ground
 filter, often a PTD variant in commercial software; a classifier close to it
 in kind may score better partly for that reason. Ask the data provider how

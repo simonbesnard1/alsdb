@@ -100,12 +100,13 @@ class ALSTile:
     ground_classifier:
         Algorithm used for ground classification when ``reclassify=True``.
 
-        - ``"smrf"`` (default) — Simple Morphological Filter (Pingel et al.
-          2013), PDAL's ``filters.smrf``.
+        - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016);
+          robust across pulse densities on the benchmark sites.
         - ``"ptd"`` — progressive TIN densification (Axelsson 2000) through
-          the optional pyLASR package; best DTMs on steep and dense benchmark
-          sites (see doc/benchmarking.md).
-        - ``"csf"`` — Cloth Simulation Filter (Zhang et al. 2016).
+          the optional pyLASR package; lowest DTM and CHM errors on steep and
+          dense benchmark sites from ~1 pulse/m2 up (see doc/benchmarking.md).
+        - ``"smrf"`` — Simple Morphological Filter (Pingel et al. 2013); good at
+          full density, failed below ~2 pulses/m2 with PDAL's defaults.
         - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003).
     denoise:
         If ``True``, run noise detection before reclassification:
@@ -130,7 +131,7 @@ class ALSTile:
         path: str | Path,
         classification_filter: list[int] | None = None,
         reclassify: bool = False,
-        ground_classifier: str = "smrf",
+        ground_classifier: str = "csf",
         denoise: bool = False,
         reproject_to: str | None = None,
         hag_low: float = _HAG_LOW,

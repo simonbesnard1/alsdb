@@ -3,9 +3,11 @@
 Ground filters are PDAL's (Butler et al. 2021) implementations of CSF (Zhang
 et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al. 2013), and
 progressive TIN densification (PTD; Axelsson 2000) through the optional
-pyLASR package (:mod:`alsdb.core.ptd`). SMRF is the default: on steep and
-tropical benchmark sites it gave lower DTM errors than CSF at a twentieth of
-its runtime, and PTD lower still (doc/benchmarking.md). The
+pyLASR package (:mod:`alsdb.core.ptd`). CSF is the default: on the steep and
+tropical benchmark sites it held up across pulse densities, where SMRF (better
+only at full density) failed below ~2 pulses/m2; PTD gave the lowest errors
+from ~1 pulse/m2 up and is recommended where pyLASR is installed
+(doc/benchmarking.md). The
 optional noise stage is PDAL's extended local minimum filter (Chen et al.
 2012) followed by a radius outlier filter.
 
@@ -49,7 +51,7 @@ class ClassificationConfig:
     """Configuration for optional ingestion-time ground and vegetation classification."""
 
     enabled: bool = True
-    ground_method: Literal["csf", "pmf", "smrf", "ptd"] = "smrf"
+    ground_method: Literal["csf", "pmf", "smrf", "ptd"] = "csf"
     denoise: bool = False
     outlier_radius: float = 1.0
     outlier_min_neighbors: int = 2
@@ -159,7 +161,7 @@ def resolve_classification_config(
     config: ClassificationConfig | None,
     *,
     reclassify: bool = False,
-    ground_method: str = "smrf",
+    ground_method: str = "csf",
     denoise: bool = False,
     vegetation_low: float = 0.5,
     vegetation_medium: float = 2.0,
@@ -167,7 +169,7 @@ def resolve_classification_config(
 ) -> ClassificationConfig:
     """Resolve the new configuration API or deprecated scalar arguments."""
     if config is not None:
-        if reclassify or denoise or ground_method != "smrf":
+        if reclassify or denoise or ground_method != "csf":
             raise ValueError("classification_config cannot be combined with legacy arguments")
         return config
     return ClassificationConfig(

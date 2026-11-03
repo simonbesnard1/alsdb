@@ -136,7 +136,7 @@ alsdb info tile.laz
 alsdb ingest tile.laz my_array -c 2 -c 3 -c 4 -c 5
 
 # Classify an unclassified survey during ingestion
-alsdb ingest tile.laz my_array --classify --ground-method smrf --denoise
+alsdb ingest tile.laz my_array --classify --ground-method csf --denoise
 ```
 
 The Python API accepts a validated, reusable classification configuration:
@@ -145,7 +145,7 @@ The Python API accepts a validated, reusable classification configuration:
 from alsdb import ALSDatabase, ClassificationConfig
 
 classification = ClassificationConfig(
-    ground_method="smrf",
+    ground_method="csf",
     denoise=True,
     buffer=30.0,
     vegetation_low=0.5,
@@ -155,15 +155,16 @@ classification = ClassificationConfig(
 db.ingest("tile.laz", classification_config=classification)
 ```
 
-Ground methods: `smrf` (default; PDAL, Pingel et al. 2013), `ptd` (progressive
+Ground methods: `csf` (default; PDAL, Zhang et al. 2016), `ptd` (progressive
 TIN densification, Axelsson 2000, through lasR's pyLASR, built once into the
 `spikefree` environment with `pixi run -e spikefree install-pylasr`; settings
 `ptd_seed_resolution`, `ptd_angle`, `ptd_distance`, `ptd_spacing`, lasR's
-defaults), `csf` and `pmf` (PDAL). On the benchmark's steep and tropical sites
-PTD gave the lowest DTM errors and SMRF beat CSF at a twentieth of its runtime
-([doc/benchmarking.md](doc/benchmarking.md#ground-classification)). Before
-2026-11 the default was `csf`: arrays classified with that default need
-`ground_method="csf"` (or `overwrite=True`) when more files are ingested.
+defaults), `smrf` and `pmf` (PDAL). On the benchmark's steep and tropical sites
+PTD gave the lowest DTM and CHM errors from about 1 pulse/m² up and is
+recommended where pyLASR is installed; CSF held up best across densities
+(best at 0.5 pulses/m² in tropical forest); SMRF was good at full density but
+failed below about 2 pulses/m² with PDAL's defaults
+([doc/benchmarking.md](doc/benchmarking.md#ground-classification)).
 
 Enabled classification settings and their stable fingerprint are recorded in
 the ingestion manifest. Re-ingesting a file with different settings requires

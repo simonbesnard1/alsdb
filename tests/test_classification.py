@@ -17,7 +17,7 @@ from alsdb.core.classification import (
 
 def test_default_config_matches_existing_classifier_defaults():
     config = ClassificationConfig()
-    assert config.ground_method == "smrf"
+    assert config.ground_method == "csf"
     assert config.vegetation_low == 0.5
     assert config.vegetation_medium == 2.0
     assert config.vegetation_high == 5.0
