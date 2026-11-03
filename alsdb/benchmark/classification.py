@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -350,9 +351,21 @@ def run_pylasr_ptd(
         classification=2,
         filter=["Classification %out% 7 18"],  # lasR drop_noise()
     ) + pylasr.write_las(str(output_path))
-    start = time.perf_counter()
-    result = pipeline.execute(str(input_path))
-    elapsed = time.perf_counter() - start
+    # pyLASR writes its pipeline to <temp dir>/pipeline.json, a fixed name:
+    # parallel runs overwrote each other's (JSON parse errors, missing outputs).
+    # std::filesystem::temp_directory_path follows TMPDIR, so give each call its own.
+    with tempfile.TemporaryDirectory(prefix="alsdb-pylasr-") as private:
+        previous = os.environ.get("TMPDIR")
+        os.environ["TMPDIR"] = private
+        try:
+            start = time.perf_counter()
+            result = pipeline.execute(str(input_path))
+            elapsed = time.perf_counter() - start
+        finally:
+            if previous is None:
+                os.environ.pop("TMPDIR", None)
+            else:
+                os.environ["TMPDIR"] = previous
     if not result.get("success") or not output_path.is_file():
         raise RuntimeError(f"pyLASR PTD failed: {result}")
     reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(output_path)}]))

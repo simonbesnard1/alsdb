@@ -311,3 +311,32 @@ def test_scene_chm_on_each_classifiers_ground(tmp_path):
     assert all(r["chm_mae"] != "" for r in rows)
     run_scene_chm(tmp_path / "scenes", tmp_path / "out")  # resumes: nothing added
     assert len(list(csv.DictReader(out.open()))) == 2
+
+
+def test_pylasr_runs_with_a_private_temp_dir(tmp_path, monkeypatch):
+    import os
+    import sys
+    import types
+
+    from alsdb.benchmark import classification
+
+    seen = []
+
+    class Pipeline:
+        def __add__(self, other):
+            return self
+
+        def execute(self, path):
+            seen.append(os.environ.get("TMPDIR"))
+            (tmp_path / "out.laz").write_bytes(b"x")
+            return {"success": True}
+
+    fake = types.SimpleNamespace(classify_with_ptd=lambda **k: Pipeline(), write_las=lambda p: None)
+    monkeypatch.setitem(sys.modules, "pylasr", fake)
+    monkeypatch.setattr(classification, "pdal", types.SimpleNamespace(
+        Pipeline=lambda *a, **k: types.SimpleNamespace(
+            execute=lambda: None, arrays=[np.zeros(1, dtype=[("Classification", "u1")])])))  # fmt: skip
+    monkeypatch.setenv("TMPDIR", "/original")
+    classification.run_pylasr_ptd(tmp_path / "in.laz", tmp_path / "out.laz")
+    assert seen[0] != "/original" and "alsdb-pylasr-" in seen[0]
+    assert os.environ["TMPDIR"] == "/original"
