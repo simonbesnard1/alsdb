@@ -160,10 +160,21 @@ def test_ptd_settings_stay_out_of_other_fingerprints():
     assert "ptd_angle" not in csf.to_dict()
     assert csf.fingerprint == ClassificationConfig(ground_method="csf", ptd_angle=20).fingerprint
     ptd = ClassificationConfig(ground_method="ptd")
-    assert ptd.to_dict()["ptd_angle"] == 30.0
+    assert ptd.to_dict()["ptd_angle"] == 45.0
     assert ptd.fingerprint != ClassificationConfig(ground_method="ptd", ptd_angle=20).fingerprint
-    assert ptd.ptd_parameters == {"seed_resolution": 10.0, "angle": 30.0, "distance": 2.0,
-                                  "spacing": 0.25}  # fmt: skip
+    assert ptd.fingerprint != ClassificationConfig(ground_method="ptd", ptd_votes=4).fingerprint
+    assert "ptd_tilt_runs" not in csf.to_dict()
+    from alsdb.core.ptd import DEFAULTS
+
+    assert ptd.ptd_parameters == DEFAULTS
+
+
+def test_ptd_ensemble_settings_are_validated():
+    for bad in ({"ptd_tilt_runs": 0}, {"ptd_votes": 9}, {"ptd_votes": 0}, {"ptd_tilt": 0.0},
+                {"ptd_tilt": 50.0}, {"ptd_tilt_runs": 2.5}):  # fmt: skip
+        with pytest.raises(ValueError):
+            ClassificationConfig(ground_method="ptd", **bad)
+    ClassificationConfig(ground_method="ptd", ptd_tilt_runs=1, ptd_votes=1)  # plain PTD
 
 
 def test_ptd_pipeline_has_no_pdal_ground_stage():
@@ -223,8 +234,8 @@ def test_native_ptd_matches_pylasr():
     points, _ = _terrain_and_canopy()
     for name in ("X", "Y", "Z"):
         points[name] = np.round(points[name], 3)
-    native = ptd_ground(points)
-    lasr = ptd_ground(points, backend="pylasr")
+    native = ptd_ground(points, tilt_runs=1, votes=1)
+    lasr = ptd_ground(points, backend="pylasr", tilt_runs=1, votes=1)
     assert (native == lasr).mean() > 0.995 and native.any()
 
 
@@ -233,8 +244,8 @@ def test_native_ptd_parameters_reach_the_library():
     from alsdb.core.ptd import ptd_ground
 
     points, _ = _terrain_and_canopy()
-    strict = ptd_ground(points, angle=1.0, distance=0.01)
-    loose = ptd_ground(points, angle=60.0, distance=10.0)
+    strict = ptd_ground(points, angle=1.0, distance=0.01, tilt_runs=1, votes=1)
+    loose = ptd_ground(points, angle=60.0, distance=10.0, tilt_runs=1, votes=1)
     assert strict.sum() < loose.sum()
     with pytest.raises(ValueError, match="unknown PTD"):
         ptd_ground(points, max_angle=30)
@@ -251,3 +262,34 @@ def test_native_ptd_does_not_depend_on_point_order():
     again = np.empty(len(points), bool)
     again[perm] = ptd_ground(points[perm])
     np.testing.assert_array_equal(first, again)
+
+
+def test_ptd_tilt_is_rigid_about_the_centre():
+    from alsdb.core.ptd import _tilted
+
+    points, _ = _terrain_and_canopy(n=50)
+    centre = np.array([30.0, 30.0, 110.0])
+    out = _tilted(points, centre, 10.0, 77.0)
+    xyz = np.column_stack([points[n] for n in ("X", "Y", "Z")])
+    new = np.column_stack([out[n] for n in ("X", "Y", "Z")])
+    np.testing.assert_allclose(np.linalg.norm(new - centre, axis=1),
+                               np.linalg.norm(xyz - centre, axis=1))  # fmt: skip
+    # tilted by 10 degrees: the +Z axis now leans 10 degrees off vertical
+    up = _tilted(np.array([(30.0, 30.0, 111.0)], dtype=[("X", "f8"), ("Y", "f8"), ("Z", "f8")]),
+                 centre, 10.0, 77.0)  # fmt: skip
+    assert np.degrees(np.arccos(up["Z"][0] - 110.0)) == pytest.approx(10.0)
+    np.testing.assert_array_equal(out["Classification"], points["Classification"])
+
+
+def test_ptd_ensemble_votes():
+    pytest.importorskip("alsdb.processing._ptd_native")
+    from alsdb.core.ptd import ptd_ground
+
+    points, ground = _terrain_and_canopy()
+    single = ptd_ground(points, tilt_runs=1, votes=1)
+    union, default, unanimous = (ptd_ground(points, votes=k) for k in (1, 3, 8))
+    assert (unanimous <= default).all() and (default <= union).all()
+    assert (single <= union).all()  # the untilted run is one of the votes
+    assert not default[0]  # noise
+    assert (default == ground)[1:].mean() > 0.98
+    np.testing.assert_array_equal(default, ptd_ground(points, workers=4))

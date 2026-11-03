@@ -231,7 +231,7 @@ benchmark in the same folder has not scored yet are skipped. Results:
 ```bash
 pixi run -e spikefree python -m alsdb.benchmark classification-files <out_dir> \
     --laz-dir <site> --reference-dir <site>/original --tools csf pmf smrf ptd \
-    --ptd-angle 20 30 40
+    --ptd-tilt 5 10 15
 ```
 
 compares ground classifiers with the reference classification of real LAS/LAZ
@@ -256,7 +256,9 @@ Per file, method and parameter set, `results.csv` holds:
 `strata.csv` splits the same scores by terrain slope (0-15, 15-30, 30-45, >45°)
 and canopy cover (share of first returns above 2 m: 0-50, 50-80, 80-95,
 95-100%) in 5 m cells, on points and cells inside the 5 m edge strip only.
-Several `--ptd-*` values run every combination as separate rows. With
+PTD runs alsdb's tilt ensemble by default ([below](#ptd-tilt-ensemble));
+`--ptd-tilt-runs 1 --ptd-votes 1 --ptd-angle 30 --ptd-distance 2` is lasR's
+single run. Several `--ptd-*` values run every combination as separate rows. With
 `--laz-dir` at a site folder, every version (`original/`, `pd_*/`) is scored;
 `--reference-dir` takes terrain and cover from the full-density original, so
 DTM errors at all densities are against the same terrain.
@@ -322,6 +324,53 @@ Caveat: the reference classification is itself the output of some ground
 filter, often a PTD variant in commercial software; a classifier close to it
 in kind may score better partly for that reason. Ask the data provider how
 the reference was made.
+
+### PTD tilt ensemble
+
+The results above are for single PTD runs with lasR's defaults. On steep
+slopes PTD's errors depend on where its seed cells, its 0.25 m candidate
+cells and its triangles happen to fall; tilting the point cloud moves all
+three without changing PTD's own tests (angles and distances to the TIN
+facets are invariant under a rigid rotation). Following Fabian Fischer's
+suggestion to classify rotated copies of the point cloud, alsdb runs PTD on the points as they
+are and on copies tilted towards evenly spaced azimuths, and keeps the points
+enough runs agree on (`alsdb.core.ptd`).
+
+How the settings were chosen (2026-11, Chapitre Petit Buëch and Robson Creek,
+provider ground as reference, error of a 1 m TIN DTM):
+
+1. Development: the steepest and the gentlest 250 m block of 8 Petit Buëch
+   tiles, at full density and 2 pulses/m². A grid over seed cell (5, 10,
+   15 m), angle (25-45°) and distance (0.5-2 m) gave seed 10 m, angle 45°,
+   distance 1 m (mean error 0.153 m against 0.166 m for lasR's defaults).
+   Then tilt (5, 10, 15°), runs (4, 8) and votes (1-4): 8 runs, 10°, at least 3
+   votes, 0.132 m. Taking a point that any run calls ground (1 vote) helps on
+   steep blocks but adds vegetation on gentle ones; 3 votes kept the gain
+   without that harm. Tilts of 5-15° with 3-4 votes were all within 3 mm,
+   and tilting beat rotating about the vertical axis. A recovery step adding
+   points close to the local ground plane gained only 3% and was dropped.
+2. Held-out test, settings fixed beforehand: 8 other Petit Buëch tiles and 4
+   Robson Creek tiles (500 m, 50 m buffer), each at full density and at 8, 4,
+   2, 1 and 0.5 pulses/m².
+
+| mean DTM error (m) | Petit Buëch | Robson Creek |
+|---|---|---|
+| PTD, lasR defaults | 0.192 | 0.937 |
+| PTD, tuned, one run | 0.180 | 0.843 |
+| tilt ensemble (alsdb default) | 0.160 | 0.694 |
+
+The ensemble was never worse than the single tuned run by more than 1 mm in
+the 72 held-out cases and clearly better in 49. Its gain grows as density
+falls: from a few millimetres at full density to 0.06 m (Petit Buëch) and
+0.6 m (Robson Creek) at 0.5 pulses/m², on gentle as well as steep ground. It
+is therefore applied everywhere rather than by a density or slope rule, which
+would also make products of one survey differ in method from cell to cell.
+At full density on Robson Creek lasR's defaults were slightly better (0.257
+against 0.272 m), a cost of tuning the angle on one site. Caveats: the two
+steepest Petit Buëch tiles were development tiles, so the held-out Petit
+Buëch terrain is milder (at most 18% above 45°); Robson Creek's reference
+classification is itself uncertain. A 500 m tile at 2 pulses/m² took 9 s for
+one run, 77 s for the ensemble and 14 s with `workers=8`.
 
 ## What agreement to expect
 

@@ -23,6 +23,39 @@ def _pairs(values):
     return out
 
 
+def _add_ptd_arguments(p):
+    """PTD (Axelsson 2000) settings; several values run every combination.
+
+    Defaults: alsdb's (tilt ensemble); ``--ptd-tilt-runs 1 --ptd-votes 1
+    --ptd-angle 30 --ptd-distance 2`` is lasR's single run."""
+    from alsdb.core.ptd import DEFAULTS as d
+
+    for flag, key, kind, unit in (
+        ("--ptd-res", "seed_resolution", float, "seed cell (m)"),
+        ("--ptd-angle", "angle", float, "degrees"),
+        ("--ptd-distance", "distance", float, "m"),
+        ("--ptd-spacing", "spacing", float, "m"),
+        ("--ptd-tilt-runs", "tilt_runs", int, "runs of the tilt ensemble (1: plain PTD)"),
+        ("--ptd-tilt", "tilt", float, "ensemble tilt (degrees)"),
+        ("--ptd-votes", "votes", int, "runs that must call a point ground"),
+    ):
+        p.add_argument(flag, type=kind, nargs="+", default=[d[key]], help=unit)
+
+
+def _ptd_sets(args):
+    import itertools
+
+    from alsdb.benchmark.classification import PTDParameters
+
+    return tuple(
+        PTDParameters(*values)
+        for values in itertools.product(
+            args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing,
+            args.ptd_tilt_runs, args.ptd_tilt, args.ptd_votes,
+        )
+    )  # fmt: skip
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "points":
@@ -65,11 +98,7 @@ def main(argv=None):
     p.add_argument("--reference-dir", help="full-density originals (same file names) for terrain")
     p.add_argument("--lastools-dir", help="folder containing lasground64")
     p.add_argument("--fastgc-executable", default="fastgc")
-    # PTD (Axelsson 2000) via pyLASR; several values run every combination. Defaults: lasR's.
-    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
-    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
-    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
-    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
+    _add_ptd_arguments(p)
 
     p = sub.add_parser(
         "classification-scenes",
@@ -86,10 +115,7 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--lastools-dir", help="folder containing lasground64")
     p.add_argument("--fastgc-executable", default="fastgc")
-    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
-    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
-    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
-    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
+    _add_ptd_arguments(p)
 
     p = sub.add_parser(
         "classification-references",
@@ -107,10 +133,7 @@ def main(argv=None):
     p.add_argument("--tolerance", type=float, default=0.25, help="agreement tolerance (m)")
     p.add_argument("--max-density", type=float, help="thin denser surveys to this (points/m2)")
     p.add_argument("--out-csv", help="agreement table per area and stratum")
-    p.add_argument("--ptd-res", type=float, nargs="+", default=[10.0], help="seed cell (m)")
-    p.add_argument("--ptd-angle", type=float, nargs="+", default=[30.0], help="degrees")
-    p.add_argument("--ptd-distance", type=float, nargs="+", default=[2.0], help="m")
-    p.add_argument("--ptd-spacing", type=float, nargs="+", default=[0.25], help="m")
+    _add_ptd_arguments(p)
 
     p = sub.add_parser(
         "classification-chm",
@@ -241,10 +264,9 @@ def main(argv=None):
         else:
             print(payload)
     elif args.command == "classification-files":
-        import itertools
         from pathlib import Path
 
-        from alsdb.benchmark.classification import PTDParameters, run_file_benchmark
+        from alsdb.benchmark.classification import run_file_benchmark
 
         lasground = (
             str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
@@ -258,18 +280,12 @@ def main(argv=None):
             reference_dir=args.reference_dir,
             lastools_executable=lasground,
             fastgc_executable=args.fastgc_executable,
-            ptd=tuple(
-                PTDParameters(*values)
-                for values in itertools.product(
-                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
-                )
-            ),
+            ptd=_ptd_sets(args),
         )
     elif args.command == "classification-scenes":
-        import itertools
         from pathlib import Path
 
-        from alsdb.benchmark.classification import PTDParameters, run_scene_benchmark
+        from alsdb.benchmark.classification import run_scene_benchmark
 
         run_scene_benchmark(
             args.scenes_dir,
@@ -280,17 +296,10 @@ def main(argv=None):
                 str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
             ),
             fastgc_executable=args.fastgc_executable,
-            ptd=tuple(
-                PTDParameters(*values)
-                for values in itertools.product(
-                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
-                )
-            ),
+            ptd=_ptd_sets(args),
         )
     elif args.command == "classification-references":
-        import itertools
-
-        from alsdb.benchmark.classification import PTDParameters, build_dtm_references
+        from alsdb.benchmark.classification import build_dtm_references
 
         build_dtm_references(
             args.scenes_dir,
@@ -299,12 +308,7 @@ def main(argv=None):
             tolerance=args.tolerance,
             out_csv=args.out_csv,
             max_density=args.max_density,
-            ptd=tuple(
-                PTDParameters(*values)
-                for values in itertools.product(
-                    args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing
-                )
-            ),
+            ptd=_ptd_sets(args),
         )
     elif args.command == "classification-chm":
         from alsdb.benchmark.classification import run_scene_chm

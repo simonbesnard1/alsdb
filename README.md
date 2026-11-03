@@ -160,8 +160,16 @@ TIN densification, Axelsson 2000: the implementation lasR uses,
 [r-lidar/PTD](https://github.com/r-lidar/PTD) by Jean-Romain Roussel (MIT),
 vendored in `alsdb/processing/native/ptd` and built with
 `pixi run -e spikefree build-spikefree`; settings `ptd_seed_resolution`,
-`ptd_angle`, `ptd_distance`, `ptd_spacing`, lasR's defaults), `smrf` and `pmf`
-(PDAL). On the benchmark's steep and tropical sites PTD gave the lowest DTM and
+`ptd_angle`, `ptd_distance`, `ptd_spacing`), `smrf` and `pmf` (PDAL). alsdb
+runs PTD as a tilt ensemble: once as is and on 7 copies tilted by 10° towards
+evenly spaced azimuths, keeping as ground what at least 3 of the 8 runs call
+ground (`ptd_tilt_runs`, `ptd_tilt`, `ptd_votes`; `ptd_tilt_runs=1` is a single
+run). Classifying rotated copies of the point cloud was Fabian Fischer's
+(University of Bristol) suggestion. On held-out steep-terrain tiles the ensemble
+cut the DTM error of lasR's default PTD by 17-26%, most at low density, and was
+never worse than a single run; it costs 8 PTD runs, which
+`alsdb.core.ptd.ptd_ground(..., workers=8)` runs in parallel
+([doc/benchmarking.md](doc/benchmarking.md#ptd-tilt-ensemble)). On the benchmark's steep and tropical sites PTD gave the lowest DTM and
 CHM errors from about 1 pulse/m² up and is recommended; CSF held up best across densities
 (best at 0.5 pulses/m² in tropical forest); SMRF was good at full density but
 failed below about 2 pulses/m² with PDAL's defaults

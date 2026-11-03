@@ -1,5 +1,6 @@
 import csv
 import json
+from dataclasses import asdict
 
 import numpy as np
 import pytest
@@ -49,8 +50,12 @@ def test_terrain_error_known_values_and_missing_cells():
     assert score["coverage"] == 1.0
 
 
-def test_ptd_parameter_defaults_match_lasr():
-    assert PTDParameters() == PTDParameters(10.0, 30.0, 2.0, 0.25)
+def test_ptd_parameter_defaults_are_alsdb_s():
+    from alsdb.core.ptd import DEFAULTS
+
+    assert asdict(PTDParameters()) == DEFAULTS
+    with pytest.raises(ValueError, match="votes"):
+        PTDParameters(tilt_runs=2, votes=3)
 
 
 def test_classifier_input_keeps_only_noise_classes():

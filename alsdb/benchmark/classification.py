@@ -110,17 +110,27 @@ class ClassificationRun:
 class PTDParameters:
     """Progressive TIN densification parameters (Axelsson 2000).
 
-    Defaults are lasR's (``classify_with_ptd`` in R; pyLASR's own defaults
-    differ: angle 20, distance 3): lowest point per *seed_resolution* cell as
-    seeds, iteration *angle* (degrees; lasR suggests ~20 for flat, ~40 for
-    mountainous terrain) and *distance* (m), densification stops at
-    triangles smaller than *spacing* (m).
+    Defaults are alsdb's (:data:`alsdb.core.ptd.DEFAULTS`): lowest point per
+    *seed_resolution* cell as seeds, iteration *angle* (degrees) and
+    *distance* (m), densification stops at triangles smaller than *spacing*
+    (m); then the tilt ensemble, *tilt_runs* runs on copies tilted by *tilt*
+    degrees, ground where at least *votes* runs agree. ``tilt_runs=1`` with
+    angle 30 and distance 2 is lasR's ``classify_with_ptd`` default (pyLASR's
+    own defaults differ: angle 20, distance 3).
     """
 
     seed_resolution: float = 10.0
-    angle: float = 30.0
-    distance: float = 2.0
+    angle: float = 45.0
+    distance: float = 1.0
     spacing: float = 0.25
+    tilt_runs: int = 8
+    tilt: float = 10.0
+    votes: int = 3
+
+    def __post_init__(self) -> None:
+        from alsdb.core.ptd import check_ensemble
+
+        check_ensemble(self.tilt_runs, self.tilt, self.votes)
 
 
 @dataclass(frozen=True)
@@ -329,11 +339,20 @@ def run_pylasr_ptd(
     output_path: str | Path,
     parameters: PTDParameters | None = None,
 ) -> ClassificationRun:
-    """Run PTD (Axelsson 2000) through pyLASR (:func:`alsdb.core.ptd.run_ptd`); noise is skipped."""
+    """Run one PTD (Axelsson 2000) through pyLASR (:func:`alsdb.core.ptd.run_ptd`); noise is skipped.
+
+    A file-to-file reference for the native module: a single run, so the
+    ensemble settings of *parameters* must be ``tilt_runs=1``.
+    """
     from alsdb.core.ptd import run_ptd
 
-    parameters = parameters or PTDParameters()
-    elapsed = run_ptd(input_path, output_path, **asdict(parameters))
+    parameters = parameters or PTDParameters(tilt_runs=1, votes=1)
+    if parameters.tilt_runs != 1:
+        raise ValueError("run_pylasr_ptd runs a single PTD: use tilt_runs=1")
+    single = {
+        k: v for k, v in asdict(parameters).items() if k not in ("tilt_runs", "tilt", "votes")
+    }
+    elapsed = run_ptd(input_path, output_path, **single)
     reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(output_path)}]))
     reader.execute()
     classified = reader.arrays[0]

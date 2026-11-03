@@ -3,7 +3,8 @@
 Ground filters are PDAL's (Butler et al. 2021) implementations of CSF (Zhang
 et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al. 2013), and
 progressive TIN densification (PTD; Axelsson 2000), lasR's implementation
-vendored and compiled into alsdb (:mod:`alsdb.core.ptd`). CSF is the default:
+vendored and compiled into alsdb (:mod:`alsdb.core.ptd`) and run as a tilt
+ensemble (rotation idea from Fabian Fischer). CSF is the default:
 on the steep and tropical benchmark sites it held up across pulse densities,
 where SMRF (better only at full density) failed below ~2 pulses/m2; PTD gave
 the lowest errors from ~1 pulse/m2 up and is recommended where the native
@@ -45,6 +46,9 @@ from typing import Literal
 
 import numpy as np
 
+PTD_FIELDS = ("ptd_seed_resolution", "ptd_angle", "ptd_distance", "ptd_spacing",
+              "ptd_tilt_runs", "ptd_tilt", "ptd_votes")  # fmt: skip
+
 
 @dataclass(frozen=True)
 class ClassificationConfig:
@@ -69,12 +73,16 @@ class ClassificationConfig:
     smrf_window: float = 18.0
     smrf_cut: float = 0.0
     smrf_returns: tuple[str, ...] = ("last", "only")
-    # PTD (lasR classify_with_ptd defaults): seed cell, iteration angle and distance,
-    # minimum triangle size.
+    # PTD (alsdb.core.ptd.DEFAULTS): seed cell, iteration angle and distance,
+    # minimum triangle size, then the tilt ensemble (runs, tilt in degrees,
+    # votes for ground; ptd_tilt_runs=1 is a single run).
     ptd_seed_resolution: float = 10.0
-    ptd_angle: float = 30.0
-    ptd_distance: float = 2.0
+    ptd_angle: float = 45.0
+    ptd_distance: float = 1.0
     ptd_spacing: float = 0.25
+    ptd_tilt_runs: int = 8
+    ptd_tilt: float = 10.0
+    ptd_votes: int = 3
     hag_neighbors: int = 10
     allow_hag_extrapolation: bool = True
     vegetation_low: float = 0.5
@@ -108,6 +116,9 @@ class ClassificationConfig:
         invalid = [name for name, value in positive.items() if not np.isfinite(value) or value <= 0]
         if invalid:
             raise ValueError(f"Classification parameters must be finite and positive: {invalid}")
+        from alsdb.core.ptd import check_ensemble
+
+        check_ensemble(self.ptd_tilt_runs, self.ptd_tilt, self.ptd_votes)
         if self.outlier_min_neighbors < 1 or self.hag_neighbors < 1 or self.csf_rigidness < 1:
             raise ValueError("Neighbor counts and CSF rigidness must be positive integers")
         thresholds = (self.vegetation_low, self.vegetation_medium, self.vegetation_high)
@@ -131,7 +142,7 @@ class ClassificationConfig:
         if self.ground_method != "ptd":
             # Added after classified arrays were written: keep other methods'
             # fingerprints (and so their manifests) unchanged.
-            for name in ("ptd_seed_resolution", "ptd_angle", "ptd_distance", "ptd_spacing"):
+            for name in PTD_FIELDS:
                 values.pop(name)
         return values
 
@@ -143,6 +154,9 @@ class ClassificationConfig:
             "angle": self.ptd_angle,
             "distance": self.ptd_distance,
             "spacing": self.ptd_spacing,
+            "tilt_runs": self.ptd_tilt_runs,
+            "tilt": self.ptd_tilt,
+            "votes": self.ptd_votes,
         }
 
     @property
