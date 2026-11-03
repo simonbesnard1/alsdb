@@ -269,6 +269,16 @@ def run(
         "params": [],
     }
 
+    # Outputs are written under .partial/ and moved into place only when the
+    # call succeeded: a run stopped mid-write (another worker failing, a kill)
+    # left truncated GeoTIFFs that the resume check then took as finished.
+    for sub in ("hag", *products):
+        shutil.rmtree(out_dir / sub / ".partial", ignore_errors=True)
+        (out_dir / sub / ".partial").mkdir()
+
+    def partial(target):
+        return target.parent / ".partial" / target.name
+
     def tile(path):
         stem = path.stem
         targets = {p: out_dir / p / f"{stem}.tif" for p in products}
@@ -279,11 +289,21 @@ def run(
             hag = out_dir / "hag" / f"{stem}.laz"
         if not hag.is_file():
             _call(
-                [lasheight, "-i", str(path), "-replace_z", "-olaz", "-o", str(hag), "-fail"],
+                [
+                    lasheight,
+                    "-i",
+                    str(path),
+                    "-replace_z",
+                    "-olaz",
+                    "-o",
+                    str(partial(hag)),
+                    "-fail",
+                ],
                 env,
-                hag,
+                partial(hag),
                 timeout,
             )
+            os.replace(partial(hag), hag)
         row = {"tile": path.name, "freeze_distance": freeze_distance}
         if "spikefree" in products and not targets["spikefree"].is_file():
             freeze = freeze_distance
@@ -297,20 +317,21 @@ def run(
                 las2dem, "-i", str(hag), "-keep_class", *classes.split(),
                 "-spike_free", f"{freeze:.2f}", str(freeze_interval), str(height_buffer),
                 "-kill", str(max_triangle_edge), "-step", str(resolution),
-                "-nbits", "32", "-no_kml", "-fail", "-o", str(targets["spikefree"]),
+                "-nbits", "32", "-no_kml", "-fail", "-o", str(partial(targets["spikefree"])),
             ]  # fmt: skip
-            _call(command, env, targets["spikefree"], timeout)
+            _call(command, env, partial(targets["spikefree"]), timeout)
+            os.replace(partial(targets["spikefree"]), targets["spikefree"])
         if "max" in products and not targets["max"].is_file():
             # lascanopy appends "_max" to the output name it is given.
-            stub = targets["max"].with_name(f"{stem}.tif")
-            written = targets["max"].with_name(f"{stem}_max.tif")
+            stub = partial(targets["max"]).with_name(f"{stem}.tif")
+            written = partial(targets["max"]).with_name(f"{stem}_max.tif")
             command = [
                 lascanopy, "-i", str(hag), "-keep_first", "-keep_class", *classes.split(),
                 "-max", "-height_cutoff", "0", "-step", str(resolution), "-fail",
                 "-o", str(stub),
             ]  # fmt: skip
             _call(command, env, written, timeout)
-            written.rename(targets["max"])
+            os.replace(written, targets["max"])
         return row
 
     rows = [r for r in run_parallel(tile, files, n_workers) if r is not None]

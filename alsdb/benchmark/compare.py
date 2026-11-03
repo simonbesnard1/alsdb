@@ -142,21 +142,33 @@ def reference_index(ref_dir):
     ref_dir = Path(ref_dir)
     cache_path = ref_dir / ".alsdb_index.json"
     cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
-    index, changed = {}, False
+    index, changed, unreadable = {}, False, []
     for tif in sorted(ref_dir.glob("*.tif")):
         stat = tif.stat()
         stamp = [stat.st_size, stat.st_mtime]
         entry = cache.get(tif.name)
         if entry is None or entry["stamp"] != stamp:
-            with rasterio.open(tif) as ds:
-                entry = {
-                    "stamp": stamp,
-                    "bounds": list(ds.bounds),
-                    "res": [ds.transform.a, -ds.transform.e],
-                    "nodata": ds.nodata,
-                }
+            try:
+                with rasterio.open(tif) as ds:
+                    entry = {
+                        "stamp": stamp,
+                        "bounds": list(ds.bounds),
+                        "res": [ds.transform.a, -ds.transform.e],
+                        "nodata": ds.nodata,
+                    }
+            except rasterio.errors.RasterioIOError:
+                unreadable.append(tif)
+                continue
             changed = True
         index[tif.name] = entry
+    if unreadable:
+        # Usually truncated outputs of an interrupted run; deleting them lets
+        # the reference runner redo those tiles.
+        listed = "\n  ".join(str(t) for t in unreadable)
+        raise ValueError(
+            f"{len(unreadable)} unreadable GeoTIFF(s) in {ref_dir} (truncated by an interrupted "
+            f"run?); delete them and rerun the reference runner:\n  {listed}"
+        )
     if changed or set(index) != set(cache):
         try:
             cache_path.write_text(json.dumps(index))

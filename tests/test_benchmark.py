@@ -174,6 +174,10 @@ def test_lastools_run_builds_commands_with_auto_freeze_and_resumes(tmp_path, mon
     assert "-keep_first" in by_tool["lascanopy64"]
     assert (out / "max" / "tile.tif").is_file() and not (out / "max" / "tile_max.tif").exists()
     assert (out / "spikefree" / "tile.tif").is_file()
+    # Written under .partial/ and moved into place, so an interrupted call leaves no
+    # truncated output that a rerun would take as finished.
+    assert "/.partial/" in dem[dem.index("-o") + 1]
+    assert not list((out / "spikefree" / ".partial").iterdir())
     assert "tile.las" in (out / "params.csv").read_text()
     assert json.loads((out / "runs.json").read_text())[0]["tool"] == "lastools"
     calls.clear()
@@ -371,3 +375,13 @@ def test_lastools_retries_licence_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(lastools.subprocess, "run", lambda *a, **k: unlicensed)
     with pytest.raises(RuntimeError, match="license failure"):
         lastools._call(["lascanopy64"], {}, tmp_path / "other.tif")
+
+
+def test_reference_index_lists_every_unreadable_tif(tmp_path):
+    from alsdb.benchmark.compare import reference_index
+
+    (tmp_path / "a.tif").write_bytes(b"truncated")
+    (tmp_path / "b.tif").write_bytes(b"")
+    with pytest.raises(ValueError, match="2 unreadable GeoTIFF") as err:
+        reference_index(tmp_path)
+    assert "a.tif" in str(err.value) and "b.tif" in str(err.value)
