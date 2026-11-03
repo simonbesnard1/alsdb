@@ -102,8 +102,8 @@ class ALSTile:
 
         - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016);
           robust across pulse densities on the benchmark sites.
-        - ``"ptd"`` — progressive TIN densification (Axelsson 2000) through
-          the optional pyLASR package; lowest DTM and CHM errors on steep and
+        - ``"ptd"`` — progressive TIN densification (Axelsson 2000), lasR's
+          implementation compiled into alsdb; lowest DTM and CHM errors on steep and
           dense benchmark sites from ~1 pulse/m2 up (see doc/benchmarking.md).
         - ``"smrf"`` — Simple Morphological Filter (Pingel et al. 2013); good at
           full density, failed below ~2 pulses/m2 with PDAL's defaults.

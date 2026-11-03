@@ -15,7 +15,7 @@ processes; alsdb never installs or links them.
 | `alsdb.benchmark.timing` | compute time of all three tools on the same work | licensed LAStools, `lasr` |
 | `alsdb.benchmark.decimated` | decimated copies of a dense ALS survey scored against its full density | the survey and its decimated copies |
 | `alsdb.benchmark.sensitivity` | spike-free freeze distances on finished synthetic or ULS scenes | `spikefree` |
-| `alsdb.benchmark.classification` | ground classifiers against reference classifications, by slope and cover | pyLASR for PTD (`pixi run -e spikefree install-pylasr` once) |
+| `alsdb.benchmark.classification` | ground classifiers against reference classifications, by slope and cover | `spikefree` (native PTD built by `build-spikefree`) |
 
 ## Reference tiles
 
@@ -236,7 +236,8 @@ pixi run -e spikefree python -m alsdb.benchmark classification-files <out_dir> \
 
 compares ground classifiers with the reference classification of real LAS/LAZ
 files: CSF (Zhang et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al.
-2013) as in PDAL, PTD (Axelsson 2000) via pyLASR, and optionally LAStools
+2013) as in PDAL, PTD (Axelsson 2000) as compiled into alsdb from lasR's
+implementation (identical to pyLASR on identical coordinates), and optionally LAStools
 `lasground` and FAST-GC (Fareed et al.) as external programs. Each classifier
 sees every class reset to 1 except noise (7, 18), which it skips. Unclassified
 (0, 1) and noise points of the reference are not scored.

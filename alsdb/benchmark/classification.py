@@ -786,6 +786,14 @@ def _file_classifier(
 ) -> ClassificationRun:
     if method in ("csf", "pmf", "smrf"):
         return run_pdal_ground_classifier(points, ClassificationConfig(ground_method=method))
+    if method == "ptd":
+        # The vendored r-lidar/PTD alsdb itself runs (identical to pyLASR's on
+        # identical coordinates); run_pylasr_ptd remains for checking against lasR.
+        from alsdb.core.ptd import ptd_ground
+
+        start = time.perf_counter()
+        ground = ptd_ground(points, **asdict(ptd or PTDParameters()))
+        return ClassificationRun("ptd", ground, time.perf_counter() - start)
     neutral_input = work_dir / f"unclassified{input_path.suffix.lower()}"
     neutral_pipeline = [
         {"type": "readers.las", "filename": str(input_path)},
@@ -796,12 +804,6 @@ def _file_classifier(
         {"type": "writers.las", "filename": str(neutral_input), "forward": "all"},
     ]
     pdal.Pipeline(json.dumps(neutral_pipeline)).execute()
-    if method == "ptd":
-        output = work_dir / "ptd.laz"
-        run = run_pylasr_ptd(neutral_input, output, ptd)
-        return ClassificationRun(
-            run.method, _ground_mask_from_las(output, points), run.wall_seconds
-        )
     if method == "lastools":
         return run_lastools_lasground(
             neutral_input,

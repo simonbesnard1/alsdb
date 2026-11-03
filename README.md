@@ -156,12 +156,13 @@ db.ingest("tile.laz", classification_config=classification)
 ```
 
 Ground methods: `csf` (default; PDAL, Zhang et al. 2016), `ptd` (progressive
-TIN densification, Axelsson 2000, through lasR's pyLASR, built once into the
-`spikefree` environment with `pixi run -e spikefree install-pylasr`; settings
-`ptd_seed_resolution`, `ptd_angle`, `ptd_distance`, `ptd_spacing`, lasR's
-defaults), `smrf` and `pmf` (PDAL). On the benchmark's steep and tropical sites
-PTD gave the lowest DTM and CHM errors from about 1 pulse/m² up and is
-recommended where pyLASR is installed; CSF held up best across densities
+TIN densification, Axelsson 2000: the implementation lasR uses,
+[r-lidar/PTD](https://github.com/r-lidar/PTD) by Jean-Romain Roussel (MIT),
+vendored in `alsdb/processing/native/ptd` and built with
+`pixi run -e spikefree build-spikefree`; settings `ptd_seed_resolution`,
+`ptd_angle`, `ptd_distance`, `ptd_spacing`, lasR's defaults), `smrf` and `pmf`
+(PDAL). On the benchmark's steep and tropical sites PTD gave the lowest DTM and
+CHM errors from about 1 pulse/m² up and is recommended; CSF held up best across densities
 (best at 0.5 pulses/m² in tropical forest); SMRF was good at full density but
 failed below about 2 pulses/m² with PDAL's defaults
 ([doc/benchmarking.md](doc/benchmarking.md#ground-classification)).
@@ -187,7 +188,8 @@ python -m alsdb.benchmark classification \
 
 The benchmark records point-level precision, recall, F1, balanced accuracy,
 runtime, and separate boundary/interior F1. Optional Python adapters are also
-available for pyLASR PTD, FAST-GC, and LAStools `lasground`; external tools are
+available for FAST-GC and LAStools `lasground` (and pyLASR, to check alsdb's
+PTD against lasR); external tools are
 not installed as alsdb dependencies.
 
 To compare classifiers against existing class-2 labels in real LAS/LAZ files:

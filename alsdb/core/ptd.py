@@ -1,14 +1,19 @@
-"""Progressive TIN densification (PTD) ground classification through pyLASR.
+"""Progressive TIN densification (PTD) ground classification.
 
-PTD (Axelsson 2000) as implemented in lasR (Jean-Romain Roussel,
-https://github.com/r-lidar/lasR) and its Python binding pyLASR. pyLASR is an
-optional dependency, built from a pinned lasR commit that exposes
-``classify_with_ptd`` (``pixi run -e spikefree install-pylasr``, next to the
-native spike-free backend);
-lasR is GPL-3 and is called as a separately installed package, never bundled.
+PTD (Axelsson 2000) as implemented by Jean-Romain Roussel in r-lidar/PTD
+(MIT), the library lasR and pyLASR run. alsdb vendors it unchanged
+(``alsdb/processing/native/ptd``) and compiles it into
+``alsdb.processing._ptd_native`` with ``pixi run -e spikefree build-spikefree``:
+:func:`ptd_ground` classifies point arrays directly, without files.
 
-pyLASR reads and writes files, so :func:`ptd_ground` writes the points to a
-temporary LAS file, classifies it and maps the result back to the input order.
+``backend="pylasr"`` runs the same algorithm through pyLASR instead (optional,
+``pixi run -e spikefree install-pylasr``; lasR is GPL-3 and only called as a
+separately installed package), writing the points to a temporary LAS file.
+It is kept to check the native module: given the same coordinates in the same
+order, both give identical labels. PTD is sensitive to both: the 1 mm
+rounding of that file changed ~1% of labels on a sparse tile, shuffling the
+points ~0.5%, and DTM cells by up to metres. The native path therefore
+classifies points in a fixed (X, Y, Z) order.
 
 References
 ----------
@@ -34,6 +39,17 @@ import pdal
 NOISE_FILTER = "Classification %out% 7 18"  # lasR drop_noise()
 # lasR's classify_with_ptd defaults (pyLASR's own differ: angle 20, distance 3).
 DEFAULTS = {"seed_resolution": 10.0, "angle": 30.0, "distance": 2.0, "spacing": 0.25}
+
+
+def require_native():
+    """The compiled PTD module, or a clear error on how to build it."""
+    try:
+        from alsdb.processing import _ptd_native
+    except ImportError as exc:
+        raise ImportError(
+            "The native PTD module is not built: pixi run -e spikefree build-spikefree"
+        ) from exc
+    return _ptd_native
 
 
 def require_pylasr():
@@ -90,17 +106,36 @@ def _read(path) -> np.ndarray:
     return pipeline.arrays[0]
 
 
-def ptd_ground(points: np.ndarray, **parameters) -> np.ndarray:
+def ptd_ground(points: np.ndarray, *, backend: str = "native", **parameters) -> np.ndarray:
     """Boolean ground mask of *points* (in their order) from PTD.
 
-    *parameters* override :data:`DEFAULTS`. Noise (7, 18) is never ground;
-    every other point starts unclassified.
+    *parameters* override :data:`DEFAULTS`. Noise (7, 18) is never ground and
+    is left out of the ground search. *backend* is ``"native"`` (the vendored
+    library) or ``"pylasr"``.
     """
     unknown = set(parameters) - set(DEFAULTS)
     if unknown:
         raise ValueError(f"unknown PTD parameters: {sorted(unknown)}")
+    if backend not in ("native", "pylasr"):
+        raise ValueError("backend must be 'native' or 'pylasr'")
     if not len(points):
         return np.zeros(0, bool)
+    if backend == "native":
+        noise = np.isin(points["Classification"], (7, 18))
+        keep = np.flatnonzero(~noise)
+        # PTD depends on input order (ties in its lowest point per cell and in
+        # its height sort; shuffling a real tile changed 0.5% of labels):
+        # classify in X, Y, Z order so the result does not depend on how the
+        # points were stored or read.
+        keep = keep[np.lexsort((points["Z"][keep], points["Y"][keep], points["X"][keep]))]
+        xyz = np.column_stack((points["X"][keep], points["Y"][keep], points["Z"][keep]))
+        ground = np.zeros(len(points), bool)
+        ground[keep] = require_native().classify(xyz, **{**DEFAULTS, **parameters})
+        return ground
+    return _ptd_ground_pylasr(points, {**DEFAULTS, **parameters})
+
+
+def _ptd_ground_pylasr(points: np.ndarray, parameters: dict) -> np.ndarray:
     fields = [
         n for n in ("X", "Y", "Z", "ReturnNumber", "NumberOfReturns") if n in points.dtype.names
     ]
@@ -118,7 +153,7 @@ def ptd_ground(points: np.ndarray, **parameters) -> np.ndarray:
                          "offset_y": "auto", "offset_z": "auto"}]),
             arrays=[prepared],
         ).execute()  # fmt: skip
-        run_ptd(source, classified, **{**DEFAULTS, **parameters})
+        run_ptd(source, classified, **parameters)
         written, result = _read(source), _read(classified)
     if len(written) != len(points) or len(result) != len(points):
         raise RuntimeError("PTD changed the number of points")

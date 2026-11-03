@@ -2,12 +2,12 @@
 
 Ground filters are PDAL's (Butler et al. 2021) implementations of CSF (Zhang
 et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al. 2013), and
-progressive TIN densification (PTD; Axelsson 2000) through the optional
-pyLASR package (:mod:`alsdb.core.ptd`). CSF is the default: on the steep and
-tropical benchmark sites it held up across pulse densities, where SMRF (better
-only at full density) failed below ~2 pulses/m2; PTD gave the lowest errors
-from ~1 pulse/m2 up and is recommended where pyLASR is installed
-(doc/benchmarking.md). The
+progressive TIN densification (PTD; Axelsson 2000), lasR's implementation
+vendored and compiled into alsdb (:mod:`alsdb.core.ptd`). CSF is the default:
+on the steep and tropical benchmark sites it held up across pulse densities,
+where SMRF (better only at full density) failed below ~2 pulses/m2; PTD gave
+the lowest errors from ~1 pulse/m2 up and is recommended where the native
+module is built (doc/benchmarking.md). The
 optional noise stage is PDAL's extended local minimum filter (Chen et al.
 2012) followed by a radius outlier filter.
 

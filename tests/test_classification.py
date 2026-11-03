@@ -188,7 +188,7 @@ def _terrain_and_canopy(n=4000, seed=0):
 
 
 def test_ptd_ground_finds_the_terrain_in_input_order():
-    pytest.importorskip("pylasr")
+    pytest.importorskip("alsdb.processing._ptd_native")
     from alsdb.core.ptd import ptd_ground
 
     points, ground = _terrain_and_canopy()
@@ -200,7 +200,7 @@ def test_ptd_ground_finds_the_terrain_in_input_order():
 
 
 def test_tile_reclassification_with_ptd():
-    pytest.importorskip("pylasr")
+    pytest.importorskip("alsdb.processing._ptd_native")
     tile = ALSTile.__new__(ALSTile)
     tile._classification = ClassificationConfig(ground_method="ptd")
     points, ground = _terrain_and_canopy()
@@ -211,3 +211,43 @@ def test_tile_reclassification_with_ptd():
     assert out["Classification"][0] == 7
     assert np.mean((out["Classification"] == 2) == ground) > 0.98
     assert np.isin(out["Classification"][~ground][1:], (1, 3, 4, 5)).all()
+
+
+def test_native_ptd_matches_pylasr():
+    # Same r-lidar/PTD code: identical labels on identical coordinates. pyLASR
+    # reads them from a 1 mm LAS file, so feed the native module the same values.
+    pytest.importorskip("alsdb.processing._ptd_native")
+    pytest.importorskip("pylasr")
+    from alsdb.core.ptd import ptd_ground
+
+    points, _ = _terrain_and_canopy()
+    for name in ("X", "Y", "Z"):
+        points[name] = np.round(points[name], 3)
+    native = ptd_ground(points)
+    lasr = ptd_ground(points, backend="pylasr")
+    assert (native == lasr).mean() > 0.995 and native.any()
+
+
+def test_native_ptd_parameters_reach_the_library():
+    pytest.importorskip("alsdb.processing._ptd_native")
+    from alsdb.core.ptd import ptd_ground
+
+    points, _ = _terrain_and_canopy()
+    strict = ptd_ground(points, angle=1.0, distance=0.01)
+    loose = ptd_ground(points, angle=60.0, distance=10.0)
+    assert strict.sum() < loose.sum()
+    with pytest.raises(ValueError, match="unknown PTD"):
+        ptd_ground(points, max_angle=30)
+
+
+def test_native_ptd_does_not_depend_on_point_order():
+    pytest.importorskip("alsdb.processing._ptd_native")
+    from alsdb.core.ptd import ptd_ground
+
+    points, _ = _terrain_and_canopy(n=6000)
+    points["Z"] = np.round(points["Z"], 1)  # ties, as on real tiles
+    first = ptd_ground(points)
+    perm = np.random.default_rng(5).permutation(len(points))
+    again = np.empty(len(points), bool)
+    again[perm] = ptd_ground(points[perm])
+    np.testing.assert_array_equal(first, again)
