@@ -4,7 +4,7 @@ PTD (Axelsson 2000) as implemented in lasR (Jean-Romain Roussel,
 https://github.com/r-lidar/lasR) and its Python binding pyLASR. pyLASR is an
 optional dependency, built from a pinned lasR commit that exposes
 ``classify_with_ptd`` (``pixi run -e spikefree install-pylasr``, next to the
-native spike-free backend; the older ``ptd`` environment works too);
+native spike-free backend);
 lasR is GPL-3 and is called as a separately installed package, never bundled.
 
 pyLASR reads and writes files, so :func:`ptd_ground` writes the points to a

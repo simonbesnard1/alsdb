@@ -101,19 +101,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 
-[tool.pixi.feature.ptd.dependencies]
-python = "3.13.*"
-pip = "*"
-setuptools = "*"
-wheel = "*"
-pybind11 = ">=2.13"
-cmake = "*"
-cxx-compiler = "*"
-hdf5 = ">=2"
-
-[tool.pixi.feature.ptd.tasks]
-install-pylasr = "python -m pip install --no-build-isolation 'pylasr @ git+https://github.com/r-lidar/lasR.git@9b3048eff7d77a3fb4b93c5b33a662ea561cebfb#subdirectory=python'"
-
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]
 cgal-cpp = ">=6,<7"
@@ -146,6 +133,13 @@ proj = "*"
 cxx-compiler = "*"
 make = "*"
 pkg-config = "*"
+# As in spikefree: libpdal-hdf needs HDF5 2 but does not declare it, and
+# without the pin every PDAL call printed HDF plugin load errors.
+hdf5 = ">=2"
+# libpdal-tiledb 2.10.2 build 5 links libaws-c-s3.so.1.1 without requiring
+# it, while hdf5 2.2 requires aws-c-s3 1.0: unsatisfiable. Keep the earlier,
+# consistent set that spikefree resolves to (TileDB plugin load errors otherwise).
+aws-c-s3 = "<1"
 
 [tool.pixi.feature.lasr.tasks]
 install-lasr = "Rscript -e \"install.packages('lasR', repos = c('https://r-lidar.r-universe.dev', 'https://cloud.r-project.org'), Ncpus = 4)\""
@@ -160,6 +154,5 @@ helios = ">=2.2.2"
 [tool.pixi.environments]
 default = { features = [] }
 spikefree = { features = ["spikefree"] }
-ptd = { features = ["ptd"] }
 lasr = { features = ["lasr"] }
 helios = { features = ["helios"], no-default-feature = true }
