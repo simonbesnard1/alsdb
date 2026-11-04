@@ -16,13 +16,16 @@ Unlike thinned ULS, the input keeps the aircraft sensor and footprint; only
 the density changes. The reference uses the original's classification, which
 the tools also see.
 
-The Chapitre Petit Buech and Robson Creek surveys and their decimated copies
-were provided by Fabian Fischer (University of Bristol), made with the
-workflow of Fischer et al. (2024): ``pd_X`` keeps X pulses/m2 by removing
+The Chapitre Petit Buech, Vizzavona (Corsica) and Robson Creek surveys and
+their decimated copies were provided by Fabian Fischer (University of
+Bristol), made with the workflow of Fischer et al. (2024): ``pd_X`` keeps X
+pulses/m2 by removing
 pulses at regular steps in acquisition order (preserving the scan pattern),
 ``pd_X_ft_F`` additionally removes a fraction F of higher-order returns.
-The Robson Creek original is TERN data. The reference classification of
-Robson Creek is less reliable than Petit Buech's (F. Fischer, pers. comm.).
+The Robson Creek original is TERN data. Petit Buech's and Vizzavona's
+classifications are the French IGN Lidar HD ones, automatic and then
+manually corrected, the best reference available; Robson Creek's is less
+certain and may come from TerraScan, a PTD variant (F. Fischer, pers. comm.).
 
 Uneven density (``mixed``): flight-line overlaps make real surveys such as
 PNOA denser in strips. A mixed scene takes a sparse copy everywhere and a

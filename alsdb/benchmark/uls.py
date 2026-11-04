@@ -430,8 +430,12 @@ def voxel_scene(scan, zgrid, area, density, out, *, max_returns=4, seed=0):
 
 def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", "helios"),
              tools=("alsdb", "lasr"), lastools_dir=None, max_angle=20.0, candidate_fraction=0.05,
-             threads=8, seed=0, keep=False):  # fmt: skip
-    """Scan *area*, build every variant x density scene, run the tools, append to results.csv."""
+             threads=8, seed=0, keep=False, keep_classes=None):  # fmt: skip
+    """Scan *area*, build every variant x density scene, run the tools, append to results.csv.
+
+    *keep_classes*: only these classes are read (e.g. ground, vegetation and
+    water of national ALS, without buildings or artefacts); default all but noise.
+    """
     out_dir = Path(out_dir)
     results = out_dir / "results.csv"
     done = synthetic.finished_scenarios(results)
@@ -439,7 +443,8 @@ def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", 
     if not todo:
         return results
     t0 = time.perf_counter()
-    scan = scan_area(area, max_angle=max_angle, candidate_fraction=candidate_fraction, seed=seed)
+    scan = scan_area(area, max_angle=max_angle, candidate_fraction=candidate_fraction, seed=seed,
+                     keep_classes=keep_classes)  # fmt: skip
     if scan.crs is None:
         raise ValueError("no CRS in the LAZ headers; pass Area(crs=...)")
     truth_ref, zgrid = reference(scan, area)

@@ -358,8 +358,10 @@ about 2 pulses/m², so alsdb's default stays CSF.
 
 Caveat: the reference classification is itself the output of some ground
 filter, often a PTD variant in commercial software; a classifier close to it
-in kind may score better partly for that reason. Ask the data provider how
-the reference was made.
+in kind may score better partly for that reason. Petit Buëch's is the French
+IGN Lidar HD classification, automatic and then manually corrected, so it is
+the most trustworthy reference here; Robson Creek's may come from TerraScan
+(a PTD variant) and can favour PTD (F. Fischer, pers. comm.).
 
 ### PTD tilt ensemble
 

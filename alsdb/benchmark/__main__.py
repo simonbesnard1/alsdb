@@ -215,6 +215,8 @@ def main(argv=None):
     p.add_argument("--variants", nargs="+", default=["thinned", "helios"],
                    choices=["thinned", "helios"])  # fmt: skip
     p.add_argument("--max-angle", type=float, default=20.0, help="near-nadir limit, degrees")
+    p.add_argument("--classes", type=int, nargs="+",
+                   help="read only these classes (e.g. 2 3 4 5 9 for national ALS); default: all")  # fmt: skip
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
                    choices=["alsdb", "lasr", "lastools"])  # fmt: skip
     p.add_argument("--lastools-dir")
@@ -264,6 +266,22 @@ def main(argv=None):
         "--band", type=float, default=0.15, help="ground: within this of the consensus (m)"
     )
     p.add_argument("--crs", help="default: from the LAZ headers")
+
+    p = sub.add_parser("lidarhd-frame", help="tree cover and slope of every 2 km block of France")
+    p.add_argument("out_csv")
+    p = sub.add_parser("lidarhd-index", help="every Lidar HD tile: classification method, dates")
+    p.add_argument("out_csv")
+    p = sub.add_parser("lidarhd-select", help="stratified random draw of Lidar HD forest blocks")
+    p.add_argument("frame_csv")
+    p.add_argument("out_csv")
+    p.add_argument("--per-stratum", type=int, default=2)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--min-distance", type=float, default=50_000.0, help="between blocks (m)")
+    p.add_argument("--cores", type=int, default=4, help="scored 200 m cores per block")
+    p.add_argument("--index", help="tile index (lidarhd-index): only hand-corrected blocks")
+    p = sub.add_parser("lidarhd-download", help="download the tiles of the selected blocks")
+    p.add_argument("selection_csv")
+    p.add_argument("data_dir")
 
     p = sub.add_parser("sensitivity", help="spike-free freeze distances on finished scenes")
     p.add_argument("scenes_dir", help="folder of synthetic or uls scenes")
@@ -398,7 +416,8 @@ def main(argv=None):
         )  # fmt: skip
         print(run_area(args.out_dir, area, densities=args.density, variants=args.variants,
                        tools=args.tools, lastools_dir=args.lastools_dir,
-                       max_angle=args.max_angle, threads=args.threads, keep=args.keep))  # fmt: skip
+                       max_angle=args.max_angle, threads=args.threads, keep=args.keep,
+                       keep_classes=tuple(args.classes) if args.classes else None))  # fmt: skip
     elif args.command == "decimated":
         from alsdb.benchmark import decimated
         from alsdb.benchmark.uls import Area
@@ -419,6 +438,25 @@ def main(argv=None):
         box = (args.x0, args.y0, args.x0 + args.size, args.y0 + args.size)
         print(json.dumps(consensus_ground(args.laz_dir, box, args.out_dir, methods=tuple(args.tools),
                                           max_density=args.max_density, band=args.band, crs=args.crs), indent=2))  # fmt: skip
+    elif args.command == "lidarhd-frame":
+        from alsdb.benchmark.lidarhd import build_frame
+
+        print(build_frame(args.out_csv))
+    elif args.command == "lidarhd-index":
+        from alsdb.benchmark.lidarhd import tile_index
+
+        print(tile_index(args.out_csv))
+    elif args.command == "lidarhd-select":
+        from alsdb.benchmark.lidarhd import add_cores, draw
+
+        draw(args.frame_csv, args.out_csv, per_stratum=args.per_stratum, seed=args.seed,
+             min_distance=args.min_distance, index_csv=args.index)  # fmt: skip
+        add_cores(args.out_csv, n_cores=args.cores, seed=args.seed)
+        print(args.out_csv)
+    elif args.command == "lidarhd-download":
+        from alsdb.benchmark.lidarhd import download
+
+        print(download(args.selection_csv, args.data_dir))
     elif args.command == "sensitivity":
         from alsdb.benchmark.sensitivity import run
 
