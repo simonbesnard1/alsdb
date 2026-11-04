@@ -446,6 +446,7 @@ STRATA_FIELDS = (
 
 
 def _append_rows(path: Path, rows: list[dict], fields: tuple[str, ...]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     new = not path.exists()
     with path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
