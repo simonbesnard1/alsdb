@@ -547,9 +547,14 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
         try:
             work()
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-            failed[name] = str(exc)[-2000:]
+            # The tool's own error output, when it was captured.
+            output = getattr(exc, "stderr", None) or getattr(exc, "output", None) or b""
+            if isinstance(output, bytes):
+                output = output.decode(errors="replace")
+            detail = output.strip().splitlines()[-1] if output.strip() else ""
+            failed[name] = (str(exc) + "\n" + output)[-4000:]
             print(f"{scene_dir.name}: {name} failed, scored without it: "
-                  f"{str(exc).splitlines()[0]}", flush=True)  # fmt: skip
+                  f"{str(exc).splitlines()[0]} {detail}", flush=True)  # fmt: skip
             return
         timings[name] = time.perf_counter() - t
 
