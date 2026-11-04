@@ -255,7 +255,7 @@ files: CSF (Zhang et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al.
 2013) as in PDAL, PTD (Axelsson 2000) as compiled into alsdb from lasR's
 implementation (identical to lasR's Python binding pyLASR on identical
 coordinates when it was added), and optionally LAStools
-`lasground` and FAST-GC (Fareed et al.) as external programs. Each classifier
+`lasground` as an external program. Each classifier
 sees every class reset to 1 except noise (7, 18), which it skips. Unclassified
 (0, 1) and noise points of the reference are not scored.
 
@@ -415,8 +415,6 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   tropical rainforest structure with airborne lidar: leaf area profile
   sensitivity to pulse density and spatial sampling. *Remote Sensing*, 11(1),
   92. <https://doi.org/10.3390/rs11010092> (leafR)
-- Fareed, N., et al. FAST-GC (preprint, Preprints.org 202609.1631),
-  <https://github.com/nadeemfareed/FAST-GC>
 - Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
   characterisation of forest structure from airborne laser scanning — A
   systematic assessment and sample workflow for ecologists. *Methods in Ecology

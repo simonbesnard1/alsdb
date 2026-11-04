@@ -7,8 +7,7 @@ Classifiers compared (each cited where it is run):
   filter (Pingel et al. 2013), as implemented in PDAL (Butler et al. 2021);
 - PTD, progressive TIN densification (Axelsson 2000), lasR's implementation
   (Roussel, r-lidar/PTD) compiled into alsdb (:mod:`alsdb.methods.ptd`);
-- LAStools ``lasground`` (rapidlasso GmbH) and FAST-GC (Fareed et al.),
-  run as external programs.
+- LAStools ``lasground`` (rapidlasso GmbH), run as an external program.
 
 Point labels are scored with the type I (ground rejected) and type II
 (non-ground accepted) errors of Sithole & Vosselman (2004), and terrain
@@ -39,7 +38,6 @@ Zhang, W., Qi, J., Wan, P., Wang, H., Xie, D., Wang, X., & Yan, G. (2016). An
     easy-to-use airborne LiDAR data filtering method based on cloth
     simulation. Remote Sensing, 8(6), 501. https://doi.org/10.3390/rs8060501
 lasR / r-lidar/PTD: Roussel, J.-R., https://github.com/r-lidar/lasR
-FAST-GC: Fareed, N. et al., https://github.com/nadeemfareed/FAST-GC
 """
 
 from __future__ import annotations
@@ -340,53 +338,6 @@ def run_lastools_lasground(
     return ClassificationRun(
         "lastools-lasground", _ground_mask_from_las(output_path, reference), elapsed
     )
-
-
-def run_fastgc(
-    input_path: str | Path,
-    output_dir: str | Path,
-    *,
-    executable: str = "fastgc",
-    sensor_mode: str = "ALS",
-    timeout: float = 3600,
-    reference: np.ndarray | None = None,
-) -> ClassificationRun:
-    """Run FAST-GC as an isolated external classifier."""
-    resolved = shutil.which(executable)
-    if resolved is None:
-        raise FileNotFoundError(f"FAST-GC executable not found: {executable}")
-    input_path, output_dir = Path(input_path), Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        resolved,
-        "--in_path",
-        str(input_path),
-        "--out_dir",
-        str(output_dir),
-        "--sensor_mode",
-        sensor_mode,
-        "--products",
-        "FAST_GC",
-    ]
-    start = time.perf_counter()
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-    elapsed = time.perf_counter() - start
-    if result.returncode:
-        raise RuntimeError(
-            f"FAST-GC failed ({result.returncode}): {(result.stdout + result.stderr)[-4000:]}"
-        )
-    outputs = [
-        path
-        for path in output_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in (".las", ".laz")
-    ]
-    preferred = [
-        path for path in outputs if "class" in path.name.lower() or "fast_gc" in path.name.lower()
-    ]
-    candidates = preferred or outputs
-    if len(candidates) != 1:
-        raise RuntimeError(f"Could not identify one FAST-GC classified output: {candidates}")
-    return ClassificationRun("fastgc", _ground_mask_from_las(candidates[0], reference), elapsed)
 
 
 FILE_RESULT_FIELDS = (
@@ -699,8 +650,6 @@ def method_parameters(method: str, ptd: PTDParameters | None = None) -> dict:
         return asdict(ptd or PTDParameters())
     if method == "lastools":
         return {"options": list(LASGROUND_OPTIONS)}
-    if method == "fastgc":
-        return {"sensor_mode": "ALS"}
     raise ValueError(f"unknown classification method: {method}")
 
 
@@ -711,7 +660,6 @@ def _file_classifier(
     work_dir: Path,
     *,
     lastools_executable: str,
-    fastgc_executable: str,
     ptd: PTDParameters | None = None,
 ) -> ClassificationRun:
     if method in ("csf", "pmf", "smrf"):
@@ -742,19 +690,12 @@ def _file_classifier(
             options=LASGROUND_OPTIONS,
             reference=points,
         )
-    if method == "fastgc":
-        return run_fastgc(
-            neutral_input,
-            work_dir / "fastgc",
-            executable=fastgc_executable,
-            reference=points,
-        )
     raise ValueError(f"unknown classification method: {method}")
 
 
 def _runs(methods, ptd):
     """(method, PTD settings or None, parameters JSON) for every run requested."""
-    valid = {"csf", "pmf", "smrf", "ptd", "fastgc", "lastools"}
+    valid = {"csf", "pmf", "smrf", "ptd", "lastools"}
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")
@@ -773,7 +714,6 @@ def run_file_benchmark(
     boundary_width: float = 5.0,
     tiles: int | None = None,
     lastools_executable: str = "lasground64",
-    fastgc_executable: str = "fastgc",
     ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
     reference_dir: str | Path | None = None,
 ) -> Path:
@@ -787,7 +727,7 @@ def run_file_benchmark(
     """
     if boundary_width <= 0:
         raise ValueError("boundary_width must be positive")
-    valid = {"csf", "pmf", "smrf", "ptd", "fastgc", "lastools"}
+    valid = {"csf", "pmf", "smrf", "ptd", "lastools"}
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")
@@ -835,7 +775,6 @@ def run_file_benchmark(
                         points,
                         Path(tmp),
                         lastools_executable=lastools_executable,
-                        fastgc_executable=fastgc_executable,
                         ptd=settings,
                     )
                 scores, strata = score_against_reference(ref, points, run.is_ground)
@@ -958,8 +897,7 @@ def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) 
     )
 
 
-def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
-                   fastgc_executable="fastgc"):  # fmt: skip
+def classify_scene(scene, runs, work_dir, lastools_executable="lasground64"):
     """Run every classifier on one benchmark scene
 
     Returns a list of (results row, strata rows); ground masks are kept in
@@ -982,8 +920,7 @@ def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
         try:
             with tempfile.TemporaryDirectory(prefix=f"alsdb-{method}-", dir=work_dir) as tmp:
                 run = _file_classifier(method, laz[0], points, Path(tmp),
-                                       lastools_executable=lastools_executable,
-                                       fastgc_executable=fastgc_executable, ptd=settings)  # fmt: skip
+                                       lastools_executable=lastools_executable, ptd=settings)  # fmt: skip
             scores, strata = score_against_reference(
                 ref, points, run.is_ground, references, run_id(method, parameters)
             )
@@ -1029,7 +966,6 @@ def run_scene_benchmark(
     ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
     workers: int = 1,
     lastools_executable: str = "lasground64",
-    fastgc_executable: str = "fastgc",
 ) -> Path:
     """Classify benchmark scenes and score their DTMs against the scene truth
 
@@ -1057,8 +993,8 @@ def run_scene_benchmark(
     todo = [(scene, pending) for scene, pending in todo if pending]
     print(f"{len(todo)} of {len(scenes)} scenes to classify", flush=True)
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(classify_scene, scene, pending, out_dir, lastools_executable,
-                               fastgc_executable): scene for scene, pending in todo}  # fmt: skip
+        futures = {pool.submit(classify_scene, scene, pending, out_dir, lastools_executable): scene
+                   for scene, pending in todo}  # fmt: skip
         for future in as_completed(futures):
             scene = futures[future]
             try:
@@ -1178,7 +1114,7 @@ def build_dtm_references(
             noise = np.isin(points["Classification"], NOISE_CLASSES)
             for method, settings, parameters in runs:
                 run = _file_classifier(method, laz, points, Path(tmp), lastools_executable="lasground64",
-                                       fastgc_executable="fastgc", ptd=settings)  # fmt: skip
+                                       ptd=settings)  # fmt: skip
                 model = TerrainModel(points[run.is_ground & ~noise])
                 dtms[run_id(method, parameters)] = model.evaluate(ref.cells_xy, distances=False)[0]
         stack = np.stack([dtms[rid] for rid in defaults.values()])

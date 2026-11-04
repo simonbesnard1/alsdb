@@ -118,12 +118,10 @@ def test_synthetic_scenarios_are_reproducible_and_have_exact_labels():
 
 
 def test_external_adapters_report_missing_executables():
-    from alsdb.benchmark.classification import run_fastgc, run_lastools_lasground
+    from alsdb.benchmark.classification import run_lastools_lasground
 
     with pytest.raises(FileNotFoundError, match="LAStools"):
         run_lastools_lasground("input.laz", "output.laz", executable="missing-lasground")
-    with pytest.raises(FileNotFoundError, match="FAST-GC"):
-        run_fastgc("input.laz", "output", executable="missing-fastgc")
 
 
 def test_ground_mask_is_aligned_when_classifier_reorders_points(tmp_path, monkeypatch):

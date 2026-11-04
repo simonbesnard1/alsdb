@@ -185,7 +185,7 @@ same year and CRS, uses their points as classification context, and writes only
 the points owned by each source file. This avoids treating file edges as survey
 edges. Single-file `ingest()` cannot supply neighboring context.
 
-Optional Python adapters are available for FAST-GC and LAStools `lasground`;
+An optional adapter is available for LAStools `lasground`;
 external tools are not installed as alsdb dependencies.
 
 To compare classifiers against existing class-2 labels in real LAS/LAZ files:
@@ -193,7 +193,7 @@ To compare classifiers against existing class-2 labels in real LAS/LAZ files:
 ```bash
 python -m alsdb.benchmark classification-files results/classification \
     --laz-dir /data/laz \
-    --tools csf pmf smrf ptd fastgc lastools \
+    --tools csf pmf smrf ptd lastools \
     --lastools-dir /opt/LAStools/bin \
     --boundary-width 5
 ```

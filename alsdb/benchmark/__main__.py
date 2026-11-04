@@ -88,13 +88,12 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf"],
-        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
     )
     p.add_argument("--boundary-width", type=float, default=5.0)
     p.add_argument("--tiles", type=int, help="only process the first N files")
     p.add_argument("--reference-dir", help="full-density originals (same file names) for terrain")
     p.add_argument("--lastools-dir", help="folder containing lasground64")
-    p.add_argument("--fastgc-executable", default="fastgc")
     _add_ptd_arguments(p)
 
     p = sub.add_parser(
@@ -107,11 +106,10 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf", "ptd"],
-        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
     )
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--lastools-dir", help="folder containing lasground64")
-    p.add_argument("--fastgc-executable", default="fastgc")
     _add_ptd_arguments(p)
 
     p = sub.add_parser(
@@ -125,7 +123,7 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf", "ptd"],
-        choices=["csf", "pmf", "smrf", "ptd", "fastgc", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
     )
     p.add_argument("--tolerance", type=float, default=0.25, help="agreement tolerance (m)")
     p.add_argument("--max-density", type=float, help="thin denser surveys to this (points/m2)")
@@ -290,7 +288,6 @@ def main(argv=None):
             tiles=args.tiles,
             reference_dir=args.reference_dir,
             lastools_executable=lasground,
-            fastgc_executable=args.fastgc_executable,
             ptd=_ptd_sets(args),
         )
     elif args.command == "classification-scenes":
@@ -306,7 +303,6 @@ def main(argv=None):
             lastools_executable=(
                 str(Path(args.lastools_dir) / "lasground64") if args.lastools_dir else "lasground64"
             ),
-            fastgc_executable=args.fastgc_executable,
             ptd=_ptd_sets(args),
         )
     elif args.command == "classification-references":
