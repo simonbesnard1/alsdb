@@ -253,7 +253,7 @@ def main(argv=None):
         "uls-ground", help="ground labels from the classifiers' consensus (ULS without them)"
     )
     p.add_argument("laz_dir")
-    p.add_argument("out_laz", help="classified copy of the area (all points and fields)")
+    p.add_argument("out_dir", help="classified copy of the area's files (all points and fields)")
     p.add_argument("--x0", type=float, required=True, help="area lower-left x")
     p.add_argument("--y0", type=float, required=True)
     p.add_argument("--size", type=float, default=190.0, help="area side (m): core, margin, buffer")
@@ -417,7 +417,7 @@ def main(argv=None):
         from alsdb.benchmark.classification import consensus_ground
 
         box = (args.x0, args.y0, args.x0 + args.size, args.y0 + args.size)
-        print(json.dumps(consensus_ground(args.laz_dir, box, args.out_laz, methods=tuple(args.tools),
+        print(json.dumps(consensus_ground(args.laz_dir, box, args.out_dir, methods=tuple(args.tools),
                                           max_density=args.max_density, band=args.band, crs=args.crs), indent=2))  # fmt: skip
     elif args.command == "sensitivity":
         from alsdb.benchmark.sensitivity import run

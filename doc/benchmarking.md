@@ -188,14 +188,16 @@ Surveys delivered without ground classification (e.g. ICOS DE-HoH) first get
 labels from the classifiers' consensus:
 
 ```bash
-pixi run -e spikefree python -m alsdb.benchmark uls-ground <ULS tiles> <area>/area.laz \
+pixi run -e spikefree python -m alsdb.benchmark uls-ground <ULS tiles> <area_dir> \
     --x0 <x> --y0 <y> --size 190
 ```
 
 classifies the area thinned to 200 points/m² with CSF, PMF, SMRF and PTD,
 takes their median DTM on 0.5 m cells, and labels every point within 0.15 m
-of it ground; all points and fields are written, so the pulse thinning still
-works, and the agreement statistics go to `area.json`. On a Petit Buëch area
+of it ground. Every input file is written to `<area_dir>`, cropped to the
+area, with all points and fields (so the pulse thinning still works), one at
+a time: DE-HoH has ~7,500 points/m², ~270 million in a 190 m square. The
+agreement statistics go to `<area_dir>/consensus.json`. On a Petit Buëch area
 with provider labels (24 points/m², steep) this matched the provider's
 ground share (63% against 62%); the extra points were mostly the provider's
 low vegetation within 0.3 m of the ground, and 11% of the provider's ground

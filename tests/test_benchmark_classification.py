@@ -362,14 +362,14 @@ def test_consensus_ground_labels_an_unclassified_survey(tmp_path):
                      "a_srs": "EPSG:25831", "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001}]),
         arrays=[points],
     ).execute()  # fmt: skip
-    out = tmp_path / "out" / "area.laz"
+    out = tmp_path / "out"
     stats = consensus_ground(tmp_path / "in", (0, 0, 60, 60), out, methods=("csf", "ptd"),
                              max_density=None)  # fmt: skip
     assert stats["methods"] == ["csf", "ptd"] and stats["agreed_share"] > 0.8
-    assert json.loads(out.with_suffix(".json").read_text())["points"] == len(points)
+    assert json.loads((out / "consensus.json").read_text())["points"] == len(points)
     from alsdb.benchmark.classification import _terrain_height
 
-    labelled = _read_las(out)
+    labelled = _read_las(out / "s.laz")
     assert len(labelled) == len(points)
     assert set(np.unique(labelled["Classification"]).tolist()) <= {1, 2}
     ground = labelled["Classification"] == 2

@@ -1321,7 +1321,7 @@ def build_dtm_references(
 def consensus_ground(
     laz_dir,
     box,
-    out_laz,
+    out_dir,
     *,
     methods: tuple[str, ...] = ("csf", "pmf", "smrf", "ptd"),
     max_density: float | None = 200.0,
@@ -1337,21 +1337,23 @@ def consensus_ground(
     (default settings) classifies the survey inside *box*, thinned to
     *max_density* points/m2; their median DTM on *cell* m cells is the
     consensus. Every point of the survey within *band* m of it (vertically)
-    becomes ground (2), every other non-noise point 1. All points and fields
-    are written to *out_laz*, so the ULS benchmark can thin its pulses
-    (*crs*: default from the input headers).
+    becomes ground (2), every other non-noise point 1. Each input file is
+    written, cropped to *box*, with all points and fields to *out_dir*, one
+    at a time (dense ULS: ~270 M points in a 190 m square), so the ULS
+    benchmark can thin its pulses (*crs*: default from the input headers).
 
     The reference terrain is then the classifiers' consensus, not an
     independent classification: on drone data over gentle terrain they agree
     on 95-99% of cells within 0.25 m (benchmark run of 2026-11). Returns the
-    agreement statistics, also written beside *out_laz* (``.json``).
+    agreement statistics, also written to ``<out_dir>/consensus.json``.
     """
     from scipy.interpolate import RegularGridInterpolator
 
     from alsdb.benchmark.uls import _files_and_header
     from alsdb.processing._terrain import TerrainModel
 
-    crs = crs or _files_and_header(laz_dir, box)[2]
+    files, _, header_crs = _files_and_header(laz_dir, box)
+    crs = crs or header_crs
     nx, ny = round((box[2] - box[0]) / cell), round((box[3] - box[1]) / cell)
     xs = box[0] + (np.arange(nx) + 0.5) * cell
     ys = box[1] + (np.arange(ny) + 0.5) * cell
@@ -1380,29 +1382,38 @@ def consensus_ground(
         consensus = np.nanmedian(stack, axis=0)
         spread = np.nanmax(stack, axis=0) - np.nanmin(stack, axis=0)
     agreed = np.isfinite(stack).all(axis=0) & (spread <= tolerance)
-    points = _crop_source(laz_dir, box)
     surface = RegularGridInterpolator((ys, xs), consensus, bounds_error=False, fill_value=np.nan)
-    z0 = surface(np.column_stack((points["Y"], points["X"])))
-    noise = np.isin(points["Classification"], NOISE_CLASSES)
-    ground = ~noise & (np.abs(points["Z"] - z0) <= band)
-    points["Classification"] = np.where(noise, points["Classification"], np.where(ground, 2, 1))
-    out_laz = Path(out_laz)
-    out_laz.parent.mkdir(parents=True, exist_ok=True)
-    pdal.Pipeline(
-        json.dumps([{"type": "writers.las", "filename": str(out_laz),
-                     **({"a_srs": crs} if crs else {}), "minor_version": 4, "dataformat_id": 6, "extra_dims": "all",
-                     "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001,
-                     "offset_x": "auto", "offset_y": "auto", "offset_z": "auto"}]),
-        arrays=[points],
-    ).execute()  # fmt: skip
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bounds = f"([{box[0]},{box[2]}],[{box[1]},{box[3]}])"
+    n_points = n_ground = 0
+    for f in files:
+        reader = pdal.Pipeline(json.dumps([str(f), {"type": "filters.crop", "bounds": bounds}]))
+        reader.execute()
+        points = reader.arrays[0]
+        if not len(points):
+            continue
+        z0 = surface(np.column_stack((points["Y"], points["X"])))
+        noise = np.isin(points["Classification"], NOISE_CLASSES)
+        ground = ~noise & (np.abs(points["Z"] - z0) <= band)
+        points["Classification"] = np.where(noise, points["Classification"], np.where(ground, 2, 1))
+        n_points, n_ground = n_points + len(points), n_ground + int(ground.sum())
+        pdal.Pipeline(
+            json.dumps([{"type": "writers.las", "filename": str(out_dir / f"{f.stem}.laz"),
+                         **({"a_srs": crs} if crs else {}), "minor_version": 4,
+                         "dataformat_id": 6, "extra_dims": "all", "scale_x": 0.001,
+                         "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
+                         "offset_y": "auto", "offset_z": "auto"}]),
+            arrays=[points],
+        ).execute()  # fmt: skip
     stats = {
         "box": list(box), "methods": list(dtms), "max_density": max_density, "cell": cell,
         "tolerance": tolerance, "band": band, "agreed_share": float(agreed.mean()),
-        "median_spread": float(np.nanmedian(spread)), "points": len(points),
-        "ground_share": float(ground.mean()),
+        "median_spread": float(np.nanmedian(spread)), "files": len(files), "points": n_points,
+        "ground_share": n_ground / max(n_points, 1),
         "mae_vs_consensus": {m: float(np.nanmean(np.abs(d - consensus))) for m, d in dtms.items()},
     }  # fmt: skip
-    out_laz.with_suffix(".json").write_text(json.dumps(stats, indent=2))
+    (out_dir / "consensus.json").write_text(json.dumps(stats, indent=2))
     return stats
 
 
