@@ -17,8 +17,8 @@ import numpy as np
 from scipy.ndimage import label, maximum_filter, median_filter
 from scipy.spatial import cKDTree
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._products import software_versions
+from alsdb.methods._grid import GridSpec
+from alsdb.products._surfaces import software_versions
 
 
 def _peaks(grid):
@@ -73,35 +73,16 @@ def compare_rasters(candidate, reference, *, resolution=1.0, peak_tolerance=2.0)
     }
 
 
-def interval_coverage(reference, lower, upper):
-    """Empirical coverage against independent, spatially matched observations."""
-    reference, lower, upper = map(np.asarray, (reference, lower, upper))
-    if reference.shape != lower.shape or reference.shape != upper.shape:
-        raise ValueError("Reference and interval bounds must have matching shapes")
-    valid = np.isfinite(reference) & np.isfinite(lower) & np.isfinite(upper)
-    if np.any(lower[valid] > upper[valid]):
-        raise ValueError("Lower bound exceeds upper bound")
-    return {
-        "n": int(valid.sum()),
-        "coverage": float(
-            np.mean((reference[valid] >= lower[valid]) & (reference[valid] <= upper[valid]))
-        )
-        if valid.any()
-        else None,
-        "mean_width": float(np.mean(upper[valid] - lower[valid])) if valid.any() else None,
-    }
-
-
 def _render(points, bbox, resolution, method, args):
-    from alsdb.processing._surface import auto_freeze_distance
-    from alsdb.processing.chm import _pitfree_rasterise, _rasterise, _spikefree_rasterise
+    from alsdb.methods._surface import auto_freeze_distance
+    from alsdb.methods.rasterise import _pitfree_rasterise, _rasterise
 
     freeze = args.freeze_distance
     if freeze == "auto" and len(points):
         freeze = auto_freeze_distance(points)
 
     if method == "spikefree":
-        from alsdb.processing.spikefree import rasterize_spikefree
+        from alsdb.methods.spikefree import rasterize_spikefree
 
         return rasterize_spikefree(
             points,
@@ -127,8 +108,6 @@ def _render(points, bbox, resolution, method, args):
         )
     if method == "pitfree":
         return _pitfree_rasterise(points, bbox, resolution, max_edge=args.pitfree_max_edge)
-    if method == "highest_subcell_tin":
-        return _spikefree_rasterise(points, bbox, resolution, subcell_resolution=resolution / 3)
     inside = (
         (points["X"] >= bbox[0])
         & (points["X"] < bbox[2])
@@ -157,9 +136,7 @@ def main(argv=None):
     parser.add_argument("--bbox", nargs=4, type=float, required=True)
     parser.add_argument("--resolution", type=float, default=1.0)
     parser.add_argument("--output", required=True, help="JSON report path; rasters saved beside it")
-    parser.add_argument(
-        "--methods", nargs="+", default=["max", "pitfree", "highest_subcell_tin", "spikefree"]
-    )
+    parser.add_argument("--methods", nargs="+", default=["max", "pitfree", "spikefree"])
     parser.add_argument("--reference", help="Optional independent .npy raster on the same grid")
     parser.add_argument("--lastools", help="Path to las2dem64; adds a LAStools reference run")
     parser.add_argument("--demo", action="store_true")
@@ -176,7 +153,7 @@ def main(argv=None):
     parser.add_argument("--tile-buffer", type=float, default=10.0)
     parser.add_argument(
         "--worker",
-        choices=["max", "pitfree", "highest_subcell_tin", "spikefree", "lastools"],
+        choices=["max", "pitfree", "spikefree", "lastools"],
         help=argparse.SUPPRESS,
     )
     argv = sys.argv[1:] if argv is None else list(argv)
@@ -231,7 +208,7 @@ def main(argv=None):
 
         report["lastools_version"] = executable_version(args.lastools)
     methods = list(dict.fromkeys(args.methods + (["lastools"] if args.lastools else [])))
-    if not set(methods) <= {"max", "pitfree", "highest_subcell_tin", "spikefree", "lastools"}:
+    if not set(methods) <= {"max", "pitfree", "spikefree", "lastools"}:
         parser.error("Unknown benchmark method")
     rasters = {}
     with tempfile.TemporaryDirectory(prefix="alsdb-benchmark-") as temporary:

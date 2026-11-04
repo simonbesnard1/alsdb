@@ -7,11 +7,10 @@ import pytest
 
 from alsdb import ALSTile, ClassificationConfig
 from alsdb.core.alsdatabase import _classification_neighbors
-from alsdb.core.classification import (
+from alsdb.methods.classification import (
     classification_stages,
     denoise_stages,
     ground_stage,
-    resolve_classification_config,
 )
 
 
@@ -85,21 +84,6 @@ def test_pipeline_contains_configured_hag_and_source_classes():
     assert "Classification == 0 || Classification == 1" in assignments
 
 
-def test_legacy_arguments_resolve_to_config():
-    config = resolve_classification_config(
-        None,
-        reclassify=True,
-        ground_method="pmf",
-        denoise=True,
-    )
-    assert config.enabled and config.denoise and config.ground_method == "pmf"
-
-
-def test_new_and_legacy_arguments_cannot_be_mixed():
-    with pytest.raises(ValueError, match="cannot be combined"):
-        resolve_classification_config(ClassificationConfig(), reclassify=True)
-
-
 def test_classification_neighbors_find_only_buffer_intersections(monkeypatch, tmp_path):
     paths = [tmp_path / name for name in ("a.laz", "b.laz", "c.laz")]
     boxes = {
@@ -155,16 +139,12 @@ def test_buffered_tile_uses_neighbor_context_but_returns_only_owned_points(monke
     assert sum(len(x) for x, _, _ in chunks) == 2
 
 
-def test_ptd_settings_stay_out_of_other_fingerprints():
-    csf = ClassificationConfig(ground_method="csf")
-    assert "ptd_angle" not in csf.to_dict()
-    assert csf.fingerprint == ClassificationConfig(ground_method="csf", ptd_angle=20).fingerprint
+def test_ptd_settings_enter_the_fingerprint():
     ptd = ClassificationConfig(ground_method="ptd")
     assert ptd.to_dict()["ptd_angle"] == 45.0
     assert ptd.fingerprint != ClassificationConfig(ground_method="ptd", ptd_angle=20).fingerprint
     assert ptd.fingerprint != ClassificationConfig(ground_method="ptd", ptd_votes=4).fingerprint
-    assert "ptd_tilt_runs" not in csf.to_dict()
-    from alsdb.core.ptd import DEFAULTS
+    from alsdb.methods.ptd import DEFAULTS
 
     assert ptd.ptd_parameters == DEFAULTS
 
@@ -199,8 +179,8 @@ def _terrain_and_canopy(n=4000, seed=0):
 
 
 def test_ptd_ground_finds_the_terrain_in_input_order():
-    pytest.importorskip("alsdb.processing._ptd_native")
-    from alsdb.core.ptd import ptd_ground
+    pytest.importorskip("alsdb.methods._ptd_native")
+    from alsdb.methods.ptd import ptd_ground
 
     points, ground = _terrain_and_canopy()
     shuffled = points[::-1].copy()
@@ -211,7 +191,7 @@ def test_ptd_ground_finds_the_terrain_in_input_order():
 
 
 def test_tile_reclassification_with_ptd():
-    pytest.importorskip("alsdb.processing._ptd_native")
+    pytest.importorskip("alsdb.methods._ptd_native")
     tile = ALSTile.__new__(ALSTile)
     tile._classification = ClassificationConfig(ground_method="ptd")
     tile._classification_workers = 4
@@ -225,24 +205,9 @@ def test_tile_reclassification_with_ptd():
     assert np.isin(out["Classification"][~ground][1:], (1, 3, 4, 5)).all()
 
 
-def test_native_ptd_matches_pylasr():
-    # Same r-lidar/PTD code: identical labels on identical coordinates. pyLASR
-    # reads them from a 1 mm LAS file, so feed the native module the same values.
-    pytest.importorskip("alsdb.processing._ptd_native")
-    pytest.importorskip("pylasr")
-    from alsdb.core.ptd import ptd_ground
-
-    points, _ = _terrain_and_canopy()
-    for name in ("X", "Y", "Z"):
-        points[name] = np.round(points[name], 3)
-    native = ptd_ground(points, tilt_runs=1, votes=1)
-    lasr = ptd_ground(points, backend="pylasr", tilt_runs=1, votes=1)
-    assert (native == lasr).mean() > 0.995 and native.any()
-
-
 def test_native_ptd_parameters_reach_the_library():
-    pytest.importorskip("alsdb.processing._ptd_native")
-    from alsdb.core.ptd import ptd_ground
+    pytest.importorskip("alsdb.methods._ptd_native")
+    from alsdb.methods.ptd import ptd_ground
 
     points, _ = _terrain_and_canopy()
     strict = ptd_ground(points, angle=1.0, distance=0.01, tilt_runs=1, votes=1)
@@ -253,8 +218,8 @@ def test_native_ptd_parameters_reach_the_library():
 
 
 def test_native_ptd_does_not_depend_on_point_order():
-    pytest.importorskip("alsdb.processing._ptd_native")
-    from alsdb.core.ptd import ptd_ground
+    pytest.importorskip("alsdb.methods._ptd_native")
+    from alsdb.methods.ptd import ptd_ground
 
     points, _ = _terrain_and_canopy(n=6000)
     points["Z"] = np.round(points["Z"], 1)  # ties, as on real tiles
@@ -266,7 +231,7 @@ def test_native_ptd_does_not_depend_on_point_order():
 
 
 def test_ptd_tilt_is_rigid_about_the_centre():
-    from alsdb.core.ptd import _tilt_xyz
+    from alsdb.methods.ptd import _tilt_xyz
 
     points, _ = _terrain_and_canopy(n=50)
     centre = np.array([30.0, 30.0, 110.0])
@@ -280,8 +245,8 @@ def test_ptd_tilt_is_rigid_about_the_centre():
 
 
 def test_ptd_ensemble_votes():
-    pytest.importorskip("alsdb.processing._ptd_native")
-    from alsdb.core.ptd import ptd_ground
+    pytest.importorskip("alsdb.methods._ptd_native")
+    from alsdb.methods.ptd import ptd_ground
 
     points, ground = _terrain_and_canopy()
     single = ptd_ground(points, tilt_runs=1, votes=1)
@@ -294,7 +259,7 @@ def test_ptd_ensemble_votes():
 
 
 def test_tile_passes_classification_workers_to_ptd(monkeypatch):
-    from alsdb.core import ptd
+    from alsdb.methods import ptd
 
     seen = []
 

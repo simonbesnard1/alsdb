@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from alsdb.processing.chm import compute_chm
+from alsdb.products.chm import compute_chm
 
 BBOX = (308000.0, 4688000.0, 309000.0, 4689000.0)
 OPTS = {"resolution": 10.0, "year": 2021, "bbox": BBOX}
@@ -204,8 +204,8 @@ def test_lastools_run_reuses_existing_hag(tmp_path, monkeypatch):
 
 def test_auto_parameters_match_alsdb_rules(tmp_path):
     from alsdb.benchmark._common import auto_parameters
-    from alsdb.processing._surface import auto_freeze_distance
-    from alsdb.processing.chm import _pulse_spacing, _thin_highest_per_subcell
+    from alsdb.methods._surface import auto_freeze_distance
+    from alsdb.methods.rasterise import _pulse_spacing, _thin_highest_per_subcell
 
     pts = _write_las(tmp_path / "t.las")
     freeze, edge = auto_parameters(tmp_path / "t.las", (3, 4, 5))
@@ -262,7 +262,7 @@ def test_lasr_pitfree_matches_alsdb_on_synthetic_tile(tmp_path):
     import rasterio
 
     from alsdb.benchmark import lasr
-    from alsdb.processing._surface import CHMConfig, reconstruct_chm
+    from alsdb.methods._surface import CHMConfig, reconstruct_chm
 
     laz = tmp_path / "laz"
     laz.mkdir()
@@ -281,28 +281,22 @@ def test_lasr_pitfree_matches_alsdb_on_synthetic_tile(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Moved modules: point benchmark CLI and old import paths
+# Point benchmark CLI
 # ---------------------------------------------------------------------------
 
 
-def test_old_import_paths_still_work():
-    from alsdb.processing.benchmark import compare_rasters  # noqa: F401
-    from alsdb.processing.lastools import rasterize_lastools  # noqa: F401
-
-
-def test_points_cli_runs_tin_methods(tmp_path):
-    """The point benchmark still passed the removed max_distance to pitfree."""
+def test_points_cli_runs_max_and_pitfree(tmp_path):
     from alsdb.benchmark.points import main
-    from alsdb.processing._terrain import normalize_points
+    from alsdb.methods._terrain import normalize_points
     from tests.test_surface_pipeline import scene
 
     points, _ = normalize_points(scene())
     np.save(tmp_path / "points.npy", points)
     main(["--input", str(tmp_path / "points.npy"), "--bbox", "0", "0", "10", "10",
           "--tile-size", "5", "--tile-buffer", "2", "--output", str(tmp_path / "r.json"),
-          "--methods", "max", "pitfree", "highest_subcell_tin"])  # fmt: skip
+          "--methods", "max", "pitfree"])  # fmt: skip
     report = json.loads((tmp_path / "r.json").read_text())
-    assert set(report["methods"]) == {"max", "pitfree", "highest_subcell_tin"}
+    assert set(report["methods"]) == {"max", "pitfree"}
 
 
 def test_lastools_failure_reports_exit_code_and_stray_outputs(tmp_path, monkeypatch):

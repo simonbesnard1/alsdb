@@ -50,6 +50,7 @@ def test_block_needs_four_hand_corrected_tiles():
     assert not L.block_tiles_ok({k: v for k, v in full.items() if k != (0, 0)}, 0, 0)
     automatic = {**full, (0, 0): _item(0, 0, method="ST_AUTO")}
     assert not L.block_tiles_ok(automatic, 0, 0)
+    assert L.block_tiles_ok(automatic, 0, 0, hand_corrected=False)
 
 
 def test_draw_fills_strata_and_keeps_blocks_apart(tmp_path):
@@ -106,5 +107,6 @@ def test_corrected_blocks_and_leaf_season(tmp_path):
               "id": "auto"} for x, y in [(4000, 0), (5000, 0), (4000, 1000), (5000, 1000)]]  # fmt: skip
     index = tmp_path / "tiles.csv"
     L._write_csv(index, rows, L.INDEX_FIELDS)
-    assert L.corrected_blocks(index) == {(0.0, 0.0): "2022-03-01"}
+    assert L.published_blocks(index) == {(0.0, 0.0): "2022-03-01"}
+    assert set(L.published_blocks(index, hand_corrected=False)) == {(0.0, 0.0), (4000.0, 0.0)}
     assert L.leaf_season("2022-03-01") == "leaf-off" and L.leaf_season("2022-07-14") == "leaf-on"

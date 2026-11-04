@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from alsdb.processing._terrain import GROUND_CLASSES
+from alsdb.methods._terrain import GROUND_CLASSES
 
 
 def list_tiles(laz_dir, tiles=None):
@@ -28,14 +28,14 @@ def surface_classes(veg_classes, ground_classes=GROUND_CLASSES):
 def auto_parameters(path, veg_classes, ground_classes=GROUND_CLASSES, resolution=1.0):
     """alsdb's ``"auto"`` freeze distance and pitfree edge for one LAS/LAZ tile.
 
-    Same rule as :func:`alsdb.processing._surface.auto_freeze_distance` and the
+    Same rule as :func:`alsdb.methods._surface.auto_freeze_distance` and the
     pitfree ``"auto"`` edge, on the tile's surface-class first returns. PNOA
     overlap-strip returns (class 0) are not surface classes, so they are left
     out here exactly as in alsdb; header point counts would include them.
     """
     import pdal
 
-    from alsdb.processing.chm import _pulse_spacing, _thin_highest_per_subcell
+    from alsdb.methods.rasterise import _pulse_spacing, _thin_highest_per_subcell
 
     pipeline = pdal.Pipeline(json.dumps([str(path)]))
     pipeline.execute()

@@ -4,8 +4,8 @@ from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._surface import (
+from alsdb.methods._grid import GridSpec
+from alsdb.methods._surface import (
     QUALITY_FLAGS,
     CHMConfig,
     clean_points,
@@ -13,8 +13,8 @@ from alsdb.processing._surface import (
     reconstruct_chm,
     surface_mask,
 )
-from alsdb.processing._terrain import TerrainModel, normalize_points
-from alsdb.processing._tiling import (
+from alsdb.methods._terrain import TerrainModel, normalize_points
+from alsdb.products._tiling import (
     _filter_ground_outliers,
     _require_year,
     array_crs,
@@ -64,7 +64,7 @@ def software_versions():
 
 def backend_versions(config):
     if config.method == "spikefree":
-        from alsdb.processing.spikefree import require_backend
+        from alsdb.methods.spikefree import require_backend
 
         return {"native_spikefree": require_backend().algorithm_version}
     if config.method == "lastools":
@@ -108,7 +108,7 @@ def _worker(
     quality,
     ground_outlier_removal,
 ):
-    from alsdb.processing.chm import _rasterise
+    from alsdb.methods.rasterise import _rasterise
 
     attributes = ("Z", "Classification", "ReturnNumber", "Withheld")
     if "chm" in products and config.method in ("spikefree", "lastools"):
@@ -134,8 +134,7 @@ def _worker(
     prepared = None
     if "chm" in products:
         cleaned = clean_points(arr)
-        # Only surface candidates get a height: on a dense DE-Hai tile that's
-        # ~23% of the returns, and the TIN lookup dominated tile time.
+        # Only surface candidates get a height (the TIN lookup is costly).
         prepared = normalize_points(
             cleaned[surface_mask(cleaned, config)],
             max_distance=config.max_ground_distance,
@@ -177,7 +176,7 @@ def _worker(
 
 def compute_products(provider, store, products, options):
     """Common orchestration used by compute_chm/dtm/dsm/all."""
-    from alsdb.processing.chm import _validate_grid_alignment
+    from alsdb.products.chm import _validate_grid_alignment
 
     resolution, year = options["resolution"], options["year"]
     tile_size = options.get("tile_size", 500.0)

@@ -184,26 +184,6 @@ returns.
 Classes: ground (2) stays, every other non-noise class becomes vegetation (5).
 The tools reuse the ULS ground classification; it is not under test.
 
-Surveys delivered without ground classification (e.g. ICOS DE-HoH) first get
-labels from the classifiers' consensus:
-
-```bash
-pixi run -e spikefree python -m alsdb.benchmark uls-ground <ULS tiles> <area_dir> \
-    --x0 <x> --y0 <y> --size 190
-```
-
-classifies the area thinned to 200 points/m² with CSF, PMF, SMRF and PTD,
-takes their median DTM on 0.5 m cells, and labels every point within 0.15 m
-of it ground. Every input file is written to `<area_dir>`, cropped to the
-area, with all points and fields (so the pulse thinning still works), one at
-a time: DE-HoH has ~7,500 points/m², ~270 million in a 190 m square. The
-agreement statistics go to `<area_dir>/consensus.json`. On a Petit Buëch area
-with provider labels (24 points/m², steep) this matched the provider's
-ground share (63% against 62%); the extra points were mostly the provider's
-low vegetation within 0.3 m of the ground, and 11% of the provider's ground
-was missed. Scenes built on such labels test the CHM, not the ground
-classifiers: their terrain is the classifiers' consensus.
-
 Caveats. The thinned samples keep the UAV sensor: centimetre footprints and
 low flying height hit crown tops and gaps more easily than aircraft ALS.
 Density-harmonised ULS (one point per 2 cm voxel) has lost some returns of
@@ -250,12 +230,13 @@ it, so compare tools only on scenes where all of them succeeded.
 pixi run -e spikefree python -m alsdb.benchmark sensitivity <scenes_dir> <out.csv> --workers 8
 ```
 
-reruns alsdb spike-free on every finished scene of a `synthetic`, `uls` or
-`decimated` folder with freeze distances of 2, 3 (`"auto"`) and 5 first-return
-spacings, `max(3 spacings, 1.5 m)`, a fixed 1.5 m, the formula of Fischer et
-al. (2024) at the scene's mean density (`lsf_tile`) and per 5 m cell
-(`lsf_local`), and on first returns only `k3_first` and `lspikefree` (Fischer
-et al.'s full method), and scores each like the benchmark (one row per scene and setting; resumable). Scenes that the
+reruns alsdb spike-free on every finished scene of a `synthetic`, `uls`,
+`decimated` or `lidarhd` folder with freeze distances of 3 first-return
+spacings (`"auto"`), `max(3 spacings, 1.5 m)`, a fixed 1.5 m (the old
+default), the formula of Fischer et al. (2024) per 5 m cell (`lsf_local`),
+and on first returns only `k3_first` and `lspikefree` (Fischer et al.'s full
+method); 2 and 5 spacings and the formula at the scene's mean density were
+dropped after the 2026-11 runs, and scores each like the benchmark (one row per scene and setting; resumable). Scenes that the
 benchmark in the same folder has not scored yet are skipped. Each scene keeps
 the CHMs of every setting (`preds_sensitivity.npz`), e.g. to split errors by
 the dense strips of mixed scenes. Results:
@@ -272,7 +253,8 @@ pixi run -e spikefree python -m alsdb.benchmark classification-files <out_dir> \
 compares ground classifiers with the reference classification of real LAS/LAZ
 files: CSF (Zhang et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al.
 2013) as in PDAL, PTD (Axelsson 2000) as compiled into alsdb from lasR's
-implementation (identical to pyLASR on identical coordinates), and optionally LAStools
+implementation (identical to lasR's Python binding pyLASR on identical
+coordinates when it was added), and optionally LAStools
 `lasground` and FAST-GC (Fareed et al.) as external programs. Each classifier
 sees every class reset to 1 except noise (7, 18), which it skips. Unclassified
 (0, 1) and noise points of the reference are not scored.
@@ -372,7 +354,7 @@ three without changing PTD's own tests (angles and distances to the TIN
 facets are invariant under a rigid rotation). Following Fabian Fischer's
 suggestion to classify rotated copies of the point cloud, alsdb runs PTD on the points as they
 are and on copies tilted towards evenly spaced azimuths, and keeps the points
-enough runs agree on (`alsdb.core.ptd`).
+enough runs agree on (`alsdb.methods.ptd`).
 
 How the settings were chosen (2026-11, Chapitre Petit Buëch and Robson Creek,
 provider ground as reference, error of a 1 m TIN DTM):
@@ -455,7 +437,7 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   <https://doi.org/10.1016/j.isprsjprs.2012.12.002>
 - Roussel, J.-R., et al. (2020). lidR: An R package for analysis of Airborne
   Laser Scanning (ALS) data. *Remote Sensing of Environment*, 251, 112061.
-  <https://doi.org/10.1016/j.rse.2020.112061>; lasR and pyLASR:
+  <https://doi.org/10.1016/j.rse.2020.112061>; lasR and r-lidar/PTD:
   <https://github.com/r-lidar/lasR>
 - Sithole, G., & Vosselman, G. (2004). Experimental comparison of filter
   algorithms for bare-Earth extraction from airborne laser scanning point

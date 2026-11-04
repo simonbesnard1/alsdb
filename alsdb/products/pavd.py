@@ -2,46 +2,18 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""
-Vertical PAVD (Plant Area Volume Density) profiles from ALS point clouds, and
-calibration of a spaceborne full-waveform lidar's PAVD retrieval against them.
+"""Vertical plant area volume density (PAVD) profiles from ALS
 
-Theory
-------
-Extends gap.py's horizontal MacArthur-Wilson gap-fraction estimator
-(``P_gap = N_gnd / (N_gnd + N_veg)``) to the vertical dimension. For a
-circular footprint, define the gap probability at height z above local
-ground as the fraction of first-return pulses that reach z without having
-been intercepted by canopy above it:
+Extends the MacArthur-Horn gap-fraction estimator of :mod:`gap` to height:
+the gap probability at height z is the share of first returns that reach z,
 
     G(z) = 1 - N_above(z) / N_classified
 
-where ``N_above(z)`` is the count of classified (ground + vegetation)
-first returns with height-above-ground > z, and ``N_classified`` is the
-total classified first-return count in the footprint. At z=0 (ground),
-this reduces exactly to gap.py's own ``P_gap``.
-
-Beer-Lambert then gives the cumulative plant area index a downward pulse
-has already traversed by the time it reaches height z:
-
-    PAI_traversed(z) = -ln(G(z)) / k
-
-(the same conversion as ``gap.py``'s ``_gap_to_lai``, evaluated at every
-height level instead of once at the ground.) This is maximal at the ground
-(= total canopy PAI) and ~0 at the canopy top.
-
-Plant area volume density is its vertical derivative:
-
-    PAVD(z) = -d(PAI_traversed)/dz
-
-This is a MacArthur-Horn-style return-count profile. Sampling, occlusion,
-classification, terrain and extinction assumptions affect the estimate. It can
-serve as a comparison reference for waveform retrievals, but it is not an
-independent measurement of true plant area density.
-
-Heights are normalized pointwise against a buffered terrain TIN built from all
-classified ground returns. Unsupported canopy heights are excluded. Classified
-ground first returns are assigned zero height in the count profile.
+Beer-Lambert gives the plant area traversed down to z,
+``PAI(z) = -ln(G(z)) / k``, and PAVD is its vertical derivative. The profile
+depends on sampling, occlusion, classification, terrain and extinction
+assumptions: it is a reference for waveform retrievals, not an independent
+measurement. Heights are normalised against a buffered ground TIN.
 """
 
 from __future__ import annotations
@@ -51,9 +23,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from alsdb.processing._tiling import VEG_CLASSES as _VEG_CLASSES
-from alsdb.processing.gap import _GROUND_CLASS, _LAI_K_DEFAULT, _LAI_MAX
-from alsdb.processing.waveform import _query_footprint
+from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
+from alsdb.products.gap import _GROUND_CLASS, _LAI_K_DEFAULT, _LAI_MAX
+from alsdb.products.waveform import _query_footprint
 
 logger = logging.getLogger(__name__)
 
@@ -94,31 +66,14 @@ def _pavd_profile_from_hag(
     min_ground_points: int = _MIN_GROUND_POINTS_DEFAULT,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> PAVDProfile | None:
-    """
-    Pure-math core: first-return height-above-ground values and LAS
-    classification codes for ONE footprint (already ground-referenced,
-    ``hag = Z - z_ground``) -> :class:`PAVDProfile`.
+    """Compute the PAVD profile of one footprint from heights above ground
 
-    Kept separate from the TileDB query (see :func:`compute_als_pavd_profile`)
-    so it is unit-testable against synthetic point sets, mirroring
-    ``gap.py``'s ``_compute_gap_grid`` / ``compute_gap_fraction`` split.
-
-    Returns ``None`` if there are too few ground returns to estimate
-    ``G(0)`` reliably, or no vegetation signal above ground at all.
+    Returns None with too few ground returns or no vegetation above ground.
 
     veg_classes:
-        LAS classification codes treated as "vegetation" (default ``(3, 4,
-        5)`` -- standard ASPRS low/medium/high vegetation). NOT every survey
-        uses those codes: confirmed on a real DE-Hai (Thuringia, Germany)
-        product processed with the DGM/DOM convention, which uses a single
-        non-terrain bucket, class 20, for all above-ground returns -- with
-        the default here, ``veg_mask`` matched zero points and the function
-        silently returned a bogus ``canopy_height`` of well under 1 m for a
-        real ~30 m canopy instead of erroring. Always check a real
-        dataset's actual classification codes (e.g. via
-        ``np.unique(classification, return_counts=True)``) rather than
-        assuming the ASPRS default applies -- see the empty-mask warning
-        below, which is the guard that should catch this in the future.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``). Some
+        surveys use other codes (e.g. class 20 for all above-ground returns):
+        check the classes present.
     """
     if not np.isfinite([z_step, k]).all() or z_step <= 0 or k <= 0 or min_ground_points < 1:
         raise ValueError("z_step, k and min_ground_points must be positive")
@@ -210,40 +165,30 @@ def compute_als_pavd_profile(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> PAVDProfile | None:
-    """
-    Vertical return-count PAVD estimate in a circular footprint. Terrain,
-    classification, sampling and extinction assumptions affect this estimate;
-    it is a comparison reference rather than an independent ground truth.
+    """Return-count PAVD profile in a circular footprint
 
     Parameters
     ----------
     provider : TileDBProvider
-        Local or S3 ALS array.
+        Point cloud provider.
     center_x, center_y : float
-        Footprint centre in UTM metres (same CRS as the array).
+        Footprint centre, in the array's CRS.
     footprint_radius : float
-        Footprint radius in metres. Use the same radius as the sensor being
-        validated against (e.g. 12.5 m for GEDI's 25 m-diameter footprint).
+        Footprint radius (m), e.g. 12.5 for GEDI.
     z_step : float
-        Vertical bin size in metres (default 0.15 m, GEDI native).
+        Vertical bin size (m).
     k : float
-        Beer-Lambert extinction coefficient (default 0.5, spherical leaf
-        angle distribution -- see ``gap.LAI_K_PRESETS`` for biome presets).
+        Beer-Lambert extinction coefficient (see ``gap.LAI_K_PRESETS``).
     year : int, optional
-        Survey year filter. ``None`` merges all years.
+        Survey year; ``None`` uses all years.
     min_points : int
-        Minimum total ALS points in the footprint; returns ``None`` below this.
+        Return None with fewer points.
     min_ground_points : int
-        Minimum classified-ground first returns; returns ``None`` below this
-        (see module docstring on the ground-return floor).
+        Return None with fewer ground first returns.
     veg_classes : tuple[int, ...]
-        LAS classification codes treated as "vegetation" (default ``(3, 4,
-        5)``, standard ASPRS). Not universal -- e.g. real DE-Hai (Thuringia)
-        data uses class 20 for all non-terrain/DOM returns instead. See
-        :func:`_pavd_profile_from_hag`'s docstring for the real failure mode
-        this caused when left at the default on that dataset. Always verify
-        with ``np.unique(classification, return_counts=True)`` on a real
-        sample from the specific array before trusting the default.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``). Some
+        surveys use other codes (e.g. class 20 for all above-ground returns):
+        check the classes present.
 
     Returns
     -------
@@ -272,15 +217,13 @@ def pavd_from_points(
     max_ground_distance=None,
     ground_extrapolation=False,
 ):
-    """Compute a footprint profile using all buffered ground returns as terrain.
+    """Compute a footprint profile from points covering the footprint and terrain buffer
 
-    ``data`` must cover footprint_radius + terrain_buffer. Unsupported first
-    returns are reported in n_unsupported rather than treated as low canopy.
-    Ground counts still require first returns, matching the gap estimator.
+    First returns without terrain support are counted in ``n_unsupported``.
     """
-    from alsdb.processing._footprints import point_array
-    from alsdb.processing._surface import clean_points
-    from alsdb.processing._terrain import TerrainModel, normalize_points
+    from alsdb.methods._surface import clean_points
+    from alsdb.methods._terrain import TerrainModel, normalize_points
+    from alsdb.products._footprints import point_array
 
     if (
         not np.isfinite([footprint_radius, terrain_buffer, z_step, k]).all()
@@ -337,7 +280,7 @@ def compute_als_pavd_batch(
     **kwargs,
 ):
     """Return profiles in input row order, sharing queries for nearby footprints."""
-    from alsdb.processing._footprints import footprint_batches
+    from alsdb.products._footprints import footprint_batches
 
     centers = shots[[x_col, y_col]].to_numpy(dtype=float)
     results = [None] * len(shots)
@@ -376,38 +319,24 @@ def fit_transmittance_model(
     als_pavd: np.ndarray,
     observed_pavd: np.ndarray,
 ) -> dict:
-    """
-    Empirical transmittance of an observed (e.g. real GEDI) PAVD profile
-    relative to the ALS-true PAVD profile, plus a first-order parametric fit
-    against cumulative canopy traversed from the top.
+    """Transmittance of an observed PAVD profile relative to the ALS profile
 
-    Empirical transmittance is simply ``T = observed_pavd / als_pavd`` per
-    bin. The fitted model is a single-parameter exponential decay in
-    cumulative PAI traversed:
-
-        T(C) = exp(-beta * C)
-
-    the simplest form consistent with a signal deficit that grows
-    monotonically with how much canopy the pulse has already passed through
-    -- an illustrative first-order model, not a claimed final calibration;
-    refine once validated against more sites/instruments.
+    ``T = observed_pavd / als_pavd`` per bin, fitted as
+    ``T(C) = exp(-beta * C)`` with C the cumulative PAI from the canopy top (a
+    first-order model).
 
     Parameters
     ----------
     cumulative_pai : np.ndarray
-        Cumulative ALS-true PAI traversed from the canopy top down to each
-        profile point (:attr:`PAVDProfile.pai_cumulative`, or the equivalent
-        for a stratum-mean profile).
+        Cumulative ALS PAI from the canopy top at each bin.
     als_pavd, observed_pavd : np.ndarray
-        ALS-true and observed PAVD on the same grid as ``cumulative_pai``.
+        PAVD profiles on the same grid.
 
     Returns
     -------
-    dict with keys:
-        ``transmittance`` -- raw per-bin ratio (NaN where als_pavd <= 0)
-        ``beta`` -- fitted decay rate (NaN if the fit failed or too few
-            valid points)
-        ``fitted`` -- ``T(C)`` evaluated at each input ``cumulative_pai``
+    dict
+        ``transmittance`` (per bin, NaN where als_pavd <= 0), ``beta`` (NaN if
+        the fit fails) and ``fitted``.
     """
     from scipy.optimize import curve_fit
 

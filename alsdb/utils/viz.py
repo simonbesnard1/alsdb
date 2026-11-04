@@ -376,7 +376,7 @@ def plot_waveform(
     title: str | None = None,
 ):
     """
-    Two-panel waveform plot for a :class:`~alsdb.processing.waveform.WaveformResult`.
+    Two-panel waveform plot for a :class:`~alsdb.products.waveform.WaveformResult`.
 
     Left panel
         Normalised waveform energy vs elevation.  Ground peak, canopy top,
@@ -389,7 +389,7 @@ def plot_waveform(
     Parameters
     ----------
     result:
-        A :class:`~alsdb.processing.waveform.WaveformResult` instance.
+        A :class:`~alsdb.products.waveform.WaveformResult` instance.
     ax_wave, ax_rh:
         Pre-existing Matplotlib axes.  A new figure is created when both
         are ``None``.
@@ -568,8 +568,8 @@ def plot_rh_profile(
     Parameters
     ----------
     result:
-        :class:`~alsdb.processing.waveform.WaveformResult` with RH0–RH100
-        computed (default when using :func:`~alsdb.processing.waveform.simulate_waveform`).
+        :class:`~alsdb.products.waveform.WaveformResult` with RH0–RH100
+        computed (default when using :func:`~alsdb.products.waveform.simulate_waveform`).
     ax_rh, ax_wave:
         Pre-existing Matplotlib axes.  A new figure is created when both are ``None``.
     figsize:
@@ -972,7 +972,7 @@ def plot_waveforms_3d(
     on the Y offset.  Lines are coloured by a summary metric.
 
     Requires ``rh0``–``rh100`` columns in *results* (as returned by
-    :func:`~alsdb.processing.waveform.simulate_batch`).
+    :func:`~alsdb.products.waveform.simulate_batch`).
 
     Parameters
     ----------

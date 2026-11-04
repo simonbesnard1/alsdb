@@ -7,8 +7,8 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.change import compute_change
-from alsdb.processing.chm import compute_chm
+from alsdb.products.change import compute_change
+from alsdb.products.chm import compute_chm
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
 RES = 10.0

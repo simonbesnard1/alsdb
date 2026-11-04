@@ -30,8 +30,8 @@ from alsdb.benchmark._common import (
     write_params,
     write_provenance,
 )
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._terrain import GROUND_CLASSES
+from alsdb.methods._grid import GridSpec
+from alsdb.methods._terrain import GROUND_CLASSES
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +157,7 @@ def _tool(name, lastools_dir):
 
 
 def _succeeded(result, target):
-    """LAStools exits with 1 whenever it printed warnings, output intact.
-
-    Seen with licensed las2dem 260123 on PNOA: duplicate-raster / precision
-    warnings, valid GeoTIFF, exit code 1 with and without ``-fail``. So exit
-    code 1 counts as success when the output exists and no ERROR was printed.
-    """
+    """LAStools exits with 1 after warnings; count that as success when the output exists and no ERROR was printed."""
     text = result.stderr + result.stdout
     ok = result.returncode == 0 or (result.returncode == 1 and "ERROR" not in text)
     if ok and result.returncode and Path(target).is_file():
@@ -170,10 +165,8 @@ def _succeeded(result, target):
     return ok and Path(target).is_file()
 
 
-# A licensed LAStools occasionally reports itself "unlicensed" for one call in
-# a long run (lascanopy on Barcelona after hundreds of good tiles), probably
-# when the licence file on the network share cannot be read. Such calls are
-# retried after a pause that grows with each attempt.
+# A licensed LAStools occasionally reports itself "unlicensed" for one call
+# (licence file briefly unreadable): retry after a growing pause.
 LICENCE_RETRIES = 5
 LICENCE_WAIT = 30.0  # s, times the attempt number
 
@@ -233,25 +226,14 @@ def run(
     tiles=None,
     timeout=3600,
 ):
-    """Reference CHM tiles from classified LAS/LAZ with LAStools, one file per tile.
+    """Reference CHM tiles from classified LAS/LAZ with LAStools, one file per tile
 
-    1. ``lasheight -replace_z`` normalizes every point on LAStools' own ground
-       TIN (``<out_dir>/hag/``, kept for reruns).
-    2. ``spikefree``: ``las2dem -spike_free`` on returns of the surface
-       classes (*veg_classes* + *ground_classes*), so crown gaps fall to zero
-       like alsdb algorithm 3 (``<out_dir>/spikefree/``).
-    3. ``max``: ``lascanopy -max`` of first returns of the same classes, the
-       binned counterpart of alsdb ``method="max"`` (``<out_dir>/max/``).
-
-    ``freeze_distance="auto"`` applies alsdb's rule per tile (three pulse
-    spacings of surface first returns; :func:`~alsdb.benchmark._common.auto_parameters`)
-    and logs the values in ``params.csv``. Tiles are processed independently,
-    without neighbour buffers, so a few metres at tile edges can differ from
-    alsdb's buffered tiles. Finished outputs are skipped, so rerunning resumes.
-    *hag_dir* reuses existing ``lasheight -replace_z`` outputs named like the
-    input tiles; tiles missing there are normalized into ``<out_dir>/hag/``.
-    Each LAStools call is killed after *timeout* seconds (``None``: no limit);
-    a synthetic-grid ``las2dem -spike_free`` once hung for two days.
+    ``lasheight -replace_z`` normalises points on LAStools' own ground TIN;
+    ``spikefree`` runs ``las2dem -spike_free`` on the surface classes and
+    ``max`` runs ``lascanopy -max`` on their first returns.
+    ``freeze_distance="auto"`` applies alsdb's rule per tile. Tiles have no
+    neighbour buffer. Finished outputs are skipped; *hag_dir* reuses existing
+    heights; each call is killed after *timeout* seconds.
     """
     products = tuple(products)
     if not set(products) <= set(PRODUCTS):
@@ -269,9 +251,8 @@ def run(
         "params": [],
     }
 
-    # Outputs are written under .partial/ and moved into place only when the
-    # call succeeded: a run stopped mid-write (another worker failing, a kill)
-    # left truncated GeoTIFFs that the resume check then took as finished.
+    # Outputs go under .partial/ and are moved into place only on success, so
+    # an interrupted run never leaves a truncated file that looks finished.
     for sub in ("hag", *products):
         shutil.rmtree(out_dir / sub / ".partial", ignore_errors=True)
         (out_dir / sub / ".partial").mkdir()

@@ -7,8 +7,8 @@ import logging
 from alsdb.core.alsdatabase import ALSDatabase
 from alsdb.core.alsprovider import ALSProvider
 from alsdb.core.alstile import ALSTile
-from alsdb.core.classification import ClassificationConfig
-from alsdb.processing.change import compute_change
+from alsdb.methods.classification import ClassificationConfig
+from alsdb.products.change import compute_change
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.tile.tile import Tile
 from alsdb.tile.tile_name import PNOATileName, parse_tile_filename

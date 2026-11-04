@@ -1,27 +1,21 @@
-"""Scientific regressions for grids, terrain support, native CHM and uncertainty."""
+"""Scientific regressions for grids, terrain support and native CHM."""
 
 import numpy as np
 import pytest
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._products import surface_tile
-from alsdb.processing._surface import (
+from alsdb.benchmark.points import compare_rasters
+from alsdb.methods._grid import GridSpec
+from alsdb.methods._surface import (
     FILLED,
     NO_OBSERVATIONS,
     UNSUPPORTED,
     CHMConfig,
     reconstruct_chm,
 )
-from alsdb.processing._terrain import TerrainModel, normalize_points
-from alsdb.benchmark.points import compare_rasters, interval_coverage
-from alsdb.processing.chm import _fill_pits, compute_chm
-from alsdb.processing.uncertainty import (
-    CHMErrorModel,
-    compute_chm_uncertainty,
-    ensemble_summary,
-    estimate_chm_uncertainty,
-    perturb_points,
-)
+from alsdb.methods._terrain import TerrainModel, normalize_points
+from alsdb.methods.rasterise import _fill_pits
+from alsdb.products._surfaces import surface_tile
+from alsdb.products.chm import compute_chm
 
 
 def scene():
@@ -147,7 +141,7 @@ def test_tiling_with_fill_and_boundary_points_matches_whole_scene():
 
 
 def test_ground_outlier_cannot_reenter_canopy_as_unclassified():
-    from alsdb.processing._tiling import _filter_ground_outliers
+    from alsdb.products._tiling import _filter_ground_outliers
 
     arr = scene()
     arr["Z"][5] = -500
@@ -156,7 +150,7 @@ def test_ground_outlier_cannot_reenter_canopy_as_unclassified():
 
 
 def test_native_freezes_upper_surface_and_buffer_delays_freezing():
-    native = pytest.importorskip("alsdb.processing._spikefree_native")
+    native = pytest.importorskip("alsdb.methods._spikefree_native")
     xyz = np.array([[0, 0, 10], [2, 0, 10], [0, 2, 10], [2, 2, 10], [1, 1, 0]], float)
     frozen = native.rasterize(xyz, 0.0, 2.0, 0.5, 4, 4, 4.0, 0.5, 0.0)
     np.testing.assert_allclose(frozen, 10)
@@ -165,7 +159,7 @@ def test_native_freezes_upper_surface_and_buffer_delays_freezing():
 
 
 def test_native_duplicates_order_and_collinear_input():
-    native = pytest.importorskip("alsdb.processing._spikefree_native")
+    native = pytest.importorskip("alsdb.methods._spikefree_native")
     xyz = np.array([[0, 0, 10], [2, 0, 10], [0, 2, 10], [2, 2, 10], [0, 0, 0]], float)
     first = native.rasterize(xyz, 0.0, 2.0, 0.5, 4, 4, 4.0, 0.5, 0.0)
     reverse = native.rasterize(xyz[::-1].copy(), 0.0, 2.0, 0.5, 4, 4, 4.0, 0.5, 0.0)
@@ -176,7 +170,7 @@ def test_native_duplicates_order_and_collinear_input():
 
 
 def test_native_planar_surface_and_edge_trimming():
-    native = pytest.importorskip("alsdb.processing._spikefree_native")
+    native = pytest.importorskip("alsdb.methods._spikefree_native")
     xyz = np.array([[0, 0, 0], [4, 0, 8], [0, 4, 12], [4, 4, 20]], float)
     raster = native.rasterize(xyz, 0.0, 4.0, 1.0, 4, 4, 0.1, 0.5, 0.0)
     x, y = GridSpec.from_bbox((0, 0, 4, 4), 1).centers()
@@ -185,76 +179,15 @@ def test_native_planar_surface_and_edge_trimming():
 
 
 def test_native_surface_pipeline():
-    pytest.importorskip("alsdb.processing._spikefree_native")
+    pytest.importorskip("alsdb.methods._spikefree_native")
     result = reconstruct_chm(scene(), (0, 0, 10, 10), 1, CHMConfig(method="spikefree"))
     np.testing.assert_allclose(result["chm"], 10, atol=1e-5)
 
 
-def test_perturbations_agree_in_overlapping_tiles():
-    arr = scene()
-    model = CHMErrorModel(
-        strip_z_sigma=0.1,
-        strip_xy_sigma=0.2,
-        pulse_z_sigma=0.1,
-        terrain_sigma=0.3,
-        pulse_keep_probability=0.9,
-    )
-    full = perturb_points(arr, model, seed=7, realization=4)
-    subset = perturb_points(arr[::2], model, seed=7, realization=4)
-    full = full[np.isin(full["GpsTime"], subset["GpsTime"])]
-    for name in ("X", "Y", "Z"):
-        np.testing.assert_array_equal(full[name], subset[name])
-
-
-def test_shared_strip_vertical_error_cancels_in_hag():
-    arr = scene()
-    result = estimate_chm_uncertainty(
-        arr,
-        (0, 0, 10, 10),
-        1,
-        error_model=CHMErrorModel(strip_z_sigma=5),
-        n_realizations=5,
-        ground_outlier_removal=False,
-    )
-    np.testing.assert_allclose(result["chm_uncertainty_std"], 0, atol=1e-5)
-    np.testing.assert_allclose(result["chm_uncertainty_lower"], 10, atol=1e-5)
-
-
-def test_terrain_error_produces_nonzero_reproducible_uncertainty():
-    options = {
-        "error_model": CHMErrorModel(terrain_sigma=0.5),
-        "n_realizations": 6,
-        "seed": 19,
-        "ground_outlier_removal": False,
-    }
-    first = estimate_chm_uncertainty(scene(), (0, 0, 10, 10), 1, **options)
-    second = estimate_chm_uncertainty(scene(), (0, 0, 10, 10), 1, **options)
-    assert np.nanmedian(first["chm_uncertainty_std"]) > 0.1
-    for key in first:
-        np.testing.assert_array_equal(first[key], second[key])
-
-
-def test_ensemble_missing_realizations_do_not_create_false_certainty():
-    samples = np.array([[[1.0, np.nan]], [[2.0, np.nan]], [[3.0, 5.0]], [[4.0, np.nan]]])
-    result = ensemble_summary(samples, interval=0.5)
-    assert result["chm_uncertainty_lower"][0, 0] == pytest.approx(1.75)
-    assert result["chm_uncertainty_upper"][0, 0] == pytest.approx(3.25)
-    assert result["chm_uncertainty_n_valid"][0, 1] == 1
-    assert np.isnan(result["chm_uncertainty_std"][0, 1])
-
-
-def test_missing_pulse_identity_rejected():
-    arr = scene()
-    arr["GpsTime"] = 0
-    with pytest.raises(ValueError, match="pulse identity"):
-        perturb_points(arr, CHMErrorModel(pulse_keep_probability=0.5), seed=0, realization=0)
-
-
-def test_benchmark_and_interval_metrics():
+def test_benchmark_metrics():
     reference = np.arange(9.0).reshape(3, 3)
     metrics = compare_rasters(reference + 2, reference)
     assert metrics["bias"] == metrics["mae"] == metrics["rmse"] == 2
-    assert interval_coverage(reference, reference - 1, reference + 1)["coverage"] == 1
 
 
 def test_changed_configuration_requires_explicit_overwrite(provider, store):
@@ -280,7 +213,7 @@ def test_all_missing_recomputation_clears_old_values(provider, store):
 
 
 def test_failed_run_restarts_and_finishes(provider, store, monkeypatch):
-    from alsdb.processing import _products
+    from alsdb.products import _surfaces as _products
 
     opts = {"resolution": 10.0, "year": 2021, "bbox": (308000.0, 4688000.0, 309000.0, 4689000.0)}
     original = _products._worker
@@ -297,24 +230,6 @@ def test_failed_run_restarts_and_finishes(provider, store, monkeypatch):
     assert store._root["10m"]["chm"].attrs["processing_runs"]["2021"]["status"] == "complete"
 
 
-def test_tiled_uncertainty_writes_provenance(provider, store):
-    compute_chm_uncertainty(
-        provider,
-        store,
-        resolution=10.0,
-        year=2021,
-        bbox=(308000.0, 4688000.0, 309000.0, 4689000.0),
-        n_realizations=3,
-        error_model=CHMErrorModel(terrain_sigma=0.1),
-        ground_outlier_removal=False,
-    )
-    group = store._root["10m"]
-    assert "chm_uncertainty_n_valid" in group
-    run = group["chm_uncertainty_lower"].attrs["processing_runs"]["2021"]
-    assert run["status"] == "complete"
-    assert run["configuration"]["error_model"]["terrain_sigma"] == 0.1
-
-
 def test_store_rejects_different_origin(store):
     store.ensure_group("chm", 1.0, (0, 0, 10, 10), "EPSG:25830", 5)
     with pytest.raises(ValueError, match="grid"):
@@ -324,7 +239,7 @@ def test_store_rejects_different_origin(store):
 def test_native_parallel_calls_are_deterministic():
     from concurrent.futures import ThreadPoolExecutor
 
-    native = pytest.importorskip("alsdb.processing._spikefree_native")
+    native = pytest.importorskip("alsdb.methods._spikefree_native")
     rng = np.random.default_rng(55)
     xy = rng.uniform(0, 10, (500, 2))
     xyz = np.column_stack((xy, 10 + 0.1 * xy[:, 0] + 0.2 * xy[:, 1]))
@@ -376,7 +291,7 @@ def test_lastools_adapter_passes_freezing_parameters_and_checks_grid(monkeypatch
 
 
 def test_source_change_invalidates_cached_product(provider, store, monkeypatch):
-    from alsdb.processing import _products
+    from alsdb.products import _surfaces as _products
 
     options = {"resolution": 10.0, "year": 2021, "bbox": (308000.0, 4688000.0, 309000.0, 4689000.0)}
     compute_chm(provider, store, **options)
@@ -397,7 +312,7 @@ def test_partial_edge_store_matches_pixel_coordinates(store):
 
 
 def test_auto_freeze_distance_is_three_pulse_spacings_of_first_returns():
-    from alsdb.processing._surface import auto_freeze_distance
+    from alsdb.methods._surface import auto_freeze_distance
 
     arr = scene()  # first returns on a 1 m (canopy) and 2 m (ground) lattice
     x, y = np.meshgrid(np.arange(0.5, 10.0, 0.5), np.arange(0.5, 10.0, 0.5))
@@ -443,7 +358,7 @@ def test_default_outlier_removal_keeps_emergent_crown_and_drops_bird():
     assert np.isnan(reconstruct_chm(arr[:-1], (0, 0, 40, 40), 1.0, strict)["chm"][19, 20])
 
 
-@pytest.mark.parametrize("method", ["pitfree", "tin", "max", "highest_subcell_tin"])
+@pytest.mark.parametrize("method", ["pitfree", "tin", "max"])
 def test_chm_does_not_depend_on_point_order(method):
     # A regular scan pattern with tied heights: several triangulations and
     # highest-point choices are equally valid; storage order must not pick one.

@@ -66,7 +66,7 @@ All processing functions write directly to an ``ALSZarrStore``: a Zarr v3 hierar
 
 .. code-block:: python
 
-    from alsdb.processing.chm import compute_chm
+    from alsdb.products.chm import compute_chm
 
     store = ALSZarrStore("output/forest.zarr")
 
@@ -108,7 +108,7 @@ Compute biomass and structural metrics
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import compute_biomass, compute_metrics
+    from alsdb.products.biomass import compute_biomass, compute_metrics
 
     # 16 LiDAR structural metrics at 10 m:
     # height percentiles (h50, h75, h95, hmax, hmean), canopy cover (cc),
@@ -129,12 +129,12 @@ Compute biomass and structural metrics
 Multi-temporal change detection
 ---------------------------------
 
-:py:func:`alsdb.processing.change.compute_change` computes pixel-wise absolute change,
+:py:func:`alsdb.products.change.compute_change` computes pixel-wise absolute change,
 relative change, and a gain/loss flag between two survey years:
 
 .. code-block:: python
 
-    from alsdb.processing.change import compute_change
+    from alsdb.products.change import compute_change
 
     # Compute CHM change 2017 → 2021, ignoring sub-0.5 m differences
     compute_change(store, "chm", year_from=2017, year_to=2021,
@@ -149,7 +149,7 @@ Simulate large-footprint waveforms
 
 .. code-block:: python
 
-    from alsdb.processing.waveform import simulate_waveform
+    from alsdb.products.waveform import simulate_waveform
 
     result = simulate_waveform(
         provider=reader,

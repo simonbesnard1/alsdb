@@ -8,7 +8,7 @@ import pytest
 
 import numpy as np
 
-from alsdb.processing._tiling import (
+from alsdb.products._tiling import (
     _filter_ground_outliers,
     _hag_stage,
     array_crs,
@@ -309,7 +309,7 @@ def test_filter_ground_outliers_vegetation_untouched():
 
 
 def test_attach_hag_adds_hag_field(provider):
-    from alsdb.processing._tiling import query_to_array
+    from alsdb.products._tiling import query_to_array
 
     arr = query_to_array(provider, BBOX, year=2021)
     result = attach_hag(arr)
@@ -317,7 +317,7 @@ def test_attach_hag_adds_hag_field(provider):
 
 
 def test_attach_hag_ground_hag_near_zero(provider):
-    from alsdb.processing._tiling import query_to_array
+    from alsdb.products._tiling import query_to_array
 
     arr = query_to_array(provider, BBOX, year=2021)
     result = attach_hag(arr)
@@ -329,7 +329,7 @@ def test_attach_hag_ground_hag_near_zero(provider):
 
 
 def test_attach_hag_veg_hag_positive(provider):
-    from alsdb.processing._tiling import query_to_array
+    from alsdb.products._tiling import query_to_array
 
     arr = query_to_array(provider, BBOX, year=2021)
     result = attach_hag(arr)

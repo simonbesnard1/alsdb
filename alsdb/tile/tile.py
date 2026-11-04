@@ -44,14 +44,10 @@ class Tile:
 
     @property
     def metadata(self) -> dict:
-        """PDAL metadata of the LAS header (year, CRS, bounds, count), cached.
+        """PDAL metadata of the LAS header (year, CRS, bounds, count), cached
 
-        Reads only the header (``count: 0``): the previous full read with
-        ``filters.stats`` decompressed every point just for the name, and the
-        points were then read again for ingestion (about 13 of 32 s per PNOA
-        tile on the cluster). :meth:`read` adds the ``filters.stats`` block from
-        its own pass, so :attr:`native_bbox` reports the points' extent once
-        the tile has been read.
+        Only the header is read; :meth:`read` adds point statistics once the tile
+        has been read.
         """
         if self._metadata is None:
             pipeline = pdal.Pipeline(

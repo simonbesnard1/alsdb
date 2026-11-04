@@ -1,22 +1,15 @@
-"""Spike-free freeze-distance sensitivity on finished benchmark scenes.
+"""Spike-free freeze-distance sensitivity on finished benchmark scenes
 
-Works on any folder of scenes written by :mod:`alsdb.benchmark.synthetic` or
-:mod:`alsdb.benchmark.uls` (``laz/``, ``truth.npz``, ``scene.json`` each).
 Every scene's LAZ is ingested once and alsdb spike-free is run with each
-freeze distance below; the outputs are scored with
-:func:`~alsdb.benchmark.synthetic.score` and appended to one CSV (one row per
-scene and setting). Finished scenes are skipped on rerun. The CHMs of every setting
-are kept in the scene folder (``preds_sensitivity.npz``).
+freeze setting below (``spacing``: mean spacing of first surface returns);
+outputs are scored with :func:`~alsdb.benchmark.synthetic.score` and
+appended to one CSV, and the CHMs are kept in ``preds_sensitivity.npz``.
+Finished scenes are skipped on rerun.
 
-Freeze settings (``spacing`` is the mean spacing of first surface returns of
-the scene, as alsdb's ``"auto"`` rule computes it); all returns unless noted:
-
-- ``k2``, ``k3``, ``k5``: 2, 3 (the current ``"auto"``) and 5 spacings
-- ``floor1.5``: ``max(3 * spacing, 1.5 m)``, the candidate rule
-- ``fixed1.5``: 1.5 m, the old default
-- ``lsf_tile``: the locally adaptive formula of Fischer et al. (2024) at the
-  scene's mean density, one value per scene
-- ``lsf_local``: the same formula per 5 m cell (``freeze_distance="local"``)
+- ``k3``: 3 spacings (``"auto"``)
+- ``floor1.5``: ``max(3 * spacing, 1.5 m)``
+- ``fixed1.5``: 1.5 m
+- ``lsf_local``: Fischer et al. (2024) per 5 m cell (``"local"``)
 - ``k3_first``: ``k3`` on first returns only
 - ``lspikefree``: ``lsf_local`` on first returns only, the full method of
   Fischer et al. (2024), https://doi.org/10.1111/2041-210X.14416
@@ -37,15 +30,10 @@ SURFACE_CLASSES = (2, 5, 9)
 
 def freeze_settings(spacing):
     """{name: spike-free options of ``compute_chm``} for a scene with this pulse spacing."""
-    from alsdb.processing.spikefree import local_freeze_distance
-
     scalar = {
-        "k2": 2 * spacing,
         "k3": 3 * spacing,
-        "k5": 5 * spacing,
         "floor1.5": max(3 * spacing, 1.5),
         "fixed1.5": 1.5,
-        "lsf_tile": float(local_freeze_distance(1 / spacing**2)),
     }
     settings = {name: {"freeze_distance": d} for name, d in scalar.items()}
     settings["lsf_local"] = {"freeze_distance": "local"}
@@ -57,7 +45,7 @@ def freeze_settings(spacing):
 def first_return_spacing(laz):
     import pdal
 
-    from alsdb.processing.chm import _pulse_spacing
+    from alsdb.methods.rasterise import _pulse_spacing
 
     p = pdal.Pipeline(f'["{laz}"]')
     p.execute()
@@ -71,7 +59,7 @@ def sweep_scene(scene, keep=False):
     import zarr
 
     from alsdb.core.alsdatabase import ALSDatabase
-    from alsdb.processing.chm import compute_chm
+    from alsdb.products.chm import compute_chm
     from alsdb.storage.zarr_store import ALSZarrStore
 
     scene = Path(scene)

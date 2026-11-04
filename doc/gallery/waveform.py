@@ -15,11 +15,11 @@ metrics from the ground up.
 # Single footprint simulation
 # ----------------------------
 #
-# :py:func:`alsdb.processing.waveform.simulate_waveform` simulates a
+# :py:func:`alsdb.products.waveform.simulate_waveform` simulates a
 # single GEDI-like footprint (25 m diameter by default).
 
 from alsdb import ALSProvider
-from alsdb.processing.waveform import simulate_waveform
+from alsdb.products.waveform import simulate_waveform
 
 reader = ALSProvider(storage_type="local", uri="/path/to/my_array")
 
@@ -54,13 +54,13 @@ fig.savefig("rh_profile.png", dpi=150, bbox_inches="tight")
 # Batch simulation
 # -----------------
 #
-# :py:func:`alsdb.processing.waveform.simulate_batch` processes a DataFrame
+# :py:func:`alsdb.products.waveform.simulate_batch` processes a DataFrame
 # of shot centres in parallel. Results can be saved to Parquet for later
 # co-location with real GEDI observations.
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from alsdb.processing.waveform import simulate_batch  # noqa: E402
+from alsdb.products.waveform import simulate_batch  # noqa: E402
 
 # Build a grid of GEDI-like shot centres (60 m spacing)
 xs, ys = np.meshgrid(

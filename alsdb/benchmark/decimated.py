@@ -1,46 +1,29 @@
-"""Real ALS at reduced density: decimated copies of a dense survey vs its full density.
+"""Decimated copies of a dense ALS survey, scored against its full density
 
-For sites delivered as one dense ALS survey plus decimated copies of it (e.g.
-``original/`` and ``pd_00p5/`` ... ``pd_08/``, ``pd_04_ft_*/``), every copy of
-an :class:`~alsdb.benchmark.uls.Area` becomes one benchmark scene that
-:func:`~alsdb.benchmark.synthetic.run_tools`, :func:`~alsdb.benchmark.synthetic.score`
-and :mod:`alsdb.benchmark.sensitivity` process like the synthetic ones:
+Each decimated copy (``pd_*`` folders beside ``original/``) of an
+:class:`~alsdb.benchmark.uls.Area` becomes one benchmark scene. The
+reference comes from the original as for ULS (:func:`alsdb.benchmark.uls.reference`);
+the input is the copy cropped to the scene, vegetation written as class 5.
+``mixed`` scenes take a sparse copy everywhere and a denser one in
+north-south strips, as flight-line overlaps do; ``truth.npz`` marks the
+dense cells (``dense``).
 
-- reference from the original, as for ULS (:func:`alsdb.benchmark.uls.reference`):
-  TIN of the lowest ground return per 25 cm, highest return per 10 cm above
-  it (cell maximum, and the 0.4 m around the cell centre);
-- input: the decimated copy cropped to the scene, ground (2) and water (9)
-  kept, vegetation classes 3-5 written as 5.
+The Chapitre Petit Buech, Vizzavona (both IGN Lidar HD, classification
+corrected by hand) and Robson Creek (TERN) surveys and their decimated
+copies were provided by Fabian Fischer (University of Bristol), made with
+the workflow of Fischer et al. (2024): ``pd_X`` keeps X pulses/m2 by
+removing pulses in acquisition order, ``pd_X_ft_F`` also removes a
+fraction F of higher-order returns.
 
-Unlike thinned ULS, the input keeps the aircraft sensor and footprint; only
-the density changes. The reference uses the original's classification, which
-the tools also see.
-
-The Chapitre Petit Buech, Vizzavona (Corsica) and Robson Creek surveys and
-their decimated copies were provided by Fabian Fischer (University of
-Bristol), made with the workflow of Fischer et al. (2024): ``pd_X`` keeps X
-pulses/m2 by removing
-pulses at regular steps in acquisition order (preserving the scan pattern),
-``pd_X_ft_F`` additionally removes a fraction F of higher-order returns.
-The Robson Creek original is TERN data. Petit Buech's and Vizzavona's
-classifications are the French IGN Lidar HD ones, automatic and then
-manually corrected, the best reference available; Robson Creek's is less
-certain and may come from TerraScan, a PTD variant (F. Fischer, pers. comm.).
-
-Uneven density (``mixed``): flight-line overlaps make real surveys such as
-PNOA denser in strips. A mixed scene takes a sparse copy everywhere and a
-denser copy (e.g. ``pd_01`` and ``pd_02``) in north-south strips (default
-30 m wide every 100 m, the first 35 m from the scene's west edge, so 30% of
-the core), against the same reference. ``truth.npz`` marks the dense cells
-(``dense``) so errors can be split by strip. Unlike a real overlap, the
-strips keep one flight line's scan angles.
-
+References
+----------
 Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
-characterisation of forest structure from airborne laser scanning - A
-systematic assessment and sample workflow for ecologists. Methods in Ecology
-and Evolution, 15, 1873-1888. https://doi.org/10.1111/2041-210X.14416
+    characterisation of forest structure from airborne laser scanning - A
+    systematic assessment and sample workflow for ecologists. Methods in
+    Ecology and Evolution, 15, 1873-1888.
+    https://doi.org/10.1111/2041-210X.14416
 
-    python -m alsdb.benchmark decimated <out_dir> --site PetitBuech \\
+    python -m alsdb.benchmark decimated <out_dir> --site PetitBuech \
         --original <site>/original --x0 937650 --y0 6396650 --core 200
 """
 

@@ -7,7 +7,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from alsdb.processing._tiling import array_crs
+from alsdb.products._tiling import array_crs
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.utils.constants import PNOA_TILE_SIZE_M
 from alsdb.utils.schema import LAS_ATTRIBUTES

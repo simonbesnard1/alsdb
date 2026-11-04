@@ -1,32 +1,19 @@
-"""ULS benchmark: real canopies from UAV laser scanning, at ALS pulse densities.
+"""Real canopies from UAV laser scanning (ULS), at ALS pulse densities
 
-Each :class:`Area` (a square of a ULS survey) is read once, streaming, and
-turned into two kinds of scenes that the synthetic benchmark's
-:func:`~alsdb.benchmark.synthetic.run_tools` and
-:func:`~alsdb.benchmark.synthetic.score` process like any other:
+Each :class:`Area` (a square of a ULS survey) is read once and turned into
+scenes scored like the synthetic ones:
 
-- ``thinned``: the real ULS returns, sampled to ALS density by pulse. Only
-  near-nadir pulses are used; one pulse per cell of 1/density m2 is kept,
-  with all its returns, so the sample is as regular as an ALS scan pattern.
-  The reference comes from the full-density cloud: a TIN of the lowest
-  ground return per 25 cm (DTM) and the highest return per 10 cm above it
-  (CHM: the cell maximum, and the 20 cm around the cell centre). Real
-  canopy and returns, but the sensor stays a UAV one (small footprint,
-  short range).
-- ``helios``: plant area density per 0.5 m voxel estimated from the ULS
-  (MacArthur-Horn on near-nadir returns weighted 1 / number of returns,
-  per voxel column, as in leafR), scanned with HELIOS++ by the synthetic
-  benchmark's aircraft survey over the ULS terrain. Aircraft geometry and an
-  exact truth (the voxels), but the canopy is a voxel model.
+- ``thinned``: the ULS returns thinned by pulse to ALS density (one pulse
+  per cell of 1/density m2, with all its returns). The reference comes from
+  the full-density cloud: a TIN of the lowest ground return per 25 cm (DTM)
+  and the highest return per 10 cm above it (CHM).
+- ``helios``: plant area density per 0.5 m voxel from the ULS
+  (MacArthur-Horn, as in leafR), scanned by HELIOS++ with the synthetic
+  aircraft survey; the truth is the voxels.
 
-Classes: ground (2) is kept, every other non-noise class is written as
-vegetation (5), so the tools need no site-specific class settings.
-
-Field tree heights (e.g. TLS heights in a GeoPackage) are optional; tree tops
-are then scored against them too.
-
-The ULS surveys used so far (DE-Tha, DE-Eco) are ICOS station data; credit
-them as the ICOS data licence requires.
+Ground (2) is kept, every other non-noise class becomes vegetation (5).
+Field tree heights are optional. ICOS station data must be credited as the
+ICOS data licence requires.
 
 References
 ----------
@@ -42,7 +29,7 @@ Winiwarter, L., Esmorís Pena, A. M., Weiser, H., Anders, K., Martínez Sánchez
     3D laser scanning. Remote Sensing of Environment, 269, 112772.
     https://doi.org/10.1016/j.rse.2021.112772
 
-    python -m alsdb.benchmark uls <out_dir> --laz-dir <tiles> --site DE-Eco \\
+    python -m alsdb.benchmark uls <out_dir> --laz-dir <tiles> --site DE-Eco \
         --x0 416700 --y0 5346650 --core 100 --year 2026 --density 0.5 2 10
 """
 

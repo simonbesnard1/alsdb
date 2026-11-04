@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from alsdb.processing._surface import CHMConfig, reconstruct_chm, surface_mask
-from alsdb.processing._terrain import TerrainModel, normalize_points
+from alsdb.methods._surface import CHMConfig, reconstruct_chm, surface_mask
+from alsdb.methods._terrain import TerrainModel, normalize_points
 
 
 def _scene():
@@ -13,7 +13,7 @@ def _scene():
     return scene()
 
 
-@pytest.mark.parametrize("method", ["max", "pitfree", "highest_subcell_tin"])
+@pytest.mark.parametrize("method", ["max", "pitfree"])
 def test_candidate_only_normalization_matches_full(method):
     arr = _scene()
     config = CHMConfig(method=method)

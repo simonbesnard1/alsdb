@@ -94,11 +94,11 @@ This is a HAG artefact. The Delaunay TIN built from ground points becomes unreli
 How do I use a scikit-learn biomass model?
 -------------------------------------------
 
-Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
+Use :py:func:`alsdb.products.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
+    from alsdb.products.biomass import compute_biomass, wrap_sklearn_model
     from sklearn.ensemble import GradientBoostingRegressor
 
     model = GradientBoostingRegressor()
@@ -120,11 +120,11 @@ Use :py:func:`alsdb.processing.biomass.wrap_sklearn_model` to wrap any sklearn-c
 How do I detect forest change between two surveys?
 ----------------------------------------------------
 
-Use :py:func:`alsdb.processing.change.compute_change` after computing the same variable for both years.  Three derived products are written: absolute change, relative change (%), and a gain/loss flag:
+Use :py:func:`alsdb.products.change.compute_change` after computing the same variable for both years.  Three derived products are written: absolute change, relative change (%), and a gain/loss flag:
 
 .. code-block:: python
 
-    from alsdb.processing.change import compute_change
+    from alsdb.products.change import compute_change
 
     # CHM must already be present for both years in the store
     compute_change(
@@ -141,11 +141,11 @@ Use :py:func:`alsdb.processing.change.compute_change` after computing the same v
 How do I calibrate the Næsset biomass model?
 ----------------------------------------------
 
-Use :py:func:`alsdb.processing.biomass.calibrate_naesset` with co-located field inventory plots.  At least 20 valid plots are required; fewer than 50 emits a quality warning:
+Use :py:func:`alsdb.products.biomass.calibrate_naesset` with co-located field inventory plots.  At least 20 valid plots are required; fewer than 50 emits a quality warning:
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import calibrate_naesset, naesset_model
+    from alsdb.products.biomass import calibrate_naesset, naesset_model
 
     # h95_plots, cc_plots, agb_plots — 1-D arrays, one value per field plot
     (a, b, c), pcov = calibrate_naesset(

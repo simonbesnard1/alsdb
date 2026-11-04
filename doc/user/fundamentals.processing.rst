@@ -52,7 +52,7 @@ Canopy Height Model / DTM / DSM
 
 .. code-block:: python
 
-    from alsdb.processing.chm import compute_chm, compute_dtm, compute_dsm, compute_all
+    from alsdb.products.chm import compute_chm, compute_dtm, compute_dsm, compute_all
 
     # CHM at 1 m resolution (first returns only, max HAG per cell)
     compute_chm(
@@ -111,7 +111,7 @@ Gap fraction and effective LAI
 
 .. code-block:: python
 
-    from alsdb.processing.gap import LAI_K_PRESETS, compute_gap_fraction
+    from alsdb.products.gap import LAI_K_PRESETS, compute_gap_fraction
 
     # Gap fraction only
     compute_gap_fraction(
@@ -168,7 +168,7 @@ LiDAR structural metrics
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import compute_metrics
+    from alsdb.products.biomass import compute_metrics
 
     compute_metrics(
         provider=reader,
@@ -227,7 +227,7 @@ Aboveground biomass
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import compute_biomass
+    from alsdb.products.biomass import compute_biomass
 
     # Default Næsset (2002) allometric model — calibrate before scientific use
     compute_biomass(
@@ -241,12 +241,12 @@ Aboveground biomass
 
 **Calibrating the Næsset model:**
 
-Use :func:`alsdb.processing.biomass.calibrate_naesset` with field inventory plots
+Use :func:`alsdb.products.biomass.calibrate_naesset` with field inventory plots
 co-located with ALS acquisitions (≥ 20 plots required; ≥ 50 recommended):
 
 .. code-block:: python
 
-    from alsdb.processing.biomass import calibrate_naesset, naesset_model
+    from alsdb.products.biomass import calibrate_naesset, naesset_model
 
     (a, b, c), pcov = calibrate_naesset(
         h95_plots, cc_plots, agb_plots, return_cov=True
@@ -278,7 +278,7 @@ Default parameters: ``a=0.8``, ``b=1.8``, ``c=0.5``. Output in Mg ha⁻¹.
 .. code-block:: python
 
     from sklearn.ensemble import RandomForestRegressor
-    from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
+    from alsdb.products.biomass import compute_biomass, wrap_sklearn_model
 
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     # X_train columns must match _METRIC_NAMES order (16 features by default)
@@ -298,12 +298,12 @@ Default parameters: ``a=0.8``, ``b=1.8``, ``c=0.5``. Output in Mg ha⁻¹.
 Multi-temporal change detection
 ----------------------------------
 
-:func:`alsdb.processing.change.compute_change` computes pixel-wise change between
+:func:`alsdb.products.change.compute_change` computes pixel-wise change between
 two survey years and writes three derived products:
 
 .. code-block:: python
 
-    from alsdb.processing.change import compute_change
+    from alsdb.products.change import compute_change
 
     # CHM change 2017 → 2021; suppress sub-0.5 m noise
     compute_change(
@@ -338,7 +338,7 @@ Large-footprint waveform simulation
 
 .. code-block:: python
 
-    from alsdb.processing.waveform import simulate_waveform, simulate_batch
+    from alsdb.products.waveform import simulate_waveform, simulate_batch
 
     # Single footprint (25 m diameter, GEDI default)
     result = simulate_waveform(

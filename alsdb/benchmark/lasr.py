@@ -1,21 +1,13 @@
-"""lasR reference: pitfree and spike-free CHM tiles from classified LAS/LAZ.
+"""lasR reference pitfree and spike-free CHM tiles from classified LAS/LAZ
 
-lasR (Roussel, r-lidar, GPL-3, https://github.com/r-lidar/lasR; successor
-of lidR, Roussel et al. 2020, https://doi.org/10.1016/j.rse.2020.112061) is
-an independent C++ implementation of the same algorithms (pit-free:
-Khosravipour et al. 2014; spike-free: Khosravipour et al. 2016) with its own
-normalization. It runs as a separate ``Rscript``
-process on the bundled ``lasr_chm.R``; nothing of lasR is linked into alsdb.
-Install it with the optional pixi environment::
+lasR (Roussel, r-lidar, GPL-3, https://github.com/r-lidar/lasR; successor of
+lidR, Roussel et al. 2020, https://doi.org/10.1016/j.rse.2020.112061)
+implements pit-free (Khosravipour et al. 2014) and spike-free (Khosravipour
+et al. 2016) independently, with its own normalisation. It runs as a
+separate ``Rscript`` process on the bundled ``lasr_chm.R``, which mirrors
+alsdb's surface classes and ``"auto"`` freeze and edge rules. Install::
 
     pixi install -e lasr && pixi run -e lasr install-lasr
-
-The script mirrors alsdb surface algorithm 3: noise (7, 18) dropped, ground +
-water TIN normalization, surface classes = vegetation + ground + water,
-pitfree with highest return per cell and edge-trimmed upper layers, spike-free
-on all returns. ``"auto"`` freeze/edge apply alsdb's rule per tile. On a
-Barcelona PNOA tile, pitfree matched alsdb on 99.3% of cells (< 1 cm) and
-spike-free differed by +0.18 m mean (alsdb higher; seeding differs).
 """
 
 import shutil
@@ -60,14 +52,12 @@ def run(
     normalized=False,
     rscript="Rscript",
 ):
-    """Write ``<out_dir>/pitfree/<tile>.tif`` and ``<out_dir>/spikefree/<tile>.tif``.
+    """Write ``<out_dir>/pitfree/<tile>.tif`` and ``<out_dir>/spikefree/<tile>.tif``
 
-    Each tile is read with a 50 m buffer from its neighbours. Finished tiles
-    are skipped, so rerunning resumes; ``tiles`` limits a run to the first N
-    tiles (pilot), as in :func:`alsdb.benchmark.lastools.run`. ``normalized=True`` treats Z as height above
-    ground already (lasR's normalization is skipped). Per-tile parameters go
-    to ``params.csv``, the run record (lasR version, settings) to
-    ``runs.json``.
+    Each tile is read with a 50 m buffer from its neighbours; finished tiles
+    are skipped. ``tiles`` limits a run to the first N tiles; ``normalized=True``
+    takes Z as height above ground. Parameters go to ``params.csv`` and the run
+    record to ``runs.json``.
     """
     version = lasr_version(rscript)
     out_dir = Path(out_dir)

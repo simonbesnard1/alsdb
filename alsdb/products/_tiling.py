@@ -2,12 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""
-Shared tiling utilities for large-area raster processing.
-
-Used by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
-and :mod:`alsdb.processing.biomass`.
-"""
+"""Tiling, querying and parallel execution shared by the products"""
 
 from __future__ import annotations
 
@@ -35,9 +30,6 @@ PDAL_DTYPES: dict[str, type] = {
     "Y": np.float64,
     **LAS_ATTRIBUTES,
 }
-
-# LAS classification codes treated as "vegetation".
-VEG_CLASSES = (3, 4, 5)
 
 
 def query_to_array(
@@ -199,19 +191,16 @@ def check_bbox_overlap(
     requested: tuple[float, float, float, float],
     provider,
 ) -> bool:
-    """
-    Return ``True`` if *requested* overlaps the stored data extent.
+    """Return True if *requested* overlaps the stored data extent
 
-    Logs a warning and returns ``False`` when there is no overlap, so the
-    caller can bail out early rather than processing tiles that will all be
-    empty.
+    Logs a warning and returns False otherwise.
 
     Parameters
     ----------
     requested:
-        ``(min_x, min_y, max_x, max_y)`` passed by the user.
+        ``(min_x, min_y, max_x, max_y)``.
     provider:
-        TileDB provider; used to read ``nonempty_domain``.
+        TileDB provider.
     """
     try:
         data_bbox = array_data_bbox(provider)
@@ -245,26 +234,13 @@ _HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
 
 
 def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
-    """
-    Reclassify low ground outliers to Class 7 with PDAL ``filters.elm``.
+    """Reclassify low ground outliers as class 7 with PDAL ``filters.elm``
 
-    Applied **only to Class-2 (ground) points**. ELM (Extended Local Minimum,
-    10 m cells, 1 m threshold) flags the lowest returns of a cell while they
-    sit >= 1 m below the next one: multipath/water returns and other
-    below-ground noise, which pull the TIN down and inflate heights above it.
-    Within-cell spacing also grows with slope, so on clean synthetic ground
-    at 0.25 pts/m2 it flags 0.08% of points at 35 degrees and 0.4% at 45.
-
-    There used to be a second, ``filters.outlier`` statistical stage. It flags
-    *isolated* points (3-D mean neighbour distance), not points off the
-    surface: on Barcelona windows it removed 2-5% of ground, on flat land 93%
-    of those within 0.5 m of a local plane, and on steep slopes it moved the
-    DTM by > 0.5 m on 9-23% of 1 m cells. Like lidR and LAStools, high points
-    in Class 2 are now trusted to the classification.
-
-    Points are reclassified in place in a copy (order preserved), so callers'
-    index correspondence holds. Returns *arr* unchanged when nothing is
-    flagged or the PDAL pipeline fails (logged at DEBUG level).
+    Only ground (class 2) is checked: ELM (10 m cells, 1 m threshold) flags the
+    lowest returns of a cell lying at least 1 m below the next ones, such as
+    multipath returns. High ground points are trusted to the classification,
+    as in lidR and LAStools. Returns a reclassified copy (order preserved), or
+    *arr* unchanged when nothing is flagged or PDAL fails.
     """
     gnd_mask = arr["Classification"] == 2
     n_gnd = int(gnd_mask.sum())
@@ -304,25 +280,20 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
 
 
 def _hag_stage(arr: np.ndarray) -> dict:
-    """
-    Return the most accurate available PDAL HAG stage for *arr*.
+    """Return a PDAL height-above-ground stage for *arr*
 
-    Legacy PDAL-based workers prefer ``filters.hag_delaunay`` when the
-    tile contains at least
-    ``_HAG_DELAUNAY_MIN_GND`` ground-classified points.  Falls back to
-    ``filters.hag_nn`` when the ground point count is too low to build a
-    valid triangulation (sparse surveys, dense-canopy void tiles).
+    ``filters.hag_delaunay`` with at least ``_HAG_DELAUNAY_MIN_GND`` ground
+    points, else ``filters.hag_nn``.
 
     Parameters
     ----------
     arr:
-        Point array as returned by :func:`query_to_array`.  Must contain
-        a ``Classification`` field.
+        Point array with a ``Classification`` field.
 
     Returns
     -------
     dict
-        A single PDAL stage descriptor ready for inclusion in a pipeline list.
+        PDAL stage.
     """
     n_gnd = int((arr["Classification"] == 2).sum())
     if n_gnd >= _HAG_DELAUNAY_MIN_GND:
@@ -337,7 +308,7 @@ def attach_hag(arr: np.ndarray) -> np.ndarray:
     Point-normalized CHM statistics do not in general equal DSM minus DTM.
     Additional fields record ground distance, extrapolation and negative HAG.
     """
-    from alsdb.processing._terrain import normalize_points
+    from alsdb.methods._terrain import normalize_points
 
     return normalize_points(_filter_ground_outliers(arr))[0]
 
@@ -353,42 +324,14 @@ def run_tiled(
     skip: set[int] | frozenset[int] = frozenset(),
     **kwargs,
 ) -> None:
-    """
-    Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
+    """Run *worker_fn* over all *tiles*, sequentially or in a thread pool
 
-    The worker signature must be::
-
-        worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)
-
-    Logs "N/total tiles completed" every *progress_every* completions (and
-    once at the end) - a crash that kills the process before it can log
-    anything else still leaves behind how far tile completion actually got,
-    which memory usage alone can't tell you (e.g. distinguishing "tiles are
-    completing steadily and it's genuinely just a lot of data" from "nothing
-    has finished in the last N minutes").
-
-    Also forces a ``gc.collect()`` every *gc_every* completions. PDAL/GDAL
-    point/array objects form reference cycles that Python's generational GC
-    only reclaims once its own allocation-count thresholds trigger - on a
-    long, allocation-heavy run those thresholds fire far too rarely, letting
-    cycles pile up for a long time before eventually being collected. This
-    reads identically to a real memory leak from `top`/RSS alone, but a
-    direct A/B reproduction (same pipeline, same real tiles) showed RSS
-    staying flat for thousands of tiles with periodic forced collection,
-    versus climbing into the hundreds of GB without it - so this isn't
-    optional cleanup, it's the actual fix for that failure mode.
-
-    Tile indices in *skip* (already written by an interrupted run being
-    resumed) are not processed but keep their original index, so a worker's
-    ``tile_index`` always identifies the same tile across attempts.
-
-    Tiles are consumed as they finish, not in submission order: with ordered
-    consumption one slow (dense) tile idles every other worker once the
-    bounded window behind it fills - measured 3x slower on a synthetic mix
-    with 1 in 25 tiles slow.
-
-    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
-    and :mod:`alsdb.processing.biomass`.
+    The worker signature is
+    ``worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)``.
+    Progress is logged every *progress_every* tiles, and ``gc.collect()`` runs
+    every *gc_every* tiles to free reference cycles of PDAL/GDAL objects.
+    Tiles in *skip* keep their index but are not processed. Results are
+    consumed as tiles finish, so one slow tile does not idle the others.
     """
     total = len(tiles)
     completed = 0
@@ -470,22 +413,6 @@ def bounded_map(fn, items, n_workers=1):
                 pending.append(executor.submit(fn, item))
 
 
-def flip_to_north_up(grid: np.ndarray, transpose: bool = False) -> np.ndarray:
-    """
-    Convert a south-up raster to north-up float32 orientation.
-
-    Set *transpose* when *grid* is shaped ``(nx, ny)`` (e.g. straight out of
-    ``reshape(nx, ny)`` or ``binned_statistic_2d``); leave it ``False`` when
-    *grid* is already ``(ny, nx)``.
-
-    Shared by :mod:`alsdb.processing.chm`, :mod:`alsdb.processing.gap`,
-    and :mod:`alsdb.processing.biomass`.
-    """
-    if transpose:
-        grid = grid.T
-    return np.flipud(grid).astype(np.float32)
-
-
 def baba_neighbourhoods(
     points: np.ndarray,
     resolution: float,
@@ -500,11 +427,11 @@ def baba_neighbourhoods(
     ``indices_list[row * nx + col]`` holds the indices into *points* that
     fall within *baba_radius* of that cell's centre.
 
-    Shared by :mod:`alsdb.processing.gap` and :mod:`alsdb.processing.biomass`.
+    Shared by :mod:`alsdb.products.gap` and :mod:`alsdb.products.biomass`.
     """
     from scipy.spatial import cKDTree
 
-    from alsdb.processing._grid import GridSpec
+    from alsdb.methods._grid import GridSpec
 
     grid = GridSpec.from_bbox(bbox, resolution)
     nx, ny = grid.nx, grid.ny

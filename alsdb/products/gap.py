@@ -29,7 +29,7 @@ Usage::
 
     from alsdb import ALSProvider
     from alsdb.storage import ALSZarrStore
-    from alsdb.processing.gap import compute_gap_fraction
+    from alsdb.products.gap import compute_gap_fraction
 
     provider = ALSProvider(storage_type="local", uri="array_")
     store = ALSZarrStore("output/spain.zarr")
@@ -49,9 +49,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from alsdb.processing._tiling import (
-    VEG_CLASSES as _VEG_CLASSES,
-)
+from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
 
 if TYPE_CHECKING:
     from alsdb.providers.tiledb_provider import TileDBProvider
@@ -92,12 +90,8 @@ def _compute_gap_grid(
     returns are ``np.nan``.
 
     veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS). Not universal across surveys -- see
-        ``pavd.py``'s module docstring for a real dataset (DE-Hai) that
-        uses a different code entirely; verify with
-        ``np.unique(points["Classification"], return_counts=True)`` before
-        trusting the default on a new array.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``); check the
+        classes present in your survey.
     """
     return gap_statistics(points, resolution, bbox, min_density, veg_classes)["gap"]
 
@@ -113,7 +107,7 @@ def gap_statistics(
     """Gap estimate, first-return support counts and zero-gap saturation flag."""
     from scipy.spatial import cKDTree
 
-    from alsdb.processing._grid import GridSpec
+    from alsdb.methods._grid import GridSpec
 
     grid = GridSpec.from_bbox(bbox, resolution)
     if baba_radius > 0:
@@ -277,12 +271,8 @@ def compute_gap_fraction(
         a gap fraction estimate.  Cells below this threshold are set to
         ``np.nan``.  Default ``0.0`` disables the guard.
     veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS). Not universal across surveys -- see
-        ``pavd.py``'s module docstring for a real dataset that uses a
-        different code entirely; verify with
-        ``np.unique(classification, return_counts=True)`` before trusting
-        the default on a new array.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``); check the
+        classes present in your survey.
     overwrite:
         If ``False`` (default) and gap (and LAI if requested) already exist
         for *year* in the store, the computation is skipped.
@@ -293,9 +283,9 @@ def compute_gap_fraction(
     n_workers:
         Parallel workers (default 1 = sequential).
     """
-    from alsdb.processing.forest import compute_forest_products
+    from alsdb.products._area import compute_area_products
 
-    compute_forest_products(
+    compute_area_products(
         provider,
         store,
         resolution,

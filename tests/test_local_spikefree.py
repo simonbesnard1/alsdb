@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from alsdb.processing._surface import CHMConfig, reconstruct_chm, surface_mask
-from alsdb.processing.spikefree import (
+from alsdb.methods._surface import CHMConfig, reconstruct_chm, surface_mask
+from alsdb.methods.spikefree import (
     FreezeGrid,
     local_freeze_distance,
     local_freeze_grid,
@@ -48,7 +48,7 @@ def _points(xyz):
 
 
 def test_uniform_grid_equals_scalar_freeze_distance():
-    pytest.importorskip("alsdb.processing._spikefree_native")
+    pytest.importorskip("alsdb.methods._spikefree_native")
     rng = np.random.default_rng(0)
     pts = _points(np.column_stack((rng.uniform(0, 20, (300, 2)), rng.uniform(0, 25, 300))))
     scalar = rasterize_spikefree(pts, (0, 0, 20, 20), 1.0, freeze_distance=2.0)
@@ -58,7 +58,7 @@ def test_uniform_grid_equals_scalar_freeze_distance():
 
 
 def test_each_side_uses_its_own_freeze_distance():
-    pytest.importorskip("alsdb.processing._spikefree_native")
+    pytest.importorskip("alsdb.methods._spikefree_native")
     pts = _points(np.vstack((_canopy_over_pit(0.0), _canopy_over_pit(10.0))))
     # Left: 4 m freezes the 2 m canopy triangles; right: 0.1 m freezes nothing.
     grid = FreezeGrid(np.array([[4.0, 0.1]]), 0.0, 5.0, 6.0)
@@ -69,7 +69,7 @@ def test_each_side_uses_its_own_freeze_distance():
 
 
 def test_reconstruct_chm_local_and_first_returns():
-    pytest.importorskip("alsdb.processing._spikefree_native")
+    pytest.importorskip("alsdb.methods._spikefree_native")
     from tests.test_surface_pipeline import scene
 
     arr = scene()

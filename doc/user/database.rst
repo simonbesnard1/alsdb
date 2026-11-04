@@ -52,7 +52,7 @@ GEDI waveform visualisation
 
 .. code-block:: python
 
-    from alsdb.processing.waveform import simulate_waveform
+    from alsdb.products.waveform import simulate_waveform
     from alsdb.utils.viz import plot_waveform, plot_rh_profile
 
     result = simulate_waveform(reader, center_x=308_500, center_y=4_689_000, year=2021)
@@ -199,7 +199,7 @@ Because the TileDB array stores all survey years together, comparing two surveys
 
 .. code-block:: python
 
-    from alsdb.processing.chm import compute_chm
+    from alsdb.products.chm import compute_chm
 
     for year in [2017, 2021]:
         compute_chm(provider=reader, store=store, resolution=1.0,

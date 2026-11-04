@@ -113,19 +113,17 @@ def _open_candidate(name, path, variable, resolution, year):
     array = group[variable]
     run = dict(array.attrs).get("processing_runs", {}).get(str(year))
     ny, nx = int(attrs["ny"]), int(attrs["nx"])
-    if run is None:  # legacy store without provenance: assume complete
-        tile_px = array.chunks[1]
-        done = np.ones((-(-ny // tile_px), -(-nx // tile_px)), bool)
+    if run is None:
+        raise ValueError(f"{name}: no run record for {year} in {path}")
+    tile_px = round(run["configuration"]["tile_size"] / resolution)
+    shape = (-(-ny // tile_px), -(-nx // tile_px))
+    if run["status"] == "complete":
+        done = np.ones(shape, bool)
     else:
-        tile_px = round(run["configuration"]["tile_size"] / resolution)
-        shape = (-(-ny // tile_px), -(-nx // tile_px))
-        if run["status"] == "complete":
-            done = np.ones(shape, bool)
-        else:
-            flat = np.zeros(shape[0] * shape[1], bool)
-            finished = ALSZarrStore(str(path), mode="r").completed_tiles(variable, resolution, year)
-            flat[[i for i in finished if i < flat.size]] = True
-            done = flat.reshape(shape)
+        flat = np.zeros(shape[0] * shape[1], bool)
+        finished = ALSZarrStore(str(path), mode="r").completed_tiles(variable, resolution, year)
+        flat[[i for i in finished if i < flat.size]] = True
+        done = flat.reshape(shape)
     grid = (float(attrs["x_origin"]), float(attrs["y_origin"]), ny, nx)
     return _Candidate(name, array, int(np.flatnonzero(times == year)[0]), done, tile_px), grid
 

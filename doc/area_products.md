@@ -1,39 +1,30 @@
-# Forest processor updates
+# Area-based products
 
-Use `compute_forest_products` when you need several products at the same
-resolution. It queries each buffered tile once and shares terrain normalization:
+`compute_metrics`, `compute_biomass` and `compute_gap_fraction` share one
+implementation: each buffered tile is queried once and normalised to height
+above ground once for everything a call computes.
 
 ```python
-from alsdb.processing import CHMConfig, compute_forest_products
+from alsdb.products.biomass import compute_metrics
+from alsdb.products.gap import compute_gap_fraction
 
-compute_forest_products(
-    provider, store, resolution=10, year=2014,
-    metrics=("h95", "cc", "density"),
-    chm=True, chm_config=CHMConfig(method="max"),
-    gap=True, lai=True,
-    tile_size=500, tile_buffer=50, n_workers=4,
-)
+compute_metrics(provider, store, resolution=10, year=2014, metrics=("h95", "cc"))
+compute_gap_fraction(provider, store, resolution=10, year=2014, lai=True)
 ```
 
-The existing `compute_metrics`, `compute_biomass` and `compute_gap_fraction`
-functions use the same implementation. `metrics=None` means all structural
-metrics; `metrics=()` requests none. `compute_metrics(metrics=("h95", "cc"))`
-avoids computing unused entropy, strata and height metrics. Circular BABA
-neighborhoods also support selection.
-
-Ground normalization allocates the output record array once. Point queries
-select the required attributes, and pending work is bounded to twice the worker
-count. `compute_all` also shares terrain between DTM and CHM. Raster writes
-remain locked per resolution for consistency; increasing workers indefinitely
-will not increase write throughput. Choose worker count with point density and
-buffer size in mind.
+`metrics=None` computes all structural metrics; `metrics=()` none. Selecting
+metrics avoids computing unused entropy, strata and height metrics. Circular
+BABA neighbourhoods (`baba_radius`) also support selection. Raster writes are
+locked per resolution, so more workers do not raise write throughput
+indefinitely: choose the worker count with point density and buffer size in
+mind.
 
 ## Biomass and resuming
 
 Supply the inputs and identity of a fitted model:
 
 ```python
-from alsdb.processing.biomass import compute_biomass, naesset_model
+from alsdb.products.biomass import compute_biomass, naesset_model
 
 compute_biomass(
     provider, store, resolution=10, year=2014,
@@ -98,8 +89,8 @@ measurement.
 
 ```python
 import numpy as np
-from alsdb.processing.pavd import compute_als_pavd_batch
-from alsdb.processing.waveform import simulate_batch
+from alsdb.products.pavd import compute_als_pavd_batch
+from alsdb.products.waveform import simulate_batch
 
 profiles = compute_als_pavd_batch(provider, shots, year=2014, n_workers=4)
 waveform_metrics = simulate_batch(
@@ -128,37 +119,11 @@ sampling density measured within that radius; the query includes an extra halo
 for this calculation. The default remains count weighting. These options do not
 provide radiometric calibration or establish equivalence with the GEDI simulator.
 
-## Trees
-
-PDAL's current `ClusterID` output is now mapped to the public `TreeID` field;
-previously this mismatch silently produced empty tree tables. Points are sorted
-by descending normalized height before segmentation. The default `radius` is
-now PDAL's 100 metres: it controls non-tree seed insertion, not crown search.
-The old height-based `adaptive_radius` heuristic is deprecated. See the
-[PDAL litree documentation](https://pdal.io/en/stable/stages/filters.litree.html).
-
-Tree metrics are calculated from complete buffered crowns before ownership is
-assigned by their highest point; XY breaks height ties. Buffered crown points
-are retained, including points outside the output extent. Exact duplicate apex
-coordinates are suppressed. Finite buffers can still change segmentation: use a
-buffer wider than the crowns and validate boundary behavior for the survey.
-
-`iter_segment_trees(...)` yields `(points, trees)` per tile with compact global
-uint64 IDs. Consume/write each result before requesting the next to keep memory
-bounded with respect to point data (apex deduplication retains a set of tree
-coordinates). `segment_trees(...)` still collects and returns the full result for
-compatibility. Point attributes are preserved by default; pass
-`point_attributes=()` for minimal fields, or list additional attributes to retain.
-Trees are grouped once for metrics; no allocation depends on the
-largest raw TreeID. `veg_classes` is configurable. Optional `voxel_size` remains
-Poisson sampling before segmentation, and changes the point support of crown
-metrics; no automatic decimation is applied.
-
 ## Validation and performance
 
 The regression tests cover buffer contamination, exact boundary ownership,
-selective metrics, shared normalization, provenance/restarts, full crowns,
-sparse tree IDs, slope-normalized PAVD, fixed pulse spacing, batch/single
+selective metrics, shared normalization, provenance/restarts,
+slope-normalized PAVD, fixed pulse spacing, batch/single
 agreement, duplicate row labels, and deterministic noise.
 
 See [the benchmark instructions](benchmarks/README.md) for a reproducible real

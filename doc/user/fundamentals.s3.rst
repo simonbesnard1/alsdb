@@ -76,7 +76,7 @@ Zarr store on S3
     )
 
     # Use exactly like a local store
-    from alsdb.processing.chm import compute_chm
+    from alsdb.products.chm import compute_chm
     compute_chm(provider=reader, store=store, resolution=1.0, year=2021)
 
 TileDB S3 performance tuning

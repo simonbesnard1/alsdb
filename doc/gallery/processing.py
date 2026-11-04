@@ -41,11 +41,11 @@ YEAR = 2021
 # Canopy Height Model / DTM / DSM
 # ---------------------------------
 #
-# :py:func:`alsdb.processing.chm.compute_all` computes DTM, DSM, and CHM in a
+# :py:func:`alsdb.products.chm.compute_all` computes DTM, DSM, and CHM in a
 # single tiled pass.  The default DTM uses a Delaunay TIN (``dtm_method="tin"``);
 # IDW and min-Z binning are available as alternatives.
 
-from alsdb.processing.chm import compute_all  # noqa: E402
+from alsdb.products.chm import compute_all  # noqa: E402
 
 compute_all(
     provider=reader,
@@ -68,7 +68,7 @@ compute_all(
 # Beer–Lambert inversion; use ``clumping_index`` to correct for foliage clumping
 # in conifers or dense broadleaf stands.
 
-from alsdb.processing.gap import LAI_K_PRESETS, compute_gap_fraction  # noqa: E402
+from alsdb.products.gap import LAI_K_PRESETS, compute_gap_fraction  # noqa: E402
 
 compute_gap_fraction(
     provider=reader,
@@ -86,7 +86,7 @@ compute_gap_fraction(
 # LiDAR structural metrics
 # -------------------------
 #
-# :py:func:`alsdb.processing.biomass.compute_metrics` writes 16 structural
+# :py:func:`alsdb.products.biomass.compute_metrics` writes 16 structural
 # metrics to the store:
 #
 # * **Height percentiles**: h50, h75, h95, hmax, hmean
@@ -94,7 +94,7 @@ compute_gap_fraction(
 # * **Height stratum proportions**: pv_0_2, pv_2_5, pv_5_10, pv_10_20,
 #   pv_20_40, pv_above40
 
-from alsdb.processing.biomass import compute_metrics  # noqa: E402
+from alsdb.products.biomass import compute_metrics  # noqa: E402
 
 compute_metrics(
     provider=reader,
@@ -111,10 +111,10 @@ compute_metrics(
 #
 # The Næsset (2002) power-law model ``AGB = a × h95^b × cc^c`` requires
 # region- and species-specific calibration against field inventory plots.
-# Use :py:func:`alsdb.processing.biomass.calibrate_naesset` to fit coefficients;
+# Use :py:func:`alsdb.products.biomass.calibrate_naesset` to fit coefficients;
 # pass ``return_cov=True`` to also retrieve the parameter covariance matrix.
 
-from alsdb.processing.biomass import (  # noqa: E402
+from alsdb.products.biomass import (  # noqa: E402
     compute_biomass,
 )
 
@@ -144,14 +144,14 @@ compute_biomass(
 # Aboveground biomass — scikit-learn model
 # -----------------------------------------
 #
-# :py:func:`alsdb.processing.biomass.wrap_sklearn_model` wraps any fitted
+# :py:func:`alsdb.products.biomass.wrap_sklearn_model` wraps any fitted
 # sklearn-compatible estimator as a ``model_fn``.  The default feature set is
 # all 16 metrics from ``compute_metrics()``; pass ``features=[...]`` to match
 # the column order used during training.
 
 # Example with a pre-trained Random Forest (not executed here):
 # from sklearn.ensemble import RandomForestRegressor
-# from alsdb.processing.biomass import wrap_sklearn_model
+# from alsdb.products.biomass import wrap_sklearn_model
 #
 # rf = RandomForestRegressor(n_estimators=200)
 # rf.fit(X_train, y_agb)   # X columns must match _METRIC_NAMES order
@@ -187,13 +187,13 @@ print(ds1m)
 # ---------------------------------
 #
 # Store all survey years in the same Zarr store, then use
-# :py:func:`alsdb.processing.change.compute_change` to derive pixel-wise
+# :py:func:`alsdb.products.change.compute_change` to derive pixel-wise
 # absolute change, relative change, and a gain/loss flag.
 #
 # Three derived variables are written per call:
 # ``{variable}_delta``, ``{variable}_delta_pct``, ``{variable}_change_flag``
 
-from alsdb.processing.change import compute_change  # noqa: E402
+from alsdb.products.change import compute_change  # noqa: E402
 
 for year in [2017, 2021, 2023]:
     compute_all(

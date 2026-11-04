@@ -107,11 +107,11 @@ Full API documentation and a conceptual guide are on [Read the Docs](https://als
 
 ---
 
-## CHM methods and uncertainty
+## CHM methods
 
 See [the CHM guide](doc/chm_methods.md) for native constrained-Delaunay spike-free
-processing, terrain support and quality flags, reproducible benchmarks, and
-conditional uncertainty ensembles. The native backend is optional:
+processing, terrain support, quality flags and reproducible benchmarks. The
+native backend is optional:
 
 ```bash
 pixi run -e spikefree build-spikefree
@@ -158,7 +158,7 @@ db.ingest("tile.laz", classification_config=classification)
 Ground methods: `csf` (default; PDAL, Zhang et al. 2016), `ptd` (progressive
 TIN densification, Axelsson 2000: the implementation lasR uses,
 [r-lidar/PTD](https://github.com/r-lidar/PTD) by Jean-Romain Roussel (MIT),
-vendored in `alsdb/processing/native/ptd` and built with
+vendored in `alsdb/methods/native/ptd` and built with
 `pixi run -e spikefree build-spikefree`; settings `ptd_seed_resolution`,
 `ptd_angle`, `ptd_distance`, `ptd_spacing`), `smrf` and `pmf` (PDAL). alsdb
 runs PTD as a tilt ensemble: once as is and on 7 copies tilted by 10° towards
@@ -169,7 +169,7 @@ run). Classifying rotated copies of the point cloud was Fabian Fischer's
 cut the DTM error of lasR's default PTD by 17-26%, most at low density, and was
 never worse than a single run; it costs 8 PTD runs, which run in parallel
 threads (`classification_workers` of `ingest`/`ingest_many`, by default the
-available CPUs divided by `n_workers`; `workers` of `alsdb.core.ptd.ptd_ground`)
+available CPUs divided by `n_workers`; `workers` of `alsdb.methods.ptd.ptd_ground`)
 ([doc/benchmarking.md](doc/benchmarking.md#ptd-tilt-ensemble)). On the benchmark's steep and tropical sites PTD gave the lowest DTM and
 CHM errors from about 1 pulse/m² up and is recommended; CSF held up best across densities
 (best at 0.5 pulses/m² in tropical forest); SMRF was good at full density but
@@ -185,21 +185,8 @@ same year and CRS, uses their points as classification context, and writes only
 the points owned by each source file. This avoids treating file edges as survey
 edges. Single-file `ingest()` cannot supply neighboring context.
 
-Ground classifiers can be compared on deterministic exact-label scenes:
-
-```bash
-python -m alsdb.benchmark classification \
-    --terrain flat rolling steep rough \
-    --density 0.5 2 10 \
-    --methods csf pmf smrf \
-    --output classification-results.json
-```
-
-The benchmark records point-level precision, recall, F1, balanced accuracy,
-runtime, and separate boundary/interior F1. Optional Python adapters are also
-available for FAST-GC and LAStools `lasground` (and pyLASR, to check alsdb's
-PTD against lasR); external tools are
-not installed as alsdb dependencies.
+Optional Python adapters are available for FAST-GC and LAStools `lasground`;
+external tools are not installed as alsdb dependencies.
 
 To compare classifiers against existing class-2 labels in real LAS/LAZ files:
 
@@ -229,7 +216,7 @@ LAZ file
 PDAL (readers.las)
    │  year / bbox / CRS ← LAZ header
    ▼
-ALSTile.iter_chunks()           ← optional classification filter
+ALSTile.iter_chunks()           ← optional classification (alsdb.methods)
    │  X, Y, attrs numpy arrays (1 M pts/chunk)
    ▼
 ALSDatabase.write()
@@ -241,8 +228,8 @@ TileDB array (local  /  s3://)
    │
    ├── ALSProvider.query_bbox()          → pandas / xarray
    │
-   ├── processing.chm / gap / biomass
-   │      │  ground TIN normalization + CHM reconstruction
+   ├── products.chm / gap / biomass
+   │      │  methods: ground TIN normalization, CHM reconstruction
    │      ▼
    │   ALSZarrStore  (Zarr v3, local / s3://)
    │      ├── 1m/   chm, dtm, dsm          (T × ny × nx) float32
@@ -250,7 +237,7 @@ TileDB array (local  /  s3://)
    │                h50…density            (T × ny × nx) float32
    │      store.to_dataset(resolution)     → xarray.Dataset (CRS-aware)
    │
-   └── processing.waveform               → GEDI-like RH metrics
+   └── products.waveform                 → GEDI-like RH metrics
 ```
 
 **TileDB schema**
@@ -275,4 +262,4 @@ EUPL-1.2 — see [LICENSE](LICENSE).
 
 Forest processing now supports shared CHM/metrics/gap computation, selective and
 reusable biomass metrics, batched footprints and streamed tree segmentation.
-See [the forest processing guide](doc/forest_processing.md).
+See [the area-based products guide](doc/area_products.md).

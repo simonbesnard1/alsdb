@@ -1,27 +1,16 @@
-"""Synthetic benchmark: simulated ALS over known forests, scored against exact truth.
+"""Simulated ALS over generated forests, scored against exact truth
 
-Each :class:`Scenario` (terrain x forest type x pulse density x canopy
-penetration) becomes a scene with an analytic terrain and voxelised crowns.
-HELIOS++ (Winiwarter et al. 2022, https://doi.org/10.1016/j.rse.2021.112772;
-LGPL-3, run as an external program from the optional ``helios`` pixi
-environment) flies a survey over it and writes
-classified LAZ. alsdb, lasR and LAStools then process that LAZ, and every
-output is scored against the truth of the same scene:
+Each :class:`Scenario` (terrain, forest type, pulse density, ...) becomes a
+scene with analytic terrain and voxel crowns. HELIOS++ (Winiwarter et al.
+2022, https://doi.org/10.1016/j.rse.2021.112772; LGPL-3, run from the
+optional ``helios`` environment) scans it; alsdb, lasR and LAStools process
+the result, and every output is scored against the scene's truth: the exact
+terrain, the voxel canopy top (at cell centres and as cell maxima) and the
+tree apices. Results go to ``<out_dir>/results.csv``; finished scenarios are
+skipped on rerun.
 
-- DTM: the 1 m terrain mesh HELIOS++ scans, exact.
-- CHM: the top of the voxel crowns HELIOS++ sees, relative to the terrain, at
-  each 1 m cell centre (what TIN-based CHMs estimate) and as the cell maximum
-  (what binned maxima estimate). The voxel grid is offset so cell centres
-  fall on voxel-column centres.
-- Trees: nominal apex heights and the voxel top near each stem.
-
-    python -m alsdb.benchmark synthetic <out_dir> --terrain flat rolling \\
+    python -m alsdb.benchmark synthetic <out_dir> --terrain flat rolling \
         --forest conifer broadleaf --density 2 10 --tools alsdb lasr
-
-Run it from the ``spikefree`` environment (native spike-free); HELIOS++ and
-lasR are called in their own environments. Results go to
-``<out_dir>/results.csv`` (one row per scenario and method); finished
-scenarios are skipped on rerun.
 """
 
 import csv
@@ -178,11 +167,7 @@ CLUMP_SIZE, CLUMP_SPREAD = 8, 1.2
 
 
 def make_trees(forest, size, rng, *, placement="regular", understorey=False):
-    """Stems of every layer: dict of arrays x, y (scene-local), h, r, base, cone, low (bool).
-
-    ``low`` marks the understorey. With the defaults the trees (and the random
-    draws) are those of earlier versions, so existing scenarios are unchanged.
-    """
+    """Return the stems of every layer: arrays x, y, h, r, base, cone and low (understorey)."""
     out = {k: [] for k in ("x", "y", "h", "r", "base", "cone", "low")}
     layers = [(layer, False) for layer in FOREST_TYPES[forest]["layers"]]
     if understorey:
@@ -456,12 +441,10 @@ def make_scene(scenario, out_dir):
 
 
 def survey_settings(density):
-    """Pulse rate and mirror frequency for *density* pulses/m2 (calibrated in HELIOS++).
+    """Pulse rate and mirror frequency giving *density* pulses/m2
 
-    density = rate / (speed * swath), swath = 2 * height * tan(half angle); on
-    flat ground HELIOS++ gave 4.59 pulses/m2 for a predicted 4.66. The mirror
-    frequency makes along-track line spacing (speed / 2f) equal to the
-    point spacing.
+    density = rate / (speed * swath), with swath = 2 * height * tan(half
+    angle); the mirror frequency makes the line spacing equal the point spacing.
     """
     swath = 2 * FLIGHT_HEIGHT * math.tan(math.radians(SCAN_HALF_ANGLE))
     prf = round(density * SPEED * swath)
@@ -541,7 +524,7 @@ def run_tools(scene_dir, tools=("alsdb", "lasr"), *, lastools_dir=None, repo=Non
 
     if "alsdb" in tools:
         from alsdb.core.alsdatabase import ALSDatabase
-        from alsdb.processing.chm import compute_all
+        from alsdb.products.chm import compute_all
         from alsdb.storage.zarr_store import ALSZarrStore
 
         uri = scene_dir / "alsdb" / "tiledb"

@@ -15,7 +15,7 @@ Reads two time slices of any gridded variable from an
 Usage::
 
     from alsdb.storage import ALSZarrStore
-    from alsdb.processing.change import compute_change
+    from alsdb.products.change import compute_change
 
     store = ALSZarrStore("output/spain.zarr")
 

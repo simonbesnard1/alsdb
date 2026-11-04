@@ -59,10 +59,10 @@ Canopy Height Model
    :toctree: generated/
    :recursive:
 
-   processing.chm.compute_chm
-   processing.chm.compute_dtm
-   processing.chm.compute_dsm
-   processing.chm.compute_all
+   products.chm.compute_chm
+   products.chm.compute_dtm
+   products.chm.compute_dsm
+   products.chm.compute_all
 
 Gap fraction and LAI
 ---------------------
@@ -71,7 +71,7 @@ Gap fraction and LAI
    :toctree: generated/
    :recursive:
 
-   processing.gap.compute_gap_fraction
+   products.gap.compute_gap_fraction
 
 Structural metrics and biomass
 -------------------------------
@@ -80,11 +80,11 @@ Structural metrics and biomass
    :toctree: generated/
    :recursive:
 
-   processing.biomass.compute_metrics
-   processing.biomass.compute_biomass
-   processing.biomass.naesset_model
-   processing.biomass.calibrate_naesset
-   processing.biomass.wrap_sklearn_model
+   products.biomass.compute_metrics
+   products.biomass.compute_biomass
+   products.biomass.naesset_model
+   products.biomass.calibrate_naesset
+   products.biomass.wrap_sklearn_model
 
 Multi-temporal change detection
 --------------------------------
@@ -93,16 +93,7 @@ Multi-temporal change detection
    :toctree: generated/
    :recursive:
 
-   processing.change.compute_change
-
-Individual tree segmentation
------------------------------
-
-.. autosummary::
-   :toctree: generated/
-   :recursive:
-
-   processing.trees.segment_trees
+   products.change.compute_change
 
 Waveform simulation
 --------------------
@@ -111,8 +102,8 @@ Waveform simulation
    :toctree: generated/
    :recursive:
 
-   processing.waveform.simulate_waveform
-   processing.waveform.simulate_batch
+   products.waveform.simulate_waveform
+   products.waveform.simulate_batch
 
 Tiling utilities
 -----------------
@@ -121,12 +112,12 @@ Tiling utilities
    :toctree: generated/
    :recursive:
 
-   processing._tiling.tile_bboxes
-   processing._tiling.run_tiled
-   processing._tiling.array_crs
-   processing._tiling.array_data_bbox
-   processing._tiling.check_year_exists
-   processing._tiling.check_bbox_overlap
+   products._tiling.tile_bboxes
+   products._tiling.run_tiled
+   products._tiling.array_crs
+   products._tiling.array_data_bbox
+   products._tiling.check_year_exists
+   products._tiling.check_bbox_overlap
 
 Visualisation
 =============

@@ -7,7 +7,7 @@ pixi run -e spikefree python doc/benchmarks/synthetic_chm.py /tmp/chm-benchmark
 ```
 
 This generates a known sloping canopy surface and 1,200 lower returns, then runs
-max binning, threshold pit-free, highest-subcell TIN and native spike-free in
+max binning, threshold pit-free and native spike-free in
 separate processes. The JSON report includes versions, parameters, input hash,
 memory/time diagnostics, comparisons to the known plane, and tiled comparisons.
 
@@ -32,7 +32,7 @@ pixi run python doc/benchmarks/forest_processors.py \
 ```
 
 The optional database section writes temporary TileDB/Zarr stores and measures
-actual reads, nearby footprints, combined raster products and tree segmentation.
+actual reads, nearby footprints and combined raster products.
 The checked-in [report](brazil_forest_results.json) uses the first 500,000 records
 of the Brazil file (125,787 points in the 100 × 100 m output square). This bounded
 sample is not spatially representative of the whole survey. The report records
@@ -60,13 +60,6 @@ measurement includes ownership filtering, so the 3.6× ratio should not be
 interpreted as a general speedup on already-cropped arrays. Exact pixel-edge
 ownership and exclusion of unsupported heights can legitimately change results;
 the JSON records differences against the legacy implementation.
-
-The corrected tree processor returned **7 owned crowns / 1,972 sampled points**
-in **0.963 s**, using a 15 × 15 m crop, 10 m buffer, `voxel_size=0.5`, and minimal
-point attributes. This verifies a nonempty real-data execution, not crown accuracy
-against a field inventory. PDAL input sorting, its `ClusterID` output and its
-non-tree seed radius are now handled correctly. Different point ordering can
-change Poisson sampling and the resulting crowns.
 
 The local LAS reader emitted PROJ lookup warnings; these benchmarks use the
 native input XY coordinates without reprojection. CRS/reprojection accuracy is

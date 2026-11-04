@@ -9,6 +9,8 @@ from scipy.spatial import cKDTree
 # ASPRS ground (2) and water (9): water returns are the terrain surface over
 # water bodies, as in lidR's normalize_height/rasterize_terrain defaults.
 GROUND_CLASSES = (2, 9)
+# LAS classification codes treated as "vegetation".
+VEG_CLASSES = (3, 4, 5)  # ASPRS low, medium and high vegetation
 
 
 class _Tin:

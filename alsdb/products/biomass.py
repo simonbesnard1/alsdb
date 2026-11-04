@@ -2,70 +2,24 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""
-Above-Ground Biomass (AGB) estimation from TileDB ALS point clouds.
+"""Above-ground biomass (AGB) from ALS point clouds
 
-Pipeline
---------
-1. Query TileDB → numpy structured array.
-2. Interpolate a buffered terrain TIN to attach ``HeightAboveGround``;
-   unsupported heights remain NaN unless extrapolation is explicitly enabled.
-3. Compute per-cell LiDAR metrics in Python/scipy:
+Points are normalised with a buffered terrain TIN, per-cell metrics are
+computed (height percentiles, canopy cover, density, foliage height
+diversity, height-stratum proportions) and an allometric model turns them
+into AGB (Mg/ha), written to an :class:`~alsdb.storage.ALSZarrStore`.
 
-   ========  ===============================================================
-   h50       50th-percentile HAG of vegetation points (m)
-   h75       75th-percentile HAG of vegetation points (m)
-   h95       95th-percentile HAG of vegetation points (m)
-   hmean     Mean HAG of vegetation points (m)
-   cc        Canopy cover — fraction of first returns with HAG > threshold
-   density   Total point density (points m⁻²)
-   ========  ===============================================================
+Height metrics use all vegetation returns; canopy cover (``cc``) uses first
+returns of any class.
 
-   ``cc`` and the height metrics are deliberately computed on different
-   point populations, not an oversight: ``cc`` uses *first returns only*
-   and *no classification filter* (any point with ``ReturnNumber == 1``
-   with supported height counts, matching the first-return-cover definition used in
-   Næsset-style ABA studies), while ``h50``/``h75``/``h95``/``hmean``/etc.
-   use *all returns*, restricted to vegetation classes (see ``VEG_CLASSES``).
-   This means ``cc`` and ``h95`` respond differently to point density -
-   worth knowing before treating them as directly comparable, and worth
-   reconsidering if your survey's return/classification conventions differ
-   from what this was designed against.
+The default model is a Næsset-style power law, ``AGB = a * h95^b * cc^c``
+with generic coefficients ``a=0.8, b=1.8, c=0.5``: calibrate it against
+field plots (:func:`calibrate_naesset`) before using the results.
 
-4. Apply an allometric model ``AGB = f(metrics)`` → Mg ha⁻¹.
-5. Write results directly to an :class:`~alsdb.storage.ALSZarrStore`.
+Example::
 
-Default model
--------------
-A Næsset-style power law::
-
-    AGB = a × h95^b × cc^c
-
-with default coefficients ``a=0.8, b=1.8, c=0.5``.  These are approximate
-generic values — **calibrate against field inventory plots** for your region
-and species composition before using the output scientifically.
-
-Usage::
-
-    from alsdb import ALSProvider
-    from alsdb.storage import ALSZarrStore
-    from alsdb.processing.biomass import compute_biomass, compute_metrics, wrap_sklearn_model
-
-    provider = ALSProvider(storage_type="local", uri="array_")
-    store = ALSZarrStore("output/spain.zarr")
-
-    # Structural metrics
     compute_metrics(provider, store, resolution=10.0, year=2021)
-
-    # AGB with default model
     compute_biomass(provider, store, resolution=10.0, year=2021)
-
-    # AGB with a custom model
-    def my_model(metrics):
-        return 1.2 * metrics["h95"] ** 2.1 * metrics["cc"] ** 0.6
-
-    compute_biomass(provider, store, resolution=10.0, year=2021,
-                    model_fn=my_model)
 """
 
 from __future__ import annotations
@@ -76,13 +30,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from alsdb.processing._tiling import (
-    VEG_CLASSES as _VEG_CLASSES,
-)
-from alsdb.processing._tiling import (
-    baba_neighbourhoods,
-    flip_to_north_up,
-)
+from alsdb.methods._grid import flip_to_north_up
+from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
+from alsdb.products._tiling import baba_neighbourhoods
 
 if TYPE_CHECKING:
     from alsdb.providers.tiledb_provider import TileDBProvider
@@ -133,19 +83,9 @@ _HEIGHT_STRATA_NAMES: tuple[str, ...] = (
     "pv_above40",
 )
 
-# FHD/VCI vertical binning: 1 m bands up to _FHD_MAX_H.
-# Normalisation divides by log(_FHD_N_BINS) - the TOTAL bin count, not the
-# number actually occupied - a fixed reference denominator convention (in
-# the vein of Schneider et al. 2017's normalize-to-[0,1] approach), not a
-# height-independent one: a cell's *maximum achievable* entropy is bounded
-# by log(occupied bins), which can never exceed log(bins its own canopy
-# height actually spans). A perfectly even 5 m canopy can occupy at most 5
-# of the 80 bins, capping its VCI near log(5)/log(80) ~= 0.37, regardless of
-# how even its distribution is - so VCI conflates vertical evenness with
-# absolute canopy height, it does not factor height out. If a pure evenness
-# metric (independent of height) is what's needed instead, normalise by
-# log(occupied bins) or log(bins up to that cell's own hmax) rather than
-# log(_FHD_N_BINS).
+# FHD/VCI vertical binning: 1 m bands up to _FHD_MAX_H. VCI divides by
+# log(_FHD_N_BINS), the total bin count (Schneider et al. 2017), so it grows
+# with canopy height as well as evenness.
 _FHD_BIN_SIZE: float = 1.0
 _FHD_MAX_H: float = 80.0  # raised from 60 m to cover tall tropical/boreal forests
 _FHD_BINS = np.arange(0.0, _FHD_MAX_H + _FHD_BIN_SIZE, _FHD_BIN_SIZE)
@@ -154,7 +94,7 @@ _VCI_MAX_ENTROPY: float = np.log(_FHD_N_BINS)
 
 
 def _fhd_from_hag(hag_vals: np.ndarray) -> float:
-    """Shannon entropy of the vertical HAG distribution (Foliage Height Diversity)."""
+    """Return the foliage height diversity (Shannon entropy of the height distribution)."""
     if len(hag_vals) == 0:
         return np.nan
     counts, _ = np.histogram(hag_vals, bins=_FHD_BINS)
@@ -166,14 +106,7 @@ def _fhd_from_hag(hag_vals: np.ndarray) -> float:
 
 
 def _vci_from_hag(hag_vals: np.ndarray) -> float:
-    """Vegetation Complexity Index — FHD normalised by log(_FHD_N_BINS).
-
-    Not height-independent: this rewards tall *and* evenly-filled canopies,
-    it does not isolate evenness from height (see the comment above
-    _FHD_BIN_SIZE) - a short canopy cannot reach the same VCI as a tall one
-    even if both are perfectly even, since a short canopy structurally
-    cannot occupy as many of the fixed bins.
-    """
+    """Return the vegetation complexity index (FHD normalised by its maximum); it grows with canopy height."""
     fhd = _fhd_from_hag(hag_vals)
     if np.isnan(fhd) or _VCI_MAX_ENTROPY == 0:
         return np.nan
@@ -194,27 +127,19 @@ def _extract_metrics(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
-    """
-    Compute per-cell LiDAR structural metrics over *bbox*.
-
-    Returns a dict ``{name: (ny, nx) float32 array}`` in north-up
-    orientation.  Empty cells are ``np.nan``.
+    """Compute per-cell structural metrics over *bbox*
 
     Parameters
     ----------
     min_density:
-        Minimum total point density (pts m⁻²) required for a cell to receive
-        metric values.  Cells below this threshold are set to ``np.nan`` for
-        all metrics.  Default ``0.0`` disables the guard.
+        Cells with fewer points per m2 get NaN; 0 disables the check.
     veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS). Not universal across surveys -- see
-        ``pavd.py``'s module docstring for a real dataset that uses a
-        different code entirely; verify with
-        ``np.unique(points["Classification"], return_counts=True)`` before
-        trusting the default on a new array.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``); check the
+        classes present in your survey.
+
+    Returns a dict ``{name: (ny, nx) float32 array}``, north-up, NaN where empty.
     """
-    from alsdb.processing._grid import GridSpec
+    from alsdb.methods._grid import GridSpec
 
     requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
     unknown = set(requested) - set(_METRIC_NAMES)
@@ -302,20 +227,15 @@ def naesset_model(
     b: float = 1.8,
     c: float = 0.5,
 ) -> np.ndarray:
-    """
-    Næsset-style power-law AGB model (Mg ha⁻¹).
-
-    ``AGB = a × h95^b × cc^c``
+    """Næsset-style power-law AGB model (Mg/ha): ``AGB = a * h95^b * cc^c``
 
     Parameters
     ----------
     metrics:
-        Dict as returned by :func:`_extract_metrics`.
+        Metric dict from :func:`_extract_metrics`.
     a, b, c:
-        Model coefficients.  Defaults are placeholder generic values —
-        **always calibrate against field inventory plots** before using
-        results scientifically.  Use :func:`calibrate_naesset` to fit
-        region-specific coefficients.
+        Coefficients; the defaults are generic, calibrate them with
+        :func:`calibrate_naesset`.
     """
     import warnings
 
@@ -352,60 +272,30 @@ def calibrate_naesset(
     p0: tuple[float, float, float] = (0.8, 1.8, 0.5),
     return_cov: bool = False,
 ) -> tuple[float, float, float] | tuple[tuple[float, float, float], np.ndarray]:
-    """
-    Fit Næsset power-law AGB coefficients (a, b, c) to field-plot data.
-
-    Solves ``AGB = a × h95^b × cc^c`` via nonlinear least-squares
-    (``scipy.optimize.curve_fit``).
+    """Fit the coefficients of :func:`naesset_model` to field plots
 
     Parameters
     ----------
     h95:
-        P95 canopy height from ALS (m), one value per field plot.
+        95th height percentile per plot (m).
     cc:
-        Canopy cover fraction (0–1), one value per field plot.
+        Canopy cover per plot (0-1).
     agb_field:
-        Measured AGB from field inventory (Mg ha⁻¹), one value per field plot.
+        Field AGB per plot (Mg/ha).
     p0:
-        Initial parameter guess ``(a, b, c)``.  Defaults to the generic priors.
+        Initial ``(a, b, c)``.
     return_cov:
-        If ``True``, also return the 3×3 parameter covariance matrix from
-        ``curve_fit`` so callers can assess calibration uncertainty.  Diagonal
-        elements are the variance of each coefficient; off-diagonals are
-        cross-covariances.  Infinite values indicate a poorly constrained fit.
+        Also return the parameter covariance matrix.
 
     Returns
     -------
     tuple[float, float, float]
-        Fitted ``(a, b, c)`` coefficients for use in :func:`naesset_model`.
-        When ``return_cov=True``, returns ``((a, b, c), pcov)`` instead.
+        ``(a, b, c)``, or ``((a, b, c), pcov)`` with ``return_cov=True``.
 
     Raises
     ------
     ValueError
-        If fewer than 20 valid (non-NaN, non-zero) field plots are provided.
-        A 3-parameter power-law model fit on fewer plots has nearly zero
-        degrees of freedom and will be severely overfit.
-
-    Warns
-    -----
-    UserWarning
-        If valid plot count is below 50, a calibration-quality warning is
-        emitted.  Reliable coefficient estimation typically requires ≥ 50
-        independent plots (Næsset 2002; Andersen et al. 2011).
-
-    Example
-    -------
-    ::
-
-        a, b, c = calibrate_naesset(h95_plots, cc_plots, agb_plots)
-        compute_biomass(provider, store, resolution=10.0, year=2021,
-                        model_fn=lambda m: naesset_model(m, a=a, b=b, c=c))
-
-        # With uncertainty:
-        (a, b, c), pcov = calibrate_naesset(h95_plots, cc_plots, agb_plots,
-                                             return_cov=True)
-        a_std, b_std, c_std = np.sqrt(np.diag(pcov))
+        With fewer than 20 valid plots (a warning is issued below 50).
     """
     import warnings
 
@@ -468,47 +358,19 @@ def wrap_sklearn_model(
     estimator,
     features: list[str] | None = None,
 ) -> Callable:
-    """
-    Wrap a fitted scikit-learn estimator as a ``model_fn`` for
-    :func:`compute_biomass`.
-
-    Handles the reshaping between the per-cell metric dict used internally
-    and the ``(n_samples, n_features)`` matrix expected by sklearn, and
-    masks NaN pixels so they are never passed to ``predict()``.
+    """Wrap a fitted scikit-learn estimator as a ``model_fn`` for :func:`compute_biomass`
 
     Parameters
     ----------
     estimator:
-        Any fitted sklearn-compatible estimator that exposes a
-        ``predict(X)`` method (e.g. ``RandomForestRegressor``,
-        ``GradientBoostingRegressor``, ``Pipeline``, …).
+        Fitted estimator with ``predict(X)``.
     features:
-        Ordered list of metric names to use as model features.
-        Defaults to all sixteen standard metrics (``_METRIC_NAMES``):
-        height percentiles, canopy cover, density, FHD, VCI, CRR, and the
-        six height-stratum proportions.  The order must match the feature
-        order used during training.  Pass an explicit list (e.g.
-        ``["h50", "h95", "cc"]``) when the model was trained on a subset.
+        Metric names in training order; default all metrics.
 
     Returns
     -------
     Callable
-        A function ``model_fn(metrics) → np.ndarray`` compatible with
-        the ``model_fn`` parameter of :func:`compute_biomass`.
-
-    Examples
-    --------
-    ::
-
-        from sklearn.ensemble import RandomForestRegressor
-        from alsdb.processing.biomass import compute_biomass, wrap_sklearn_model
-
-        rf = RandomForestRegressor(n_estimators=200)
-        rf.fit(X_train, y_train)  # X columns must match _METRIC_NAMES order
-
-        model_fn = wrap_sklearn_model(rf)
-        compute_biomass(provider, store, resolution=10.0, year=2021,
-                        model_fn=model_fn)
+        ``model_fn(metrics) -> np.ndarray``; NaN cells are not predicted.
     """
     feat = list(features) if features is not None else _METRIC_NAMES
 
@@ -544,23 +406,15 @@ def _extract_metrics_baba(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
-    """
-    Compute per-cell LiDAR metrics using a circular neighbourhood of radius
-    *baba_radius* around each cell centre (Buffered Area-Based Approach).
+    """Compute per-cell metrics from all points within *baba_radius* of each cell centre
 
-    Each output cell's metrics are derived from all points within *baba_radius*
-    metres of the cell centre, not just points within the cell itself.  This
-    gives statistically robust estimates even at fine output resolutions where
-    individual cells may contain very few points.
-
-    The caller must ensure the queried point array extends at least *baba_radius*
-    beyond *bbox* on all sides (i.e. ``tile_buffer >= baba_radius``).
+    Buffered area-based approach: robust at fine resolutions. The points must
+    extend at least *baba_radius* beyond *bbox*.
 
     Parameters
     ----------
     min_density:
-        Minimum point density (pts m⁻²) for a neighbourhood to receive metric
-        values.  Cells below this threshold are set to ``np.nan``.
+        Neighbourhoods with fewer points per m2 get NaN.
     """
     requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
     if set(requested) - set(_METRIC_NAMES):
@@ -643,50 +497,40 @@ def compute_metrics(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> None:
-    """
-    Compute LiDAR structural metrics and write them into *store*.
+    """Compute structural metrics and write them to *store*
 
-    Metrics written: ``h50``, ``h75``, ``h95``, ``hmax``, ``hmean``, ``cc``,
-    ``density``, ``fhd``, ``vci``, ``crr``, ``pv_0_2``, ``pv_2_5``,
-    ``pv_5_10``, ``pv_10_20``, ``pv_20_40``, ``pv_above40`` — each as a
-    separate variable at *resolution*.
+    Writes h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr and the
+    height-stratum proportions pv_0_2 ... pv_above40.
 
     Parameters
     ----------
     provider:
-        TileDB provider instance.
+        Point cloud provider.
     store:
         :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
-        Grid cell size in metres (10–25 m typical for biomass).
+        Cell size (m).
     bbox:
-        Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
+        Optional ``(min_x, min_y, max_x, max_y)``.
     year:
-        Survey year filter.
+        Survey year.
     cc_threshold:
-        HAG threshold (m) used to define "canopy" for the cover metric.
+        Height (m) defining canopy for cover.
     min_density:
-        Minimum total point density (pts m⁻²) for a cell to receive metric
-        values.  Cells below this threshold are set to ``np.nan`` for all
-        metrics.  Typical values: 0.5 (sparse survey), 1.0 (moderate),
-        4.0 (dense modern ALS).  Default ``0.0`` disables the guard.
+        Cells with fewer points per m2 get NaN; 0 disables the check.
     veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS). Not universal across surveys -- see
-        ``pavd.py``'s module docstring for a real dataset that uses a
-        different code entirely; verify with
-        ``np.unique(classification, return_counts=True)`` before trusting
-        the default on a new array.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``); check the
+        classes present in your survey.
     tile_size:
-        Sub-tile width and height in metres (default 500 m).
+        Processing tile size (m).
     tile_buffer:
-        Overlap buffer for terrain interpolation (default 50 m).
+        Buffer for terrain interpolation (m).
     n_workers:
-        Parallel workers (default 1 = sequential).
+        Parallel workers.
     """
-    from alsdb.processing.forest import compute_forest_products
+    from alsdb.products._area import compute_area_products
 
-    compute_forest_products(
+    compute_area_products(
         provider,
         store,
         resolution,
@@ -729,46 +573,41 @@ def compute_biomass(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> None:
-    """
-    Estimate Above-Ground Biomass (AGB) and write into *store*.
+    """Estimate above-ground biomass and write it to *store*
 
     Parameters
     ----------
     provider:
-        TileDB provider instance.
+        Point cloud provider.
     store:
         :class:`~alsdb.storage.ALSZarrStore` target.
     resolution:
-        Grid cell size in metres.
+        Cell size (m).
     model_fn:
-        Callable ``model_fn(metrics) → np.ndarray`` mapping the metric dict
-        to an AGB grid (Mg ha⁻¹).  Defaults to :func:`naesset_model`.
+        ``model_fn(metrics) -> AGB grid`` (Mg/ha); default :func:`naesset_model`.
     bbox:
-        Optional spatial filter ``(min_x, min_y, max_x, max_y)``.
+        Optional ``(min_x, min_y, max_x, max_y)``.
     year:
-        Survey year filter.
+        Survey year.
     cc_threshold:
-        HAG threshold (m) for the canopy cover metric.
+        Height (m) defining canopy for cover.
     min_density:
-        Minimum total point density (pts m⁻²) required before AGB is
-        estimated for a cell.  See :func:`compute_metrics` for guidance.
+        Cells with fewer points per m2 get NaN.
     veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS). See :func:`compute_metrics` for the same
-        parameter's full caveat -- not universal across surveys.
+        LAS classes treated as vegetation (default ``(3, 4, 5)``); check the
+        classes present in your survey.
     overwrite:
-        If ``False`` (default) and biomass data for *year* already exists
-        in the store, the computation is skipped.
+        Recompute when biomass for *year* exists.
     tile_size:
-        Sub-tile width and height in metres (default 500 m).
+        Processing tile size (m).
     tile_buffer:
-        Overlap buffer for terrain interpolation (default 50 m).
+        Buffer for terrain interpolation (m).
     n_workers:
-        Parallel workers (default 1 = sequential).
+        Parallel workers.
     """
-    from alsdb.processing.forest import compute_forest_products
+    from alsdb.products._area import compute_area_products
 
-    compute_forest_products(
+    compute_area_products(
         provider,
         store,
         resolution,
@@ -794,13 +633,11 @@ def compute_biomass(
 
 
 def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
-    """Spatially grouped cross-validation of the three-parameter biomass model.
+    """Spatially grouped cross-validation of :func:`naesset_model`
 
-    Entire supplied spatial blocks are held out together. Returns out-of-fold
-    predictions, residual RMSE/bias and empirical residual quantiles in biomass
-    units. These describe predictive error on the supplied plots, not just
-    coefficient uncertainty; they are not calibrated pixel confidence intervals.
-    The caller must choose blocks larger than the relevant spatial dependence.
+    Whole spatial groups are held out together. Returns out-of-fold
+    predictions, residual RMSE and bias, and residual quantiles (prediction
+    error on the plots, not pixel confidence intervals).
     """
     h95, cc, agb = (np.asarray(a, dtype=float) for a in (h95, cc, agb_field))
     groups = np.asarray(spatial_groups)

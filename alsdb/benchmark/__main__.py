@@ -1,7 +1,6 @@
 """Command-line entry point for alsdb validation benchmarks."""
 
 import argparse
-import json
 import sys
 
 
@@ -28,7 +27,7 @@ def _add_ptd_arguments(p):
 
     Defaults: alsdb's (tilt ensemble); ``--ptd-tilt-runs 1 --ptd-votes 1
     --ptd-angle 30 --ptd-distance 2`` is lasR's single run."""
-    from alsdb.core.ptd import DEFAULTS as d
+    from alsdb.methods.ptd import DEFAULTS as d
 
     for flag, key, kind, unit in (
         ("--ptd-res", "seed_resolution", float, "seed cell (m)"),
@@ -48,7 +47,7 @@ def _ptd_sets(args):
     import itertools
 
     from alsdb.benchmark.classification import PTDParameters
-    from alsdb.core.ptd import LASR_DEFAULTS
+    from alsdb.methods.ptd import LASR_DEFAULTS
 
     sets = [
         PTDParameters(*values)
@@ -79,15 +78,6 @@ def main(argv=None):
     sub.add_parser("points", help="all alsdb methods on one prepared point set (see points --help)")
     sub.add_parser("timing", help="compute-performance benchmark (see timing --help)")
     sub.add_parser("timing-report", help="summarise a timing CSV: timing-report <timings.csv>")
-
-    p = sub.add_parser("classification", help="synthetic ground-classification benchmark")
-    p.add_argument("--terrain", nargs="+", default=["flat", "rolling", "steep", "rough"])
-    p.add_argument("--density", type=float, nargs="+", default=[0.5, 2.0, 10.0])
-    p.add_argument("--seed", type=int, nargs="+", default=[0, 1, 2])
-    p.add_argument("--size", type=float, default=100.0)
-    p.add_argument("--methods", nargs="+", default=["csf", "pmf", "smrf"])
-    p.add_argument("--boundary-width", type=float, default=5.0)
-    p.add_argument("--output", help="write JSON results here")
 
     p = sub.add_parser(
         "classification-files", help="compare ground classifiers on classified LAS/LAZ files"
@@ -251,22 +241,6 @@ def main(argv=None):
     p.add_argument("--strips", type=float, nargs=3, default=[100.0, 30.0, 35.0],
                    metavar=("PERIOD", "WIDTH", "OFFSET"), help="dense strips (m)")  # fmt: skip
 
-    p = sub.add_parser(
-        "uls-ground", help="ground labels from the classifiers' consensus (ULS without them)"
-    )
-    p.add_argument("laz_dir")
-    p.add_argument("out_dir", help="classified copy of the area's files (all points and fields)")
-    p.add_argument("--x0", type=float, required=True, help="area lower-left x")
-    p.add_argument("--y0", type=float, required=True)
-    p.add_argument("--size", type=float, default=190.0, help="area side (m): core, margin, buffer")
-    p.add_argument("--tools", nargs="+", default=["csf", "pmf", "smrf", "ptd"],
-                   choices=["csf", "pmf", "smrf", "ptd"])  # fmt: skip
-    p.add_argument("--max-density", type=float, default=200.0, help="points/m2 for classifying")
-    p.add_argument(
-        "--band", type=float, default=0.15, help="ground: within this of the consensus (m)"
-    )
-    p.add_argument("--crs", help="default: from the LAZ headers")
-
     p = sub.add_parser("lidarhd-frame", help="tree cover and slope of every 2 km block of France")
     p.add_argument("out_csv")
     p = sub.add_parser("lidarhd-index", help="every Lidar HD tile: classification method, dates")
@@ -278,7 +252,9 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--min-distance", type=float, default=50_000.0, help="between blocks (m)")
     p.add_argument("--cores", type=int, default=4, help="scored 200 m cores per block")
-    p.add_argument("--index", help="tile index (lidarhd-index): only hand-corrected blocks")
+    p.add_argument("--index", help="tile index (lidarhd-index): only fully published blocks")
+    p.add_argument("--any-classification", action="store_true",
+                   help="also blocks with IGN's automatic classification (default: hand-corrected)")  # fmt: skip
     p = sub.add_parser("lidarhd-download", help="download the tiles of the selected blocks")
     p.add_argument("selection_csv")
     p.add_argument("data_dir")
@@ -298,31 +274,7 @@ def main(argv=None):
     p.add_argument("--npz", help="save stats, residual samples and maps here")
 
     args = parser.parse_args(argv)
-    if args.command == "classification":
-        import itertools
-
-        from alsdb.benchmark.classification import (
-            SyntheticClassificationScenario,
-            run_synthetic_grid,
-        )
-
-        scenarios = [
-            SyntheticClassificationScenario(terrain=t, density=d, size=args.size, seed=s)
-            for t, d, s in itertools.product(args.terrain, args.density, args.seed)
-        ]
-        rows = run_synthetic_grid(
-            scenarios,
-            methods=tuple(args.methods),
-            boundary_width=args.boundary_width,
-        )
-        payload = json.dumps(rows, indent=2)
-        if args.output:
-            from pathlib import Path
-
-            Path(args.output).write_text(payload)
-        else:
-            print(payload)
-    elif args.command == "classification-files":
+    if args.command == "classification-files":
         from pathlib import Path
 
         from alsdb.benchmark.classification import run_file_benchmark
@@ -432,12 +384,6 @@ def main(argv=None):
         else:
             for scene in decimated.build_area(args.out_dir, area, versions, **mix):
                 print(scene)
-    elif args.command == "uls-ground":
-        from alsdb.benchmark.classification import consensus_ground
-
-        box = (args.x0, args.y0, args.x0 + args.size, args.y0 + args.size)
-        print(json.dumps(consensus_ground(args.laz_dir, box, args.out_dir, methods=tuple(args.tools),
-                                          max_density=args.max_density, band=args.band, crs=args.crs), indent=2))  # fmt: skip
     elif args.command == "lidarhd-frame":
         from alsdb.benchmark.lidarhd import build_frame
 
@@ -450,7 +396,8 @@ def main(argv=None):
         from alsdb.benchmark.lidarhd import add_cores, draw
 
         draw(args.frame_csv, args.out_csv, per_stratum=args.per_stratum, seed=args.seed,
-             min_distance=args.min_distance, index_csv=args.index)  # fmt: skip
+             min_distance=args.min_distance, index_csv=args.index,
+             hand_corrected=not args.any_classification)  # fmt: skip
         add_cores(args.out_csv, n_cores=args.cores, seed=args.seed)
         print(args.out_csv)
     elif args.command == "lidarhd-download":

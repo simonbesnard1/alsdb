@@ -84,7 +84,7 @@ def test_measure_counts_detached_workers(tmp_path):
 
 def _have_native_spikefree():
     try:
-        from alsdb.processing.spikefree import require_backend
+        from alsdb.methods.spikefree import require_backend
 
         require_backend()
         return True

@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.chm import (
+from alsdb.methods.rasterise import (
     _cap_height,
     _classification_ranges,
     _delaunay_raster,
@@ -21,8 +21,9 @@ from alsdb.processing.chm import (
     _pulse_spacing,
     _rasterise,
     _run,
-    _spikefree_rasterise,
     _thin_highest_per_subcell,
+)
+from alsdb.products.chm import (
     _validate_grid_alignment,
     compute_all,
     compute_chm,
@@ -170,7 +171,7 @@ def test_compute_chm_pitfree_still_writes_data(provider, store):
         resolution=RES,
         bbox=BBOX,
         year=YEAR,
-        pitfree=True,
+        method="pitfree",
     )
     assert store.has_data("chm", RES, YEAR)
 
@@ -182,48 +183,7 @@ def test_compute_all_pitfree_still_writes_all_three(provider, store):
         resolution=RES,
         bbox=BBOX,
         year=YEAR,
-        pitfree=True,
-    )
-    assert store.has_data("dtm", RES, YEAR)
-    assert store.has_data("dsm", RES, YEAR)
-    assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_chm_spikefree_still_writes_data(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    compute_chm(
-        provider,
-        store,
-        resolution=RES,
-        bbox=BBOX,
-        year=YEAR,
-        spikefree=True,
-    )
-    assert store.has_data("chm", RES, YEAR)
-
-
-def test_compute_chm_pitfree_and_spikefree_together_raises(provider, store):
-    store.ensure_group("chm", RES, BBOX, "EPSG:25830")
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        compute_chm(
-            provider,
-            store,
-            resolution=RES,
-            bbox=BBOX,
-            year=YEAR,
-            pitfree=True,
-            spikefree=True,
-        )
-
-
-def test_compute_all_spikefree_still_writes_all_three(provider, store):
-    compute_all(
-        provider,
-        store,
-        resolution=RES,
-        bbox=BBOX,
-        year=YEAR,
-        spikefree=True,
+        method="pitfree",
     )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
@@ -245,7 +205,7 @@ def test_compute_chm_pitfree_fixed_max_edge_still_writes_data(provider, store):
         resolution=RES,
         bbox=BBOX,
         year=YEAR,
-        pitfree=True,
+        method="pitfree",
         pitfree_max_edge=30.0,
     )
     assert store.has_data("chm", RES, YEAR)
@@ -258,7 +218,7 @@ def test_compute_all_pitfree_default_auto_edge_writes_all_three(provider, store)
         resolution=RES,
         bbox=BBOX,
         year=YEAR,
-        pitfree=True,
+        method="pitfree",
     )
     assert store.has_data("dtm", RES, YEAR)
     assert store.has_data("dsm", RES, YEAR)
@@ -590,28 +550,6 @@ def test_thin_highest_per_subcell_absolute_grid_not_relative_to_input_extent():
     out = _thin_highest_per_subcell(points, subcell_resolution=1.0)
     assert len(out) == 1
     assert float(out["HeightAboveGround"][0]) == pytest.approx(8.0)
-
-
-# ---------------------------------------------------------------------------
-# _spikefree_rasterise — unit tests (real PDAL filters.delaunay/faceraster)
-# ---------------------------------------------------------------------------
-
-
-def test_spikefree_rasterise_output_shape_and_dtype():
-    points = _two_clusters_far_apart()
-    grid = _spikefree_rasterise(
-        points, (0.0, 0.0, 200.0, 50.0), resolution=10.0, subcell_resolution=3.0
-    )
-    assert grid.shape == (5, 20)
-    assert grid.dtype == np.float32
-
-
-def test_spikefree_rasterise_too_few_points_returns_all_nan():
-    points = _hag_points([1.0, 2.0], [1.0, 2.0], [10.0, 12.0])
-    grid = _spikefree_rasterise(
-        points, (0.0, 0.0, 100.0, 100.0), resolution=10.0, subcell_resolution=3.0
-    )
-    assert np.all(np.isnan(grid))
 
 
 # ---------------------------------------------------------------------------

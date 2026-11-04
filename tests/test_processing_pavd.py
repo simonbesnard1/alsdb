@@ -14,8 +14,8 @@ from the TileDB-querying integration path.
 import numpy as np
 import pytest
 
-from alsdb.processing.gap import _LAI_K_DEFAULT, _gap_to_lai
-from alsdb.processing.pavd import (
+from alsdb.products.gap import _LAI_K_DEFAULT, _gap_to_lai
+from alsdb.products.pavd import (
     _MIN_GROUND_POINTS_DEFAULT,
     _pavd_profile_from_hag,
     fit_transmittance_model,

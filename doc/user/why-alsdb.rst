@@ -76,10 +76,10 @@ Core components of alsDB
 
 4. ``processing.*``: modular processing functions:
 
-   - ``alsdb.processing.chm``: Canopy Height Model, DTM, DSM
-   - ``alsdb.processing.gap``: gap fraction, effective LAI
-   - ``alsdb.processing.biomass``: structural metrics, aboveground biomass
-   - ``alsdb.processing.waveform``: large-footprint waveform simulation (GEDI by default)
+   - ``alsdb.products.chm``: Canopy Height Model, DTM, DSM
+   - ``alsdb.products.gap``: gap fraction, effective LAI
+   - ``alsdb.products.biomass``: structural metrics, aboveground biomass
+   - ``alsdb.products.waveform``: large-footprint waveform simulation (GEDI by default)
 
 Goals and aspirations
 ---------------------

@@ -10,7 +10,7 @@ Source: https://github.com/r-lidar/PTD at commit
 | `nanoflann/` | k-d tree, Marius Muja, David G. Lowe, Jose Luis Blanco | BSD (`nanoflann/COPYING`) |
 
 This is the same PTD that lasR and pyLASR run. alsdb compiles it into
-`alsdb.processing._ptd_native` through `../ptd_binding.cpp`
+`alsdb.methods._ptd_native` through `../ptd_binding.cpp`
 (`pixi run -e spikefree build-spikefree` builds all native modules).
 
 Changes made in alsdb are kept in `../ptd_binding.cpp`, not in these files,

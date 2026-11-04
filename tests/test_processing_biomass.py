@@ -8,7 +8,7 @@ and compute_metrics / compute_biomass (integration)."""
 import numpy as np
 import pytest
 
-from alsdb.processing.biomass import (
+from alsdb.products.biomass import (
     _extract_metrics,
     _fhd_from_hag,
     _vci_from_hag,

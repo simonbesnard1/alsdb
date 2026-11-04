@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from alsdb.processing._tiling import bounded_map_unordered
-from alsdb.processing.chm import compute_chm
+from alsdb.products._tiling import bounded_map_unordered
+from alsdb.products.chm import compute_chm
 from alsdb.storage.zarr_store import ALSZarrStore
 
 BBOX = (308000.0, 4688000.0, 309000.0, 4689000.0)
@@ -21,7 +21,7 @@ OPTS = {"resolution": 10.0, "year": 2021, "bbox": BBOX, "tile_size": 250.0}
 
 def _count_worker_calls(monkeypatch, fail_after=None):
     """Wrap _products._worker; optionally raise once *fail_after* tiles succeeded."""
-    from alsdb.processing import _products
+    from alsdb.products import _surfaces as _products
 
     # Always wrap the real worker, not a wrapper left by an earlier call.
     original = getattr(_products._worker, "real_worker", _products._worker)

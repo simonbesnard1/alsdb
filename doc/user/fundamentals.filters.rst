@@ -119,7 +119,7 @@ The processing pipeline uses ``Classification`` and ``ReturnNumber`` directly:
 **HAG computation (all processing functions)**
   ``filters.hag_delaunay`` uses ground points (``Classification == 2``) to build a Delaunay TIN, from which height-above-ground is interpolated for every other point.
 
-**Gap fraction** (``alsdb.processing.gap``)
+**Gap fraction** (``alsdb.products.gap``)
   The MacArthur–Wilson estimator uses first returns only (``ReturnNumber == 1``):
 
   .. math::
@@ -128,10 +128,10 @@ The processing pipeline uses ``Classification`` and ``ReturnNumber`` directly:
 
   where vegetation = ``Classification`` in {3, 4, 5}.
 
-**Structural metrics / biomass** (``alsdb.processing.biomass``)
+**Structural metrics / biomass** (``alsdb.products.biomass``)
   Vegetation points (``Classification`` ≥ 3, or ``HeightAboveGround`` above the minimum threshold) are used for height percentiles (h50, h75, h95, hmean) and canopy cover.
 
-**CHM / DTM / DSM** (``alsdb.processing.chm``)
+**CHM / DTM / DSM** (``alsdb.products.chm``)
   DTM interpolates ground points (``Classification == 2``) using a Delaunay TIN
   (``dtm_method="tin"``, default), IDW (``"idw"``), or minimum-Z binning (``"min"``).
   DSM rasterises all first returns to the maximum ``Z``.

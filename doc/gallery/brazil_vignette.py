@@ -40,7 +40,7 @@ store = ALSZarrStore(ZARR_PATH)
 # both resolutions are available for comparison.  Skip this cell if the
 # data are already there.
 
-from alsdb.processing.biomass import compute_metrics, compute_biomass  # noqa: E402
+from alsdb.products.biomass import compute_metrics, compute_biomass  # noqa: E402
 
 compute_metrics(
     provider=reader,
@@ -99,7 +99,7 @@ print(f"Points in sub-area: {len(df_pts):,}")
 # 4 · Simulate a GEDI waveform at scene centre
 # ---------------------------------------------
 
-from alsdb.processing.waveform import simulate_waveform, simulate_batch  # noqa: E402
+from alsdb.products.waveform import simulate_waveform, simulate_batch  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 

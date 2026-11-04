@@ -1,16 +1,11 @@
-"""Native incremental constrained-Delaunay spike-free canopy reconstruction.
+"""Spike-free canopy reconstruction (Khosravipour et al. 2016)
 
-Implements the spike-free algorithm of Khosravipour et al. (2016): points are
-inserted from highest to lowest into a TIN, and a point is skipped where the
-triangle above it is "frozen" (all edges shorter than the freeze distance and
-at least the height buffer above the point). Triangulation uses CGAL's
-constrained Delaunay triangulation (The CGAL Project). Unlike LAStools and
-lasR, freezing is evaluated at each insertion rather than seeded from a
-coarse grid of highest points (see doc/chm_methods.md).
-
-``freeze_distance="local"`` (via :func:`local_freeze_grid`) sets the freeze
-distance per 5 m cell from the local pulse density, the locally adaptive
-spike-free of Fischer et al. (2024; lidR ``lspikefree()``).
+Points are inserted from highest to lowest into a constrained Delaunay
+triangulation (CGAL); a point is skipped where the triangle above it is
+frozen (all edges shorter than the freeze distance and at least the height
+buffer above it). ``freeze_distance="local"`` sets the freeze distance per
+5 m cell from the pulse density, as in the locally adaptive spike-free of
+Fischer et al. (2024; lidR ``lspikefree()``).
 
 References
 ----------
@@ -32,7 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from alsdb.processing._grid import GridSpec
+from alsdb.methods._grid import GridSpec
 
 LOCAL_FREEZE_CELL = 5.0  # m, cells for the local pulse density (as PULSE_DENSITY_CELL)
 # Fischer et al. (2024): freeze = m / ln(s * pd + o) + 1, pd in pulses/m2,
@@ -67,7 +62,7 @@ def local_freeze_grid(pulses, bbox, cell=LOCAL_FREEZE_CELL):
     Cells lie on multiples of *cell*, so neighbouring tiles share them; cells
     without pulses count as the lowest density of :data:`LOCAL_DENSITY_RANGE`.
     """
-    from alsdb.processing._surface import pulse_density_grid
+    from alsdb.methods._surface import pulse_density_grid
 
     density, x0, y1 = pulse_density_grid(pulses, bbox, cell)
     return FreezeGrid(local_freeze_distance(density), x0, y1, float(cell))
@@ -75,13 +70,12 @@ def local_freeze_grid(pulses, bbox, cell=LOCAL_FREEZE_CELL):
 
 def require_backend():
     try:
-        from alsdb.processing import _spikefree_native
+        from alsdb.methods import _spikefree_native
     except ImportError as exc:
         raise ImportError(
             "Native spike-free backend is not built. Run "
             "`pixi run -e spikefree build-spikefree` and use the spikefree "
-            "environment. For the approximation select "
-            "method='highest_subcell_tin'."
+            "environment."
         ) from exc
     return _spikefree_native
 

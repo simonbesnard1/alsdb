@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from alsdb.processing._surface import (
+from alsdb.methods._surface import (
     HIGH_SCAN_ANGLE,
     LOW_PULSE_DENSITY,
     CHMConfig,
@@ -57,8 +57,6 @@ def test_density_and_scan_angle_layers_and_flags():
     assert not (quiet & (LOW_PULSE_DENSITY | HIGH_SCAN_ANGLE)).any()
 
 
-def test_new_settings_at_defaults_keep_the_provenance_fingerprint():
+def test_every_setting_enters_the_provenance_fingerprint():
     settings = provenance_settings(CHMConfig(method="spikefree"))
-    assert not {"spikefree_first_returns", "min_pulse_density", "max_scan_angle"} & set(settings)
-    changed = provenance_settings(CHMConfig(method="spikefree", spikefree_first_returns=True))
-    assert changed["spikefree_first_returns"] is True
+    assert {"spikefree_first_returns", "min_pulse_density", "max_scan_angle"} <= set(settings)

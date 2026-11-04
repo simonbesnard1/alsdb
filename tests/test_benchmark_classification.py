@@ -8,7 +8,6 @@ import pytest
 from alsdb.benchmark.classification import (
     PTDParameters,
     SyntheticClassificationScenario,
-    score_boundary_strips,
     score_ground_classification,
     synthetic_points,
     terrain_error,
@@ -51,7 +50,7 @@ def test_terrain_error_known_values_and_missing_cells():
 
 
 def test_ptd_parameter_defaults_are_alsdb_s():
-    from alsdb.core.ptd import DEFAULTS
+    from alsdb.methods.ptd import DEFAULTS
 
     assert asdict(PTDParameters()) == DEFAULTS
     with pytest.raises(ValueError, match="votes"):
@@ -116,28 +115,6 @@ def test_synthetic_scenarios_are_reproducible_and_have_exact_labels():
     np.testing.assert_array_equal(first, second)
     np.testing.assert_array_equal(first_truth, second_truth)
     assert len(first) == 400 and 0 < first_truth.sum() < len(first)
-
-
-def test_boundary_scores_partition_points():
-    scenario = SyntheticClassificationScenario(terrain="flat", size=20, density=1)
-    points, truth = synthetic_points(scenario)
-    prediction = truth.copy()
-    scores = score_boundary_strips(points, truth, prediction, (0, 0, 20, 20), width=2)
-    assert scores["boundary"].f1 == 1
-    assert scores["interior"].f1 == 1
-    assert scores["boundary"].true_ground + scores["interior"].true_ground == truth.sum()
-
-
-def test_synthetic_grid_returns_one_row_per_method():
-    from alsdb.benchmark.classification import run_synthetic_grid
-
-    rows = run_synthetic_grid(
-        [SyntheticClassificationScenario(size=10, density=0.2)],
-        methods=("pmf", "smrf"),
-        boundary_width=1,
-    )
-    assert [row["method"] for row in rows] == ["pmf", "smrf"]
-    assert all("boundary_f1" in row and "wall_seconds" in row for row in rows)
 
 
 def test_external_adapters_report_missing_executables():
@@ -304,7 +281,7 @@ def test_ground_masks_round_trip(tmp_path):
 
 
 def test_scene_chm_on_each_classifiers_ground(tmp_path):
-    pytest.importorskip("alsdb.processing._spikefree_native")
+    pytest.importorskip("alsdb.methods._spikefree_native")
     from alsdb.benchmark.classification import run_scene_benchmark, run_scene_chm
 
     _write_scene(tmp_path / "scenes" / "rolling")
@@ -316,67 +293,6 @@ def test_scene_chm_on_each_classifiers_ground(tmp_path):
     assert all(r["chm_mae"] != "" for r in rows)
     run_scene_chm(tmp_path / "scenes", tmp_path / "out")  # resumes: nothing added
     assert len(list(csv.DictReader(out.open()))) == 2
-
-
-def test_pylasr_runs_with_a_private_temp_dir(tmp_path, monkeypatch):
-    import os
-    import sys
-    import types
-
-    from alsdb.benchmark import classification
-
-    seen = []
-
-    class Pipeline:
-        def __add__(self, other):
-            return self
-
-        def execute(self, path):
-            seen.append(os.environ.get("TMPDIR"))
-            (tmp_path / "out.laz").write_bytes(b"x")
-            return {"success": True}
-
-    fake = types.SimpleNamespace(classify_with_ptd=lambda **k: Pipeline(), write_las=lambda p: None)
-    monkeypatch.setitem(sys.modules, "pylasr", fake)
-    monkeypatch.setattr(classification, "pdal", types.SimpleNamespace(
-        Pipeline=lambda *a, **k: types.SimpleNamespace(
-            execute=lambda: None, arrays=[np.zeros(1, dtype=[("Classification", "u1")])])))  # fmt: skip
-    monkeypatch.setenv("TMPDIR", "/original")
-    classification.run_pylasr_ptd(tmp_path / "in.laz", tmp_path / "out.laz")
-    assert seen[0] != "/original" and "alsdb-pylasr-" in seen[0]
-    assert os.environ["TMPDIR"] == "/original"
-
-
-def test_consensus_ground_labels_an_unclassified_survey(tmp_path):
-    import pdal
-
-    from alsdb.benchmark.classification import _read_las, consensus_ground
-
-    points, truth = synthetic_points(
-        SyntheticClassificationScenario(terrain="rolling", size=60, density=8, noise_fraction=0)
-    )
-    points["Classification"] = 0  # delivered without classification
-    (tmp_path / "in").mkdir()
-    pdal.Pipeline(
-        json.dumps([{"type": "writers.las", "filename": str(tmp_path / "in" / "s.laz"),
-                     "a_srs": "EPSG:25831", "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001}]),
-        arrays=[points],
-    ).execute()  # fmt: skip
-    out = tmp_path / "out"
-    stats = consensus_ground(tmp_path / "in", (0, 0, 60, 60), out, methods=("csf", "ptd"),
-                             max_density=None)  # fmt: skip
-    assert stats["methods"] == ["csf", "ptd"] and stats["agreed_share"] > 0.8
-    assert json.loads((out / "consensus.json").read_text())["points"] == len(points)
-    from alsdb.benchmark.classification import _terrain_height
-
-    labelled = _read_las(out / "s.laz")
-    assert len(labelled) == len(points)
-    assert set(np.unique(labelled["Classification"]).tolist()) <= {1, 2}
-    ground = labelled["Classification"] == 2
-    height = labelled["Z"] - _terrain_height(labelled["X"], labelled["Y"], "rolling")
-    assert ground.mean() == pytest.approx(truth.mean(), abs=0.03)
-    assert np.mean(np.abs(height[ground]) < 0.2) > 0.95  # ground labels sit on the terrain
-    assert np.mean(height[~ground] > 0.15) > 0.9
 
 
 def test_ptd_lasr_baseline_is_added_after_the_defaults():

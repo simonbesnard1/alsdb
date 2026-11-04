@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 
 from alsdb.core.alsdatabase import ALSDatabase
-from alsdb.core.classification import ClassificationConfig
+from alsdb.methods.classification import ClassificationConfig
 from alsdb.utils.schema import TileDBSchemaConfig
 
 

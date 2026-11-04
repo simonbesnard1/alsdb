@@ -1,16 +1,10 @@
-"""Validated configuration and PDAL stages for point classification.
+"""Configuration and PDAL stages for point classification
 
-Ground filters are PDAL's (Butler et al. 2021) implementations of CSF (Zhang
-et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al. 2013), and
-progressive TIN densification (PTD; Axelsson 2000), lasR's implementation
-vendored and compiled into alsdb (:mod:`alsdb.core.ptd`) and run as a tilt
-ensemble (rotation idea from Fabian Fischer). CSF is the default:
-on the steep and tropical benchmark sites it held up across pulse densities,
-where SMRF (better only at full density) failed below ~2 pulses/m2; PTD gave
-the lowest errors from ~1 pulse/m2 up and is recommended where the native
-module is built (doc/benchmarking.md). The
-optional noise stage is PDAL's extended local minimum filter (Chen et al.
-2012) followed by a radius outlier filter.
+Ground filters: CSF (Zhang et al. 2016, the default), PMF (Zhang et al.
+2003) and SMRF (Pingel et al. 2013) as implemented in PDAL (Butler et al.
+2021), and progressive TIN densification (PTD; Axelsson 2000) from
+:mod:`alsdb.methods.ptd`. The optional noise stage is PDAL's extended local
+minimum filter (Chen et al. 2012) followed by a radius outlier filter.
 
 References
 ----------
@@ -46,9 +40,6 @@ from typing import Literal
 
 import numpy as np
 
-PTD_FIELDS = ("ptd_seed_resolution", "ptd_angle", "ptd_distance", "ptd_spacing",
-              "ptd_tilt_runs", "ptd_tilt", "ptd_votes")  # fmt: skip
-
 
 @dataclass(frozen=True)
 class ClassificationConfig:
@@ -73,7 +64,7 @@ class ClassificationConfig:
     smrf_window: float = 18.0
     smrf_cut: float = 0.0
     smrf_returns: tuple[str, ...] = ("last", "only")
-    # PTD (alsdb.core.ptd.DEFAULTS): seed cell, iteration angle and distance,
+    # PTD (alsdb.methods.ptd.DEFAULTS): seed cell, iteration angle and distance,
     # minimum triangle size, then the tilt ensemble (runs, tilt in degrees,
     # votes for ground; ptd_tilt_runs=1 is a single run).
     ptd_seed_resolution: float = 10.0
@@ -116,7 +107,7 @@ class ClassificationConfig:
         invalid = [name for name, value in positive.items() if not np.isfinite(value) or value <= 0]
         if invalid:
             raise ValueError(f"Classification parameters must be finite and positive: {invalid}")
-        from alsdb.core.ptd import check_ensemble
+        from alsdb.methods.ptd import check_ensemble
 
         check_ensemble(self.ptd_tilt_runs, self.ptd_tilt, self.ptd_votes)
         if self.outlier_min_neighbors < 1 or self.hag_neighbors < 1 or self.csf_rigidness < 1:
@@ -139,16 +130,11 @@ class ClassificationConfig:
         values = asdict(self)
         values["source_classes"] = list(self.source_classes)
         values["smrf_returns"] = list(self.smrf_returns)
-        if self.ground_method != "ptd":
-            # Added after classified arrays were written: keep other methods'
-            # fingerprints (and so their manifests) unchanged.
-            for name in PTD_FIELDS:
-                values.pop(name)
         return values
 
     @property
     def ptd_parameters(self) -> dict:
-        """Keyword arguments for :func:`alsdb.core.ptd.ptd_ground`."""
+        """Keyword arguments for :func:`alsdb.methods.ptd.ptd_ground`."""
         return {
             "seed_resolution": self.ptd_seed_resolution,
             "angle": self.ptd_angle,
@@ -171,35 +157,10 @@ class ClassificationConfig:
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def resolve_classification_config(
-    config: ClassificationConfig | None,
-    *,
-    reclassify: bool = False,
-    ground_method: str = "csf",
-    denoise: bool = False,
-    vegetation_low: float = 0.5,
-    vegetation_medium: float = 2.0,
-    vegetation_high: float = 5.0,
-) -> ClassificationConfig:
-    """Resolve the new configuration API or deprecated scalar arguments."""
-    if config is not None:
-        if reclassify or denoise or ground_method != "csf":
-            raise ValueError("classification_config cannot be combined with legacy arguments")
-        return config
-    return ClassificationConfig(
-        enabled=reclassify,
-        ground_method=ground_method,
-        denoise=denoise,
-        vegetation_low=vegetation_low,
-        vegetation_medium=vegetation_medium,
-        vegetation_high=vegetation_high,
-    )
-
-
 def ground_stage(config: ClassificationConfig) -> dict:
     """Build the configured PDAL ground-classification stage (not for PTD)."""
     if config.ground_method == "ptd":
-        raise ValueError("PTD is not a PDAL stage; use alsdb.core.ptd.ptd_ground")
+        raise ValueError("PTD is not a PDAL stage; use alsdb.methods.ptd.ptd_ground")
     ignore = "Classification[7:7],Classification[18:18]"
     if config.ground_method == "pmf":
         return {
@@ -250,7 +211,7 @@ def classification_stages(config: ClassificationConfig) -> list[dict]:
     """Build ground, HAG, and vegetation stages for an enabled configuration.
 
     With PTD the ground stage is left out: ground is assigned beforehand by
-    :func:`alsdb.core.ptd.ptd_ground`.
+    :func:`alsdb.methods.ptd.ptd_ground`.
     """
     if not config.enabled:
         return []

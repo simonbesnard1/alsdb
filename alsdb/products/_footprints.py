@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.spatial import cKDTree
 
-from alsdb.processing._tiling import bounded_map, query_to_array
+from alsdb.products._tiling import bounded_map, query_to_array
 
 
 def footprint_batches(

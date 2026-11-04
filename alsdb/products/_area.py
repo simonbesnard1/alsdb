@@ -1,25 +1,30 @@
-"""Compute forest rasters with one query and terrain normalization per tile."""
+"""Area-based products (metrics, gap/LAI, biomass) from one query and normalisation per tile
+
+The engine behind :func:`~alsdb.products.biomass.compute_metrics`,
+:func:`~alsdb.products.biomass.compute_biomass` and
+:func:`~alsdb.products.gap.compute_gap_fraction`.
+"""
 
 import uuid
 
 import numpy as np
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._products import (
+from alsdb.methods._grid import GridSpec
+from alsdb.methods._surface import (
+    QUALITY_FLAGS,
+    CHMConfig,
+    clean_points,
+    provenance_settings,
+)
+from alsdb.methods._terrain import normalize_points
+from alsdb.products._surfaces import (
     CHM_VARIABLES,
     backend_versions,
     input_revision,
     software_versions,
     surface_tile,
 )
-from alsdb.processing._surface import (
-    QUALITY_FLAGS,
-    CHMConfig,
-    clean_points,
-    provenance_settings,
-)
-from alsdb.processing._terrain import normalize_points
-from alsdb.processing._tiling import (
+from alsdb.products._tiling import (
     _filter_ground_outliers,
     _require_year,
     array_crs,
@@ -31,7 +36,7 @@ from alsdb.processing._tiling import (
 )
 
 
-def compute_forest_products(
+def compute_area_products(
     provider,
     store,
     resolution=10.0,
@@ -72,13 +77,13 @@ def compute_forest_products(
     Ground cleaning is explicit and shared by every requested product; the gap
     wrapper defaults to disabling it. Quality includes gap support and saturation.
     """
-    from alsdb.processing.biomass import (
+    from alsdb.products.biomass import (
         _METRIC_NAMES,
         _extract_metrics,
         _extract_metrics_baba,
         naesset_model,
     )
-    from alsdb.processing.gap import _gap_to_lai, gap_statistics
+    from alsdb.products.gap import _gap_to_lai, gap_statistics
 
     _require_year(year)
     requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
@@ -124,7 +129,7 @@ def compute_forest_products(
     tiles = list(grid.tiles(tile_size, max(tile_buffer, baba_radius) + halo))
     revision = input_revision(provider)
     base = {
-        "algorithm": "forest-1",
+        "algorithm": "area-1",
         "bbox": list(grid.bbox),
         "resolution": resolution,
         "tile_size": tile_size,

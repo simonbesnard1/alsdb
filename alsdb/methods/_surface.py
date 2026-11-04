@@ -1,12 +1,11 @@
 """Reusable, storage-independent CHM reconstruction and quality layers."""
 
-import warnings
 from dataclasses import dataclass
 
 import numpy as np
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing._terrain import GROUND_CLASSES, normalize_points
+from alsdb.methods._grid import GridSpec
+from alsdb.methods._terrain import GROUND_CLASSES, normalize_points
 
 # Bit flags stored as exactly representable float32 integers in ALSZarrStore.
 OBSERVED = 1
@@ -33,24 +32,12 @@ QUALITY_FLAGS = {
 }
 PULSE_DENSITY_CELL = 5.0  # m, cells for the pulse-density layer and local freeze
 
-# CHMConfig fields added after stores were written. At these defaults they are
-# left out of the provenance fingerprint, so existing runs still resume.
-COMPATIBLE_DEFAULTS = {
-    "spikefree_first_returns": False,
-    "min_pulse_density": 2.0,
-    "max_scan_angle": 20.0,
-}
-
 
 def provenance_settings(config):
     """CHM settings recorded in a run's provenance fingerprint."""
     from dataclasses import asdict
 
-    return {
-        k: v
-        for k, v in asdict(config).items()
-        if not (k in COMPATIBLE_DEFAULTS and v == COMPATIBLE_DEFAULTS[k])
-    }
+    return asdict(config)
 
 
 @dataclass(frozen=True)
@@ -69,10 +56,8 @@ class CHMConfig:
     max_height: float | None = None
     remove_outliers: bool = False
     outlier_mean_k: int = 8
-    # 6, as lasR's classify_with_sor: at 2 the filter removed the apex of an
-    # emergent crown (isolated by nature); 6 still drops returns far above canopy.
+    # 6, as lasR's classify_with_sor: lower values remove emergent crown apices.
     outlier_multiplier: float = 6.0
-    spikefree_subcell_resolution: float | None = None
     freeze_distance: float | str = "auto"
     spikefree_first_returns: bool = False
     height_buffer: float = 0.5
@@ -91,7 +76,6 @@ class CHMConfig:
             "max",
             "pitfree",
             "tin",
-            "highest_subcell_tin",
             "spikefree",
             "lastools",
         ):
@@ -99,7 +83,6 @@ class CHMConfig:
         for name in (
             "max_ground_distance",
             "max_height",
-            "spikefree_subcell_resolution",
             "max_triangle_edge",
             "outlier_multiplier",
             "freeze_interval",
@@ -140,20 +123,6 @@ class CHMConfig:
     @classmethod
     def from_options(cls, options):
         options = dict(options)
-        pitfree, legacy = options.get("pitfree", False), options.get("spikefree", False)
-        if (pitfree and legacy) or (options.get("method") is not None and (pitfree or legacy)):
-            raise ValueError("method, pitfree and spikefree are mutually exclusive")
-        if legacy:
-            warnings.warn(
-                "spikefree=True is the legacy approximation; use "
-                "method='spikefree' for constrained triangulation or "
-                "method='highest_subcell_tin' for the old method.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-        options["method"] = options.get("method") or (
-            "pitfree" if pitfree else "highest_subcell_tin" if legacy else "max"
-        )
         return cls(**{k: v for k, v in options.items() if k in cls.__dataclass_fields__})
 
 
@@ -168,21 +137,15 @@ def clean_points(arr, *, drop_noise=True):
 
 
 def surface_mask(arr, config):
-    """Returns that build the CHM surface under *config*: vegetation and ground.
+    """Select the returns that build the CHM surface: vegetation and ground
 
-    Ground returns (HAG ~0) belong in the surface, as in lidR and LAStools:
-    they pin the CHM to zero in crown gaps. With vegetation only, a TIN
-    bridges every gap from crown to crown; on Barcelona NFI plots that
-    inflated mean pitfree height by ~2 m. Spike-free variants use all
-    returns by default; ``spikefree_first_returns`` restricts ``spikefree`` to
-    first returns, as Fischer et al. (2024) recommend for robustness across
-    surveys. Callers that prepare normalized points for
-    :func:`reconstruct_chm` only need to normalize this subset.
+    Ground returns pin the CHM to zero in crown gaps, as in lidR and LAStools.
+    ``spikefree_first_returns`` restricts spike-free to first returns, as
+    Fischer et al. (2024) recommend.
     """
     mask = np.isin(arr["Classification"], (*config.veg_classes, *config.ground_classes))
     if config.first_returns_only and config.method not in (
         "spikefree",
-        "highest_subcell_tin",
         "lastools",
     ):
         mask &= arr["ReturnNumber"] == 1
@@ -209,18 +172,13 @@ def pulse_density_grid(pulses, bbox, cell=PULSE_DENSITY_CELL):
 
 
 def auto_freeze_distance(points):
-    """Spike-free freeze distance: three pulse spacings, as lidR recommends.
+    """Spike-free freeze distance: three first-return pulse spacings
 
-    lidR's ``spikefree()`` documentation (Roussel et al. 2020): "3 times the
-    pulse spacing or a little higher". ``freeze_distance="local"`` sets it per
-    5 m cell instead (Fischer et al. 2024, https://doi.org/10.1111/2041-210X.14416;
-    see :func:`alsdb.processing.spikefree.local_freeze_distance`).
-
-    Pulses are first returns. The old fixed 1.5 m default suits ~4+ pulses/m2;
-    on ~1 pulse/m2 PNOA data it froze too little and left pits (mean CHM
-    1.8 m below LAStools on Barcelona NFI plots, vs 0.5 m at 3 m).
+    As lidR's ``spikefree()`` recommends (Roussel et al. 2020). See
+    :func:`alsdb.methods.spikefree.local_freeze_distance` for the per-cell
+    alternative of Fischer et al. (2024).
     """
-    from alsdb.processing.chm import _pulse_spacing
+    from alsdb.methods.rasterise import _pulse_spacing
 
     if "ReturnNumber" in points.dtype.names:
         first = points[points["ReturnNumber"] == 1]
@@ -237,17 +195,15 @@ def reconstruct_chm(
     """Build a CHM and diagnostics from buffered, already ground-cleaned points.
 
     The caller should rasterize a halo before cropping when hole filling is on.
-    This pure function is also used for every uncertainty realization.
     ``diagnostics=False`` returns only ``{"chm": ...}`` and skips quality
     flags, counts, ground distance, and terrain slope.
     """
-    from alsdb.processing.chm import (
+    from alsdb.methods.rasterise import (
         _fill_pits,
         _outlier_removal_stages,
         _pitfree_rasterise,
         _rasterise,
         _run,
-        _spikefree_rasterise,
     )
 
     grid = GridSpec.from_bbox(bbox, resolution)
@@ -332,7 +288,7 @@ def reconstruct_chm(
     if freeze_distance == "auto" and len(points):
         freeze_distance = auto_freeze_distance(points)
     elif freeze_distance == "local" and len(points):
-        from alsdb.processing.spikefree import local_freeze_grid
+        from alsdb.methods.spikefree import local_freeze_grid
 
         # Pulses: first returns of every non-noise class in the buffered tile.
         extent = (
@@ -355,21 +311,13 @@ def reconstruct_chm(
                 base_max_edge=config.max_triangle_edge,
             )
         elif config.method == "tin":
-            from alsdb.processing.chm import _delaunay_raster
+            from alsdb.methods.rasterise import _delaunay_raster
 
             out = _delaunay_raster(
                 points,
                 bbox,
                 resolution,
                 value_field="HeightAboveGround",
-                max_edge=config.max_triangle_edge,
-            )
-        elif config.method == "highest_subcell_tin":
-            out = _spikefree_rasterise(
-                points,
-                bbox,
-                resolution,
-                subcell_resolution=config.spikefree_subcell_resolution or resolution / 3,
                 max_edge=config.max_triangle_edge,
             )
         elif config.method == "lastools":
@@ -387,7 +335,7 @@ def reconstruct_chm(
                 max_triangle_edge=config.max_triangle_edge or 100.0,
             )
         else:
-            from alsdb.processing.spikefree import rasterize_spikefree
+            from alsdb.methods.spikefree import rasterize_spikefree
 
             out = rasterize_spikefree(
                 points,

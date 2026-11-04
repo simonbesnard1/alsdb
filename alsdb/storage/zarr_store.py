@@ -80,12 +80,8 @@ logger = logging.getLogger(__name__)
 _COORD_ARRAYS = {"x", "y", "time"}
 
 _S3_DEFAULT_RETRIES = 10
-# botocore's own default (10) is far smaller than realistic n_workers for
-# compute_all/compute_biomass (production configs use 50) - every thread
-# past the pool size blocks waiting for a connection rather than doing real
-# work, which reads as "process alive, barely any CPU used, no visible
-# progress" - confirmed as the actual cause of exactly that symptom on a
-# real all-Spain run. Comfortably larger than any realistic n_workers.
+# Larger than botocore's default (10): threads beyond the pool size wait for
+# a connection.
 _S3_DEFAULT_MAX_POOL_CONNECTIONS = 100
 
 
@@ -95,14 +91,9 @@ def _apply_s3_client_defaults(storage_options: dict) -> dict:
     Configures botocore adaptive retry mode (covers throttling and
     transient AWS/S3-compatible endpoint errors) and a connection pool large
     enough for realistic worker counts (see _S3_DEFAULT_MAX_POOL_CONNECTIONS).
-    User-supplied values in *storage_options* are never overwritten.
-
-    Note: this must go through s3fs's ``config_kwargs`` (a plain dict s3fs
-    merges into its own ``AioConfig(...)``), not ``client_kwargs["config"]``
-    — s3fs already passes its own ``config=`` positional into
-    ``create_client(..., **client_kwargs)``, so a ``config`` key inside
-    ``client_kwargs`` collides with it and raises "multiple values for
-    keyword argument 'config'".
+    User-supplied values in *storage_options* are never overwritten. They
+    go through s3fs's ``config_kwargs``; a ``config`` key in
+    ``client_kwargs`` would collide with s3fs's own.
     """
     opts = storage_options.copy()
     config_kwargs = opts.setdefault("config_kwargs", {})
@@ -119,15 +110,7 @@ def _apply_s3_client_defaults(storage_options: dict) -> dict:
     logger=logger,
 )
 def _open_group_retrying(path: str, mode: str, storage_options: dict | None = None):
-    """Open a Zarr group, retrying on transient S3 failures.
-
-    ``ALSZarrStore.__init__`` calls this exactly once per store. Unlike
-    ``ensure_group``/``write_tile``/``has_data``, this used to be a bare
-    ``zarr.open_group(...)`` call with no retry protection - a single
-    transient GetObject failure while reading the root's zarr.json would
-    crash the whole process before any tile work started, with no
-    top-level except around it in the calling workflow script.
-    """
+    """Open a Zarr group, retrying on transient S3 failures."""
     import zarr
 
     if storage_options is not None:
@@ -177,10 +160,8 @@ class ALSZarrStore:
         # concurrently (e.g. CHM and DTM in parallel) without blocking each other.
         self._group_locks: dict[str, threading.Lock] = {}
         self._group_locks_create = threading.Lock()  # protects the dict itself
-        # Per-instance caches for write_tile. On S3 every group/array open is a
-        # zarr.json GET; uncached, one write_tile cost ~25 store round trips
-        # (23 of them metadata reads), all inside the group lock. Grid attrs are
-        # immutable after _init_group; the rest are invalidated by begin_run.
+        # Caches for write_tile: on S3 every group or array open is a request.
+        # Grid attributes never change; the rest is invalidated by begin_run.
         self._grid_attrs: dict[str, tuple[float, float, int, int]] = {}
         self._time_index: dict[tuple[str, int], int] = {}
         self._arrays: dict[tuple[str, str, int], object] = {}  # (res, var, t) -> sized handle
@@ -270,7 +251,7 @@ class ALSZarrStore:
 
         min_x, _min_y, _max_x, max_y = bbox
         res = float(res_key.rstrip("m"))
-        from alsdb.processing._grid import GridSpec
+        from alsdb.methods._grid import GridSpec
 
         grid = GridSpec.from_bbox(bbox, res)
         ny, nx = grid.shape
@@ -362,7 +343,7 @@ class ALSZarrStore:
         res_key = _res_str(resolution)
         with self._group_lock(res_key):
             if res_key in self._root:
-                from alsdb.processing._grid import GridSpec
+                from alsdb.methods._grid import GridSpec
 
                 expected = GridSpec.from_bbox(bbox, resolution)
                 attrs = self._root[res_key].attrs
@@ -776,9 +757,8 @@ class ALSZarrStore:
         """
         Return True if finite values have been written for this variable/year.
 
-        Legacy arrays without per-variable write metadata fall back to the time
-        axis. This does not prove completion; surface workflows use check_run
-        and processing provenance to distinguish complete and interrupted runs.
+        This does not prove completion: surface workflows use check_run and
+        the run provenance to tell complete from interrupted runs.
 
         Parameters
         ----------
@@ -798,8 +778,7 @@ class ALSZarrStore:
         time_arr = grp["time"]
         if time_arr.shape[0] == 0:
             return False
-        written = grp[variable].attrs.get("data_years")
-        return bool(year in written) if written is not None else bool(year in time_arr[:])
+        return year in (grp[variable].attrs.get("data_years") or [])
 
     @property
     def resolutions(self) -> list[float]:

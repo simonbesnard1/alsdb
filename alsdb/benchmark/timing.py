@@ -1,32 +1,14 @@
-"""Compute-performance benchmark: alsdb vs lasR vs LAStools on identical work.
+"""Compute time of alsdb, lasR and LAStools on the same work
 
-Every tool turns the same LAS/LAZ tiles into the same 1 m CHMs with the same
-settings (surface algorithm 3, ``"auto"`` freeze/edge). One-off preparation
-and per-run work are timed separately so the result answers both questions:
+Every tool turns the same LAS/LAZ tiles into the same 1 m CHMs. One-off
+preparation (alsdb ingest, LAStools ``lasheight``) and per-run work are
+timed separately. Factors: area, cores (pinned with ``taskset``), storage
+(network or local copy) and repeats. Each step runs in its own process;
+wall time, CPU time and peak memory of the process tree go to one CSV row.
+Rerunning skips finished steps. Linux only.
 
-- setup (one-off): alsdb ingest into TileDB; LAStools ``lasheight``; lasR none
-- run (per product run): alsdb ``compute_chm`` pitfree + spikefree; lasR
-  pitfree + spikefree; LAStools spikefree + max on the existing heights
-
-Factors: area (nested, compact n x n tile blocks), cores (each step pinned to
-that many CPUs with ``taskset``), storage (input on its original, usually
-network, filesystem vs copied to local disk) and repeats. Every step runs in
-its own process; wall time, user/system CPU (``wait4`` rusage, children
-included) and peak resident memory of the whole process tree (sampled from
-``/proc``) go to one CSV row. The harness is a child subreaper, so processes
-a step detaches (lasR's PSOCK workers are started in the background by a
-shell) stay in the tree and are counted, and the step ends when they exit.
-Linux only.
-
-    python -m alsdb.benchmark timing <laz_dir> <work_dir> --dry-run
     python -m alsdb.benchmark timing <laz_dir> <work_dir> --areas 1 4 16 --cores 1 4 8
     python -m alsdb.benchmark timing-report <work_dir>/timings.csv
-
-Steps run through ``pixi run -e <env>`` in the alsdb checkout (``--repo``):
-alsdb in ``spikefree`` (native spike-free), lasR in ``lasr``, LAStools in
-``default``. ``--launcher direct`` uses the current Python and ``Rscript`` on
-PATH instead (tests). The CSV is appended as steps finish; rerunning skips
-completed steps, so an interrupted benchmark resumes.
 """
 
 import argparse
@@ -238,7 +220,7 @@ def steps_for(tool, subset, out, cores, args):
         return [
             ("setup", "ingest", [*worker, "ingest", str(subset), str(tiledb), "--crs", args.crs,
                                  "--workers", str(cores)]),
-            # Fragment compaction timed on its own: it was the ingest's memory peak.
+            # Fragment compaction is timed on its own (the ingest's memory peak).
             ("setup", "optimize", [*worker, "optimize", str(tiledb)]),
             *[("run", method, [*worker, "chm", str(tiledb), str(out / f"{method}.zarr"),
                                "--method", method, "--year", str(args.year),
@@ -292,10 +274,10 @@ def _worker(argv):
     if args.what == "optimize":
         db.optimize()
         return
-    from alsdb.processing.chm import compute_chm
+    from alsdb.products.chm import compute_chm
     from alsdb.storage.zarr_store import ALSZarrStore
 
-    # Same settings as the production Barcelona runs (16_reprocess_barcelona_v3.py).
+    # Production settings.
     compute_chm(
         db, ALSZarrStore(args.zarr), resolution=1.0, year=args.year, method=args.method,
         tile_size=1000.0, n_workers=args.workers, first_returns_only=True, pit_fill=False,

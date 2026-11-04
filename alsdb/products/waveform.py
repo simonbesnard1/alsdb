@@ -2,80 +2,26 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""
-Large-footprint waveform simulator from ALS TileDB point clouds.
+"""Large-footprint waveform simulation from ALS point clouds
 
-The pipeline is sensor-agnostic: any ALS point cloud stored in TileDB can be
-used as input.  Default parameters are tuned for **GEDI** (25 m footprint,
-0.15 m bins, GEDI beam TX kernels); other spaceborne or airborne instruments
-can be targeted by overriding the relevant parameters — see *Sensor presets*
-below.
+Defaults follow GEDI (25 m footprint, 0.15 m bins, GEDI TX pulse kernels);
+other instruments are simulated by changing ``footprint_radius``, ``sigma``
+and ``beam_id`` (e.g. LVIS: radius 10 m, sigma 0.7 m; ICESat/GLAS: radius
+32.5 m, sigma 2 m).
 
-Pipeline
---------
-1. Query TileDB for all ALS points within a circular footprint - when Gaussian
-   beam weighting is on, the query itself extends past the nominal footprint
-   radius (``beam_extent_sigma``) so the beam's Gaussian tail is actually
-   captured before being weighted down, not truncated away (see
-   :func:`_effective_query_radius`).
-2. Build a vertical histogram of Z values, optionally weighted by return
-   intensity and/or the Gaussian beam profile.
-3. Convolve with a TX pulse kernel (per-beam empirical shape, or Gaussian).
-4. Detect the ground peak (lowest significant peak in the waveform).
-5. Extract relative-height metrics (RH0-RH100, HOME) as cumulative fractions
-   of the *total* recorded waveform energy, and canopy cover as a
-   gap-probability ratio with an optional reflectance-ratio (``rv_rg``)
-   correction (default ``1.0`` reproduces the uncorrected energy-ratio
-   proxy, not GEDI's true reflectance-corrected L2B cover - see
-   :func:`_canopy_cover`).
+Steps: query the points of a circular footprint (beyond its radius when the
+Gaussian beam weighting is on), build a vertical histogram, convolve it with
+the transmitted pulse, detect the ground peak, and derive relative heights
+(RH) and canopy cover.
 
-Sensor presets
---------------
-GEDI (default)::
-
-    simulate_waveform(provider, x, y,
-                      footprint_radius=12.5,   # 25 m diameter
-                      z_step=0.15,             # GEDI native vertical resolution
-                      beam_id="BEAM0000")      # uses bundled TX pulse kernel
-
-LVIS (NASA airborne full-waveform)::
-
-    simulate_waveform(provider, x, y,
-                      footprint_radius=10.0,   # campaign-dependent (typically 10–25 m)
-                      z_step=0.15,
-                      beam_id=None,            # no bundled LVIS kernel; Gaussian used
-                      sigma=0.7)               # approximate LVIS pulse width
-
-ICESat / GLAS::
-
-    simulate_waveform(provider, x, y,
-                      footprint_radius=32.5,   # 65 m diameter
-                      z_step=0.15,
-                      beam_id=None,
-                      sigma=2.0)               # GLAS pulse σ ≈ 2 m
-
-Key references
---------------
-- Hancock et al. (2019). The GEDI simulator: A large-footprint waveform lidar
-  simulator for calibration and validation of spaceborne missions.
-  Remote Sensing of Environment, 220, 309–323.
-- GEDI Algorithm Theoretical Basis Document (ATBD), NASA (2019).
-- Blair et al. (1999). The Laser Vegetation Imaging Sensor (LVIS).
-  IGARSS, Hamburg.
-
-Validation use case
--------------------
-Simulate waveforms at actual GEDI shot locations, then compare simulated vs
-observed waveforms to derive calibration offsets::
-
-    from alsdb import ALSProvider
-    from alsdb.processing.waveform import simulate_batch
-
-    als = ALSProvider(storage_type="local", uri="array_")
-
-    # gedi_shots is a DataFrame with center_x, center_y columns (UTM)
-    results = simulate_batch(als, gedi_shots, year=2021)
-    # results has columns: rh25, rh50, rh75, rh95, rh100, home, cover, ...
+References
+----------
+Hancock, S., et al. (2019). The GEDI simulator: A large-footprint waveform
+    lidar simulator for calibration and validation of spaceborne missions.
+    Remote Sensing of Environment, 220, 309-323.
+GEDI Algorithm Theoretical Basis Document (ATBD), NASA (2019).
+Blair, J. B., et al. (1999). The Laser Vegetation Imaging Sensor (LVIS).
+    IGARSS, Hamburg.
 """
 
 from __future__ import annotations
@@ -124,15 +70,7 @@ _BEAM_IDS: frozenset[str] = frozenset(
 
 @functools.lru_cache(maxsize=8)
 def _load_pulse(beam_id: str, z_step: float = _Z_STEP) -> np.ndarray:
-    """
-    Load and return the normalised TX pulse kernel for *beam_id*.
-
-    The kernel is read from the bundled mean-pulse ASCII file, centered on its
-    peak bin, and normalised to unit sum so that convolution preserves total
-    waveform energy.
-
-    Returns a 1-D float64 array ready for ``np.convolve(..., mode="same")``.
-    """
+    """Return the bundled TX pulse kernel of *beam_id*, centred and normalised to unit sum."""
     path = files("alsdb") / "data" / "pulse_shapes" / f"meanPulse.{beam_id}.txt"
     data = np.loadtxt(str(path))  # (N, 2): col0 = position (m), col1 = amplitude
     if not np.isfinite(z_step) or z_step <= 0:
@@ -156,30 +94,26 @@ def _load_pulse(beam_id: str, z_step: float = _Z_STEP) -> np.ndarray:
 
 @dataclass
 class WaveformResult:
-    """
-    Simulated GEDI-style waveform and derived metrics for one footprint.
+    """Simulated waveform and metrics of one footprint
 
     Attributes
     ----------
     z_bins : np.ndarray
-        Elevation of each bin centre (m, ascending).
+        Bin centre elevations (m, ascending).
     waveform : np.ndarray
-        Normalised energy per bin (sums to 1.0).
+        Normalised energy per bin (sums to 1).
     z_ground : float
-        Detected ground peak elevation (m).
+        Ground peak elevation (m).
     rh : dict[int, float]
-        Relative height metrics (m above ground) keyed by percentile level.
-        Standard GEDI levels: 10, 25, 50, 75, 90, 95, 98, 100.
+        Relative heights (m above ground) keyed by percentile.
     home : float
-        Height Of Median Energy = RH50 (m above ground).
+        Height of median energy (m above ground).
     cover : float
-        Canopy cover fraction (energy above ground + 2 m / total energy).
+        Canopy cover fraction.
     n_points : int
-        Number of ALS points used.
-    center_x : float
-        Footprint centre easting (m UTM).
-    center_y : float
-        Footprint centre northing (m UTM).
+        Number of points used.
+    center_x, center_y : float
+        Footprint centre (m).
     """
 
     z_bins: np.ndarray
@@ -196,11 +130,11 @@ class WaveformResult:
     slope_corrected: bool = False
 
     def rh_array(self, levels: tuple[int, ...] = _RH_LEVELS) -> np.ndarray:
-        """RH values as a 1-D array for the given levels."""
+        """Return RH values as a 1-D array for the given levels."""
         return np.array([self.rh.get(lv, np.nan) for lv in levels])
 
     def to_dict(self) -> dict:
-        """Flat dict of scalar metrics (no arrays) — useful for DataFrame rows."""
+        """Return the scalar metrics as a flat dict."""
         d = {
             "center_x": self.center_x,
             "center_y": self.center_y,
@@ -227,7 +161,7 @@ def _effective_query_radius(
     sigma_beam: float | None,
     beam_extent_sigma: float = _BEAM_EXTENT_SIGMA,
 ) -> float:
-    """Return the query radius, including the configured Gaussian beam tail."""
+    """Return the query radius, including the Gaussian beam tail."""
     if not np.isfinite(footprint_radius) or footprint_radius <= 0:
         raise ValueError("footprint_radius must be finite and positive")
     if sigma_beam is not None and (not np.isfinite(sigma_beam) or sigma_beam <= 0):
@@ -247,12 +181,7 @@ def _query_footprint(
     radius: float,
     year: int | None,
 ) -> dict[str, np.ndarray] | None:
-    """
-    Return ALS points within a circular footprint as a dict of 1-D arrays.
-
-    Queries a bounding box first (TileDB spatial index), then applies a
-    circular mask in Python.  Returns ``None`` if the footprint is empty.
-    """
+    """Return the points inside a circular footprint as a dict of arrays, or None if empty."""
     yr_dim = provider.schema.domain.dim("Year")
     y0 = year if year is not None else int(yr_dim.domain[0])
     # +1: TileDB-Py int-dimension slices are exclusive-end (like Python slices)
@@ -286,15 +215,14 @@ def _build_histogram(
     weights: np.ndarray,
     z_step: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Bin Z values into a regular vertical histogram.
+    """Bin Z values into a vertical histogram
 
     Returns
     -------
     z_bins : np.ndarray
         Bin centre elevations (m, ascending).
     hist : np.ndarray
-        Weighted point count per bin.
+        Weighted count per bin.
     """
     if not np.isfinite(z_step) or z_step <= 0:
         raise ValueError("z_step must be finite and positive")
@@ -317,13 +245,7 @@ def _detect_ground(
     z_bins: np.ndarray,
     noise_threshold: float = 0.005,
 ) -> float:
-    """
-    Detect ground peak elevation from the waveform.
-
-    Strategy: smooth to suppress multi-return noise, find all significant
-    peaks, return the lowest-elevation one (= ground return).
-    Falls back to the lowest non-negligible bin if no peak is found.
-    """
+    """Return the elevation of the lowest significant peak (the ground return)."""
     smoothed = gaussian_filter1d(waveform, sigma=2)
     threshold = noise_threshold * smoothed.max()
 
@@ -348,23 +270,11 @@ def _rh_metrics(
     z_ground: float,
     levels: tuple[int, ...] = _RH_LEVELS,
 ) -> dict[int, float]:
-    """
-    Compute Relative Height (RH) metrics.
+    """Relative heights above the ground peak
 
-    RH(x) = height above the detected ground peak at which x% of the
-    **total recorded waveform energy** is reached, cumulative from the
-    waveform's lowest bin upward - the same total :func:`_canopy_cover` uses
-    for its own denominator (``waveform.sum()``), not a "from the ground
-    peak upward" subset. The TX-pulse convolution and slope broadening both
-    spread some genuine ground-return energy into bins *below* the detected
-    peak; excluding that energy from the denominator (an earlier version of
-    this function did exactly that, via ``waveform[ground_idx:].sum()``)
-    understated the true total and made RH silently disagree with
-    ``_canopy_cover`` computed on the same waveform. A consequence of using
-    the full total: low RH percentiles can come out slightly *negative*
-    when there's real energy below the peak - this is an expected, physical
-    effect of pulse/slope broadening (also seen in real GEDI/LVIS RH
-    products), not a bug, so it isn't clamped away.
+    RH(x) is the height at which x% of the total waveform energy is reached,
+    counted from the lowest bin. Low percentiles can be slightly negative where
+    pulse or slope broadening puts ground energy below the peak.
     """
     ground_idx = int(np.searchsorted(z_bins, z_ground))
     total = float(waveform.sum())
@@ -394,34 +304,11 @@ def _canopy_cover(
     threshold: float = _COVER_THRESHOLD,
     rv_rg: float = 1.0,
 ) -> float:
-    """
-    Canopy cover from a gap-probability model, with an optional
-    reflectance-ratio correction.
+    """Canopy cover from the gap probability
 
-    Physical model: observed energy from a surface type is proportional to
-    (true fractional footprint area of that type) x (its reflectance).
-    Writing true vegetation cover as ``fv`` and ground exposure as
-    ``1 - fv``: ``veg_energy ∝ fv * rho_v``, ``ground_energy ∝ (1 - fv) *
-    rho_g``. Solving for ``fv`` given the observed energies and
-    ``rv_rg = rho_v / rho_g``:
-
-    ``cover = veg_energy / (veg_energy + rv_rg * ground_energy)``
-
-    - the ratio corrects the **ground** term, not the vegetation term
-    (scaling the vegetation term instead, as an earlier version of this
-    function did, moves cover in the wrong direction - verified by direct
-    derivation from the model above, not just recalled from memory, after a
-    test caught the sign error). Not simply "energy above threshold / total
-    energy", though that's exactly what this reduces to at the default
-    ``rv_rg=1.0`` (equal-reflectance assumption): substituting
-    ``ground_energy = total - veg_energy`` collapses the denominator back to
-    ``total``, reproducing the naive ratio. This default is **not** GEDI's
-    actual L2B cover, which applies a real, externally-calibrated rv/rg
-    (commonly < 1 - vegetation typically backscatters less efficiently than
-    bare ground at 1064 nm, so the uncorrected ratio systematically
-    *underestimates* true cover: with a smaller ``rv_rg``, the same observed
-    energy split implies a larger true ``fv``). Pass a calibrated ``rv_rg``
-    for your study area to get the corrected metric; don't guess one.
+    ``cover = veg_energy / (veg_energy + rv_rg * ground_energy)``, with
+    ``rv_rg`` the vegetation-to-ground reflectance ratio. ``rv_rg=1`` gives the
+    plain energy ratio, not GEDI's calibrated L2B cover.
     """
     total = float(waveform.sum())
     if total == 0.0:
@@ -462,7 +349,7 @@ def simulate_waveform(
     return_weighting: str = "count",
     density_radius: float | None = None,
 ) -> WaveformResult | None:
-    """Query a footprint and simulate it; see waveform_from_points for parameters."""
+    """Query a footprint and simulate its waveform; see :func:`waveform_from_points`."""
     options = dict(locals())
     options.pop("provider")
     radius = _effective_query_radius(
@@ -497,88 +384,46 @@ def waveform_from_points(
     return_weighting: str = "count",
     density_radius: float | None = None,
 ) -> WaveformResult | None:
-    """
-    Simulate a GEDI large-footprint waveform at a given UTM location.
+    """Simulate a large-footprint waveform from points
 
     Parameters
     ----------
-    provider : TileDBProvider
-        Local or S3 ALS array.
+    data
+        Point arrays, or the provider when called through :func:`simulate_waveform`.
     center_x, center_y : float
-        Footprint centre in UTM metres (same CRS as the array).
-        Convert from GEDI lat/lon with e.g. ``pyproj.Transformer``.
+        Footprint centre, in the CRS of the points.
     year : int, optional
-        Survey year filter.  ``None`` merges all years.
+        Survey year; ``None`` uses all years.
     footprint_radius : float
-        Footprint radius in metres (default 12.5 → 25 m diameter).
+        Footprint radius (m).
     z_step : float
-        Vertical bin size in metres (GEDI native = 0.15 m).
+        Vertical bin size (m).
     sigma : float
-        Gaussian pulse width σ in metres.  Used only when ``beam_id`` is
-        ``None``.  Use ``_SIGMA_FULL`` (0.64 m) for full-power beams or
-        ``_SIGMA_COV`` (0.93 m) for coverage beams.
+        Gaussian pulse width (m), used when ``beam_id`` is None.
     beam_id : str, optional
-        GEDI beam identifier (e.g. ``"BEAM0000"``).  When provided, the
-        bundled mean TX pulse shape for that beam is used as the convolution
-        kernel instead of a symmetric Gaussian, giving a more physically
-        accurate waveform (the real GEDI pulse has an asymmetric tail).
-        Must be one of ``_BEAM_IDS``; silently falls back to Gaussian if
-        unrecognised.
+        GEDI beam (e.g. ``"BEAM0000"``) whose measured pulse is used.
     noise_std : float
-        Standard deviation of additive Gaussian noise (0 = noise-free).
+        Standard deviation of additive noise (0: none).
     intensity_weighted : bool
-        Weight histogram by return intensity rather than point count.
+        Weight returns by intensity instead of counting them.
     gaussian_beam_weighting : bool
-        If ``True`` (default), weight each ALS point by the GEDI Gaussian beam
-        profile: ``exp(-r² / (2 σ_beam²))``.  Points near the footprint edge
-        contribute less than those at the centre, matching the real instrument
-        response and reducing systematic bias in heterogeneous canopy.
+        Weight points by the Gaussian beam profile.
     sigma_beam : float, optional
-        Beam σ in metres for Gaussian weighting.  Defaults to
-        ``footprint_radius / 2`` (so the 1/e² point is at the footprint edge).
+        Beam sigma (m); default ``footprint_radius / 2``.
     beam_extent_sigma : float
-        How many ``sigma_beam`` to query out to when ``gaussian_beam_weighting``
-        is ``True`` (default 3σ ≈ 98.9% of the beam's total Gaussian energy).
-        Querying only to ``footprint_radius`` (= 2σ with the default
-        ``sigma_beam``) would silently discard ~13.5% of the true beam
-        energy before the weighting step ever sees it - see
-        :func:`_effective_query_radius`. Ignored when
-        ``gaussian_beam_weighting=False`` (a flat circular footprint of
-        exactly ``footprint_radius`` has no tail to account for).
+        Query out to this many ``sigma_beam`` when weighting.
     slope_correction : bool
-        If ``True``, fit a plane to the ALS ground points (Classification == 2)
-        inside the footprint and subtract it from all Z values before building
-        the histogram.  This collapses the slope-broadened ground return back
-        to a sharp peak and retains vertical vegetation height above the fitted terrain.  Requires at least 3 ground
-        points; silently skipped otherwise.  Default ``False`` — only enable
-        for terrain with slopes > ~15°.
+        Remove a plane fitted to the ground points before binning.
     min_points : int
-        Minimum ALS points in footprint; returns ``None`` below this.
+        Return None with fewer points.
     cover_threshold : float
-        HAG threshold (m) for canopy cover calculation.
+        Height (m) separating canopy from ground for cover.
     rv_rg : float
-        Vegetation-to-ground reflectance ratio at the laser wavelength, used
-        to correct canopy cover from a raw energy ratio to a true
-        fractional-area gap probability: ``cover = veg_energy /
-        (veg_energy + rv_rg * ground_energy)`` (see :func:`_canopy_cover`
-        for the derivation). Default ``1.0`` assumes equal reflectance and
-        reproduces the uncorrected energy-ratio proxy - **not** GEDI's
-        actual L2B cover, which applies a real, externally-calibrated rv/rg
-        (commonly < 1, since vegetation typically backscatters less
-        efficiently than bare ground at 1064 nm - the uncorrected ratio then
-        systematically *underestimates* true cover). Only meaningful when
-        the histogram is genuinely energy-like, i.e. with
-        ``intensity_weighted=True``; with plain point counts (the default),
-        "energy" here just means point density; and ``rv_rg`` should still
-        only be set from a real calibration for your study area, not
-        guessed.
+        Vegetation-to-ground reflectance ratio; set from a calibration only.
     rh_levels : tuple of int
-        RH percentile levels to compute.  Default: RH0–RH100 (GEDI L2A).
-        Result ``rh`` dict has integer keys, e.g. ``result.rh[50]`` → RH50.
+        RH percentiles to compute.
     rng : np.random.Generator, optional
-        Random number generator used for additive noise when ``noise_std > 0``.
-        Pass ``np.random.default_rng(seed)`` for reproducible results.
-        ``None`` (default) uses a fresh unseeded generator each call.
+        Generator for the noise.
 
     Returns
     -------
@@ -586,8 +431,8 @@ def waveform_from_points(
     """
     from scipy.spatial import cKDTree
 
-    from alsdb.processing._footprints import point_array
-    from alsdb.processing._surface import clean_points
+    from alsdb.methods._surface import clean_points
+    from alsdb.products._footprints import point_array
 
     if (
         not np.isfinite([z_step, sigma, noise_std, rv_rg]).all()
@@ -743,47 +588,35 @@ def simulate_batch(
     batch_tile_size: float = 100.0,
     **kwargs,
 ) -> pd.DataFrame:
-    """
-    Simulate waveforms for a batch of shot locations in parallel.
+    """Simulate waveforms for many shots in parallel
 
     Parameters
     ----------
     provider : TileDBProvider
     shots : pd.DataFrame
-        Must contain ``x_col`` and ``y_col`` columns (UTM metres).
-        If a ``beam_col`` column is present (e.g. ``"BEAM0000"``), the
-        per-beam mean TX pulse is used for each shot automatically.
-        All other columns are preserved in the output.
+        Shot table with ``x_col`` and ``y_col``; other columns are kept.
     x_col, y_col : str
-        Column names for easting and northing.
+        Easting and northing columns.
     beam_col : str
-        Column name for the GEDI beam identifier.  Ignored if not present in
-        ``shots``.  Per-row beam overrides any ``beam_id`` passed via
-        ``**kwargs``.
+        Optional column with the GEDI beam of each shot.
     year : int, optional
-        Survey year filter applied to all shots.
+        Survey year.
     n_workers : int
-        Thread pool size (TileDB reads are thread-safe).
+        Threads.
     output_path : str, optional
-        If provided, the result DataFrame is written to this path as a
-        Parquet file (``pyarrow`` engine).  The file is created or
-        overwritten.  The DataFrame is still returned as usual.
+        Also write the result to this Parquet file.
     rng : np.random.Generator, optional
-        Random number generator forwarded to each :func:`simulate_waveform`
-        call for reproducible noise.  Pass ``np.random.default_rng(seed)``.
-        Independent per-position seeds make results reproducible across worker counts,
-        including when the input index contains duplicate labels.
+        Generator for reproducible noise.
     **kwargs
-        Forwarded to :func:`simulate_waveform`.
+        Passed to :func:`simulate_waveform`.
 
     Returns
     -------
     pd.DataFrame
-        Original columns plus ``z_ground``, ``home``, ``cover``,
-        ``n_points``, ``rh0`` … ``rh100``.
-        Shots with insufficient ALS coverage have NaN metric values.
+        Shot columns plus ground elevation, HOME, cover, point count and RH
+        metrics (NaN without enough points).
     """
-    from alsdb.processing._footprints import footprint_batches
+    from alsdb.products._footprints import footprint_batches
 
     centers = shots[[x_col, y_col]].to_numpy(dtype=float)
     random = rng if rng is not None else np.random.default_rng()

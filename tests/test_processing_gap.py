@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.gap import (
+from alsdb.products.gap import (
     LAI_K_PRESETS,
     _compute_gap_grid,
     _compute_gap_grid_baba,
@@ -166,7 +166,7 @@ def test_gap_to_lai_nan_passthrough():
 
 def test_gap_to_lai_clamped_to_max():
     """Very small (but positive) gap values must be clamped to _LAI_MAX."""
-    from alsdb.processing.gap import _LAI_MAX
+    from alsdb.products.gap import _LAI_MAX
 
     gap = np.array([[1e-10]], dtype=np.float32)
     lai = _gap_to_lai(gap, k=_LAI_K)
@@ -344,7 +344,7 @@ def test_lai_k_presets_all_positive():
 
 
 def test_lai_k_presets_spherical_is_default():
-    from alsdb.processing.gap import _LAI_K_DEFAULT
+    from alsdb.products.gap import _LAI_K_DEFAULT
 
     assert _LAI_K_DEFAULT == LAI_K_PRESETS["spherical"]
 

@@ -72,3 +72,17 @@ class GridSpec:
                 )
                 x0, y0, x1, y1 = crop
                 yield ((x0 - buffer, y0 - buffer, x1 + buffer, y1 + buffer), crop)
+
+
+def flip_to_north_up(grid: np.ndarray, transpose: bool = False) -> np.ndarray:
+    """
+    Convert a south-up raster to north-up float32 orientation.
+
+    Set *transpose* when *grid* is shaped ``(nx, ny)`` (e.g. straight out of
+    ``reshape(nx, ny)`` or ``binned_statistic_2d``); leave it ``False`` when
+    *grid* is already ``(ny, nx)``.
+
+    """
+    if transpose:
+        grid = grid.T
+    return np.flipud(grid).astype(np.float32)

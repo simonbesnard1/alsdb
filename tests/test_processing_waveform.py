@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from alsdb.processing.waveform import (
+from alsdb.products.waveform import (
     WaveformResult,
     _build_histogram,
     _canopy_cover,

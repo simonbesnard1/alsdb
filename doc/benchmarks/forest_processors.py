@@ -21,10 +21,10 @@ import pdal
 from numpy.lib import recfunctions
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from alsdb.processing._terrain import TerrainModel, normalize_points
-from alsdb.processing._tiling import _filter_ground_outliers
-from alsdb.processing.biomass import _extract_metrics
-from alsdb.processing.gap import _compute_gap_grid
+from alsdb.methods._terrain import TerrainModel, normalize_points
+from alsdb.products._tiling import _filter_ground_outliers
+from alsdb.products.biomass import _extract_metrics
+from alsdb.products.gap import _compute_gap_grid
 
 
 def timed(fn, repeats=3):
@@ -112,7 +112,7 @@ def main():
 
     old = types.ModuleType("legacy_biomass_benchmark")
     exec(  # noqa: S102 - explicitly benchmark trusted repository HEAD
-        subprocess.check_output(["git", "show", "HEAD:alsdb/processing/biomass.py"], text=True),
+        subprocess.check_output(["git", "show", "HEAD:alsdb/products/biomass.py"], text=True),
         old.__dict__,
     )
     _, report["legacy_metrics_buffered"] = timed(lambda: old._extract_metrics(normalized, 10, bbox))
@@ -135,13 +135,13 @@ def main():
 def database_bench(raw, center, bbox, report):
     from alsdb.core.alsdatabase import ALSDatabase
     from alsdb.core.alsprovider import ALSProvider
-    from alsdb.processing._tiling import query_to_array
-    from alsdb.processing.biomass import compute_metrics
-    from alsdb.processing.chm import compute_chm
-    from alsdb.processing.forest import compute_forest_products
-    from alsdb.processing.gap import compute_gap_fraction
-    from alsdb.processing.pavd import compute_als_pavd_batch, compute_als_pavd_profile
-    from alsdb.processing.waveform import simulate_batch, simulate_waveform
+    from alsdb.products._tiling import query_to_array
+    from alsdb.products.biomass import compute_metrics
+    from alsdb.products.chm import compute_chm
+    from alsdb.products._area import compute_area_products
+    from alsdb.products.gap import compute_gap_fraction
+    from alsdb.products.pavd import compute_als_pavd_batch, compute_als_pavd_profile
+    from alsdb.products.waveform import simulate_batch, simulate_waveform
     from alsdb.storage.zarr_store import ALSZarrStore
     from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig
 
@@ -192,18 +192,6 @@ def database_bench(raw, center, bbox, report):
         for one, two in zip(singles, batch):
             if one is not None:
                 np.testing.assert_allclose(one.pavd, two.pavd, rtol=0, atol=1e-10)
-        from alsdb.processing.trees import segment_trees
-
-        tree_bbox = (*(center - 7.5), *(center + 7.5))
-        (tree_points, trees), report["trees_15m_with_10m_buffer_sample_0_5m"] = timed(
-            lambda: segment_trees(
-                provider, bbox=tree_bbox, year=2014, tile_buffer=10, voxel_size=0.5
-            ),
-            1,
-        )
-        assert len(trees) > 0, "Real sample unexpectedly produced no owned trees"
-        report["tree_count"] = len(trees)
-        report["segmented_tree_points"] = len(tree_points)
         options = {
             "resolution": 10.0,
             "bbox": bbox,
@@ -221,7 +209,7 @@ def database_bench(raw, center, bbox, report):
         _, report["rasters_separate"] = timed(run_separate, 1)
         fused = ALSZarrStore(str(Path(tmp) / "fused.zarr"))
         _, report["rasters_fused"] = timed(
-            lambda: compute_forest_products(
+            lambda: compute_area_products(
                 provider, fused, metrics=("h95", "cc"), gap=True, lai=True, chm=True, **options
             ),
             1,

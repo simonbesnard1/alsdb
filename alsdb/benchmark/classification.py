@@ -5,8 +5,8 @@ Classifiers compared (each cited where it is run):
 - CSF, cloth simulation filter (Zhang et al. 2016), PMF, progressive
   morphological filter (Zhang et al. 2003) and SMRF, simple morphological
   filter (Pingel et al. 2013), as implemented in PDAL (Butler et al. 2021);
-- PTD, progressive TIN densification (Axelsson 2000), as implemented in lasR
-  and its Python binding pyLASR (Roussel et al.);
+- PTD, progressive TIN densification (Axelsson 2000), lasR's implementation
+  (Roussel, r-lidar/PTD) compiled into alsdb (:mod:`alsdb.methods.ptd`);
 - LAStools ``lasground`` (rapidlasso GmbH) and FAST-GC (Fareed et al.),
   run as external programs.
 
@@ -38,7 +38,7 @@ Zhang, K., Chen, S.-C., Whitman, D., Shyu, M.-L., Yan, J., & Zhang, C. (2003).
 Zhang, W., Qi, J., Wan, P., Wang, H., Xie, D., Wang, X., & Yan, G. (2016). An
     easy-to-use airborne LiDAR data filtering method based on cloth
     simulation. Remote Sensing, 8(6), 501. https://doi.org/10.3390/rs8060501
-lasR / pyLASR: Roussel, J.-R., https://github.com/r-lidar/lasR
+lasR / r-lidar/PTD: Roussel, J.-R., https://github.com/r-lidar/lasR
 FAST-GC: Fareed, N. et al., https://github.com/nadeemfareed/FAST-GC
 """
 
@@ -57,7 +57,7 @@ from pathlib import Path
 import numpy as np
 import pdal
 
-from alsdb.core.classification import ClassificationConfig, ground_stage
+from alsdb.methods.classification import ClassificationConfig, ground_stage
 
 NOISE_CLASSES = (7, 18)
 # Reference points without a ground / non-ground decision are not scored:
@@ -110,7 +110,7 @@ class ClassificationRun:
 class PTDParameters:
     """Progressive TIN densification parameters (Axelsson 2000).
 
-    Defaults are alsdb's (:data:`alsdb.core.ptd.DEFAULTS`): lowest point per
+    Defaults are alsdb's (:data:`alsdb.methods.ptd.DEFAULTS`): lowest point per
     *seed_resolution* cell as seeds, iteration *angle* (degrees) and
     *distance* (m), densification stops at triangles smaller than *spacing*
     (m); then the tilt ensemble, *tilt_runs* runs on copies tilted by *tilt*
@@ -128,7 +128,7 @@ class PTDParameters:
     votes: int = 3
 
     def __post_init__(self) -> None:
-        from alsdb.core.ptd import check_ensemble
+        from alsdb.methods.ptd import check_ensemble
 
         check_ensemble(self.tilt_runs, self.tilt, self.votes)
 
@@ -235,30 +235,6 @@ def score_ground_classification(truth, prediction) -> ClassificationScore:
     )
 
 
-def score_boundary_strips(
-    points: np.ndarray,
-    truth,
-    prediction,
-    bbox: tuple[float, float, float, float],
-    width: float,
-) -> dict[str, ClassificationScore]:
-    """Score points inside and outside a strip along *bbox* edges."""
-    if not np.isfinite(width) or width <= 0:
-        raise ValueError("boundary width must be finite and positive")
-    x0, y0, x1, y1 = bbox
-    if 2 * width >= min(x1 - x0, y1 - y0):
-        raise ValueError("boundary width leaves no interior region")
-    x, y = points["X"], points["Y"]
-    edge = (x < x0 + width) | (x >= x1 - width) | (y < y0 + width) | (y >= y1 - width)
-    truth, prediction = np.asarray(truth, bool), np.asarray(prediction, bool)
-    if truth.shape != edge.shape or prediction.shape != edge.shape:
-        raise ValueError("point and classification arrays must have matching lengths")
-    return {
-        "boundary": score_ground_classification(truth[edge], prediction[edge]),
-        "interior": score_ground_classification(truth[~edge], prediction[~edge]),
-    }
-
-
 def classifier_input(points: np.ndarray) -> np.ndarray:
     """Copy of *points* with every class but noise (7, 18) reset to 1.
 
@@ -267,8 +243,8 @@ def classifier_input(points: np.ndarray) -> np.ndarray:
     """
     prepared = points.copy()
     prepared["Classification"][~np.isin(prepared["Classification"], NOISE_CLASSES)] = 1
-    # PDAL's ground filters refuse files where only some returns are numbered 0
-    # (seen in Robson Creek); count those as single returns.
+    # PDAL's ground filters refuse files where only some returns are numbered
+    # 0: count those as single returns.
     if {"ReturnNumber", "NumberOfReturns"} <= set(prepared.dtype.names):
         rn, nr = prepared["ReturnNumber"], prepared["NumberOfReturns"]
         rn[rn == 0] = 1
@@ -294,72 +270,6 @@ def run_pdal_ground_classifier(
         method=config.ground_method,
         is_ground=np.asarray(result["Classification"] == 2),
         wall_seconds=time.perf_counter() - start,
-    )
-
-
-def run_synthetic_grid(
-    scenarios: list[SyntheticClassificationScenario],
-    methods: tuple[str, ...] = ("csf", "pmf", "smrf"),
-    *,
-    boundary_width: float = 5.0,
-) -> list[dict]:
-    """Run PDAL classifiers over a synthetic scenario grid."""
-    rows = []
-    for scenario in scenarios:
-        points, truth = synthetic_points(scenario)
-        bbox = (0.0, 0.0, scenario.size, scenario.size)
-        for method in methods:
-            run = run_pdal_ground_classifier(
-                points,
-                ClassificationConfig(ground_method=method),
-            )
-            overall = score_ground_classification(truth, run.is_ground)
-            strips = score_boundary_strips(
-                points,
-                truth,
-                run.is_ground,
-                bbox,
-                min(boundary_width, scenario.size / 4),
-            )
-            rows.append(
-                {
-                    **asdict(scenario),
-                    "method": method,
-                    "wall_seconds": run.wall_seconds,
-                    **overall.to_dict(),
-                    "boundary_f1": strips["boundary"].f1,
-                    "interior_f1": strips["interior"].f1,
-                }
-            )
-    return rows
-
-
-def run_pylasr_ptd(
-    input_path: str | Path,
-    output_path: str | Path,
-    parameters: PTDParameters | None = None,
-) -> ClassificationRun:
-    """Run one PTD (Axelsson 2000) through pyLASR (:func:`alsdb.core.ptd.run_ptd`); noise is skipped.
-
-    A file-to-file reference for the native module: a single run, so the
-    ensemble settings of *parameters* must be ``tilt_runs=1``.
-    """
-    from alsdb.core.ptd import run_ptd
-
-    parameters = parameters or PTDParameters(tilt_runs=1, votes=1)
-    if parameters.tilt_runs != 1:
-        raise ValueError("run_pylasr_ptd runs a single PTD: use tilt_runs=1")
-    single = {
-        k: v for k, v in asdict(parameters).items() if k not in ("tilt_runs", "tilt", "votes")
-    }
-    elapsed = run_ptd(input_path, output_path, **single)
-    reader = pdal.Pipeline(json.dumps([{"type": "readers.las", "filename": str(output_path)}]))
-    reader.execute()
-    classified = reader.arrays[0]
-    return ClassificationRun(
-        method="ptd-pylasr",
-        is_ground=np.asarray(classified["Classification"] == 2),
-        wall_seconds=elapsed,
     )
 
 
@@ -591,7 +501,7 @@ def reference_context(
     decimated copy), otherwise from *points*; point labels always come from
     *points*.
     """
-    from alsdb.processing._terrain import TerrainModel
+    from alsdb.methods._terrain import TerrainModel
 
     classes = points["Classification"]
     scored = ~np.isin(classes, UNSCORED_CLASSES)
@@ -721,7 +631,7 @@ def score_against_reference(
     (``self_*``: robustness to density) and against the classifiers' median
     where they agree (``consensus_*``); *rid* is the run's :func:`run_id`.
     """
-    from alsdb.processing._terrain import TerrainModel
+    from alsdb.methods._terrain import TerrainModel
 
     is_ground = np.asarray(is_ground, bool)
     truth, scored = ref.truth, ref.scored
@@ -807,8 +717,8 @@ def _file_classifier(
         return run_pdal_ground_classifier(points, ClassificationConfig(ground_method=method))
     if method == "ptd":
         # The vendored r-lidar/PTD alsdb itself runs (identical to pyLASR's on
-        # identical coordinates); run_pylasr_ptd remains for checking against lasR.
-        from alsdb.core.ptd import ptd_ground
+        # identical coordinates, alsdb 9825924).
+        from alsdb.methods.ptd import ptd_ground
 
         start = time.perf_counter()
         ground = ptd_ground(points, **asdict(ptd or PTDParameters()))
@@ -866,19 +776,13 @@ def run_file_benchmark(
     ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
     reference_dir: str | Path | None = None,
 ) -> Path:
-    """Compare classifiers with existing class 2 labels in LAS/LAZ files.
+    """Compare ground classifiers with the class-2 labels of LAS/LAZ files
 
-    One row per file, method and parameter set goes to ``results.csv``
-    (point scores, type I / II errors, DTM error), and one row per slope and
-    cover class to ``strata.csv``. Each of the *ptd* parameter sets is a
-    separate run. Classifiers see every class reset to 1 except noise; the
-    reference's unclassified and noise points are not scored. With
-    *reference_dir*, the reference terrain and cover of each file come from
-    the file of the same name there (the full-density original of decimated
-    copies), so DTM errors at every density are against the same terrain.
-
-    Successful runs are skipped on reruns. Failures are recorded and retried
-    the next time the command is run.
+    Writes one row per file, method and parameter set to ``results.csv``
+    (type I / II errors, DTM error) and one per slope and cover class to
+    ``strata.csv``. Classifiers see every class but noise reset to 1. With
+    *reference_dir*, terrain and cover come from the file of the same name
+    there (the full-density original). Finished runs are skipped on rerun.
     """
     if boundary_width <= 0:
         raise ValueError("boundary_width must be positive")
@@ -990,13 +894,10 @@ SCENE_STRATA_FIELDS = (*STRATA_FIELDS, *REFERENCE_FIELDS, "scenario")
 
 
 def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) -> ReferenceContext:
-    """Reference of a benchmark scene: the scene's 1 m truth DTM, labels from its points.
+    """Reference of a benchmark scene: its 1 m truth DTM and its point labels
 
-    *truth* is a scene's ``truth.npz`` (``dtm`` and ``chm_centre`` north-up from
-    ``x0``, ``y1``): the exact terrain for synthetic scenes, the full-density
-    terrain for ULS and decimated ALS. Slope and cover strata come from the
-    truth averaged over *cell* m blocks; only points and cells of the scored
-    core window are stratified.
+    Slope and cover strata come from the truth averaged over *cell* m blocks,
+    inside the scored core only.
     """
     dtm = np.asarray(truth["dtm"], dtype=float)
     ny, nx = dtm.shape
@@ -1058,10 +959,10 @@ def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) 
 
 def classify_scene(scene, runs, work_dir, lastools_executable="lasground64",
                    fastgc_executable="fastgc"):  # fmt: skip
-    """[(results row, strata rows)] for each run on one benchmark scene.
+    """Run every classifier on one benchmark scene
 
-    Each run's ground mask is also kept in ``<work_dir>/ground_masks/<scene>.npz``
-    for :func:`run_scene_chm`.
+    Returns a list of (results row, strata rows); ground masks are kept in
+    ``<work_dir>/ground_masks/<scene>.npz``.
     """
     scene = Path(scene)
     laz = sorted(p for p in (scene / "laz").iterdir() if p.suffix.lower() in (".las", ".laz"))
@@ -1129,16 +1030,12 @@ def run_scene_benchmark(
     lastools_executable: str = "lasground64",
     fastgc_executable: str = "fastgc",
 ) -> Path:
-    """Classify the points of benchmark scenes and score the DTMs against their truth.
+    """Classify benchmark scenes and score their DTMs against the scene truth
 
-    Works on the scene folders of :mod:`alsdb.benchmark.synthetic`,
-    :mod:`~alsdb.benchmark.uls` and :mod:`~alsdb.benchmark.decimated`
-    (``laz/`` with one file, ``truth.npz``, ``scene.json``). The reference DTM
-    is the scene's truth: exact for synthetic scenes, the full-density survey
-    for ULS and decimated ALS. Point labels are scored against the scene's own
-    classes (HELIOS++ labels, or the survey provider's). Rows go to
-    ``results.csv`` and ``strata.csv`` as in :func:`run_file_benchmark`, with
-    the scene's scenario; finished runs are skipped on rerun.
+    Works on the scene folders of :mod:`~alsdb.benchmark.synthetic`,
+    :mod:`~alsdb.benchmark.uls` and :mod:`~alsdb.benchmark.decimated`. Writes
+    ``results.csv`` and ``strata.csv`` as :func:`run_file_benchmark`; finished
+    runs are skipped on rerun.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -1219,26 +1116,15 @@ def build_dtm_references(
     out_csv: str | Path | None = None,
     max_density: float | None = None,
 ) -> list[dict]:
-    """Classify the full-density survey of every scene area with each method.
+    """Classify the full-density survey of every real scene area with each method
 
-    For each area of the ULS and decimated scenes under *scenes_dirs* (scenes
-    sharing site, x0, y0, core and margin), the survey in ``sources[site]`` is
-    cropped to the scene extent and classified with every run; each run's
-    1 m DTM on the core cells goes to ``dtm_references.npz`` in all scenes of
-    the area. Their median over each method's first (default) run is the
-    consensus reference where they lie within *tolerance*. The scene
-    benchmark then also scores every run against its own full-density DTM
-    (robustness to density) and against the consensus.
-
-    Returns (and writes to *out_csv*) one agreement row per area and stratum:
-    share of agreeing cells, median spread, each run's and the consensus's
-    MAE against the scene's truth DTM (the provider's classification).
-    Synthetic scenes (exact truth, no ``site``) are skipped. *max_density*
-    (points/m2) thins denser surveys first: ULS at thousands of points/m2
-    would not fit in memory (DE-Eco: ~15,000 points/m2, 340 M points for a
-    150 m area).
+    Each run's 1 m DTM goes to ``dtm_references.npz`` in the area's scenes. The
+    median of each method's default (first) run, where the runs agree within
+    *tolerance*, is the consensus reference. *max_density* (points/m2) thins
+    denser surveys first. Returns, and writes to *out_csv*, one agreement row
+    per area and stratum.
     """
-    from alsdb.processing._terrain import TerrainModel
+    from alsdb.methods._terrain import TerrainModel
 
     runs = _runs(methods, ptd)
     defaults = {}
@@ -1318,105 +1204,6 @@ def build_dtm_references(
     return rows
 
 
-def consensus_ground(
-    laz_dir,
-    box,
-    out_dir,
-    *,
-    methods: tuple[str, ...] = ("csf", "pmf", "smrf", "ptd"),
-    max_density: float | None = 200.0,
-    tolerance: float = REFERENCE_TOLERANCE,
-    band: float = 0.15,
-    cell: float = 0.5,
-    crs: str | None = None,
-) -> dict:
-    """Ground labels from the classifiers' consensus, for a survey delivered without them.
-
-    Some ULS deliveries (e.g. ICOS DE-HoH) leave every point unclassified, so
-    the ULS benchmark has no ground to build its reference from. Each method
-    (default settings) classifies the survey inside *box*, thinned to
-    *max_density* points/m2; their median DTM on *cell* m cells is the
-    consensus. Every point of the survey within *band* m of it (vertically)
-    becomes ground (2), every other non-noise point 1. Each input file is
-    written, cropped to *box*, with all points and fields to *out_dir*, one
-    at a time (dense ULS: ~270 M points in a 190 m square), so the ULS
-    benchmark can thin its pulses (*crs*: default from the input headers).
-
-    The reference terrain is then the classifiers' consensus, not an
-    independent classification: on drone data over gentle terrain they agree
-    on 95-99% of cells within 0.25 m (benchmark run of 2026-11). Returns the
-    agreement statistics, also written to ``<out_dir>/consensus.json``.
-    """
-    from scipy.interpolate import RegularGridInterpolator
-
-    from alsdb.benchmark.uls import _files_and_header
-    from alsdb.processing._terrain import TerrainModel
-
-    files, _, header_crs = _files_and_header(laz_dir, box)
-    crs = crs or header_crs
-    nx, ny = round((box[2] - box[0]) / cell), round((box[3] - box[1]) / cell)
-    xs = box[0] + (np.arange(nx) + 0.5) * cell
-    ys = box[1] + (np.arange(ny) + 0.5) * cell
-    gx, gy = np.meshgrid(xs, ys)
-    cells = np.column_stack((gx.ravel(), gy.ravel()))
-    dtms = {}
-    with tempfile.TemporaryDirectory(prefix="alsdb-consensus-") as tmp:
-        sample_laz = Path(tmp) / "sample.laz"
-        pdal.Pipeline(
-            json.dumps([{"type": "writers.las", "filename": str(sample_laz), "scale_x": 0.001,
-                         "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
-                         "offset_y": "auto", "offset_z": "auto"}]),
-            arrays=[_crop_source(laz_dir, box, max_density)],
-        ).execute()  # fmt: skip
-        sample = _read_las(sample_laz)
-        noise = np.isin(sample["Classification"], NOISE_CLASSES)
-        for method, settings, _ in _runs(methods, (PTDParameters(),)):
-            run = _file_classifier(method, sample_laz, sample, Path(tmp),
-                                   lastools_executable="lasground64", fastgc_executable="fastgc",
-                                   ptd=settings)  # fmt: skip
-            model = TerrainModel(sample[run.is_ground & ~noise])
-            dtms[method] = model.evaluate(cells, distances=False)[0].reshape(ny, nx)
-    stack = np.stack(list(dtms.values()))
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        consensus = np.nanmedian(stack, axis=0)
-        spread = np.nanmax(stack, axis=0) - np.nanmin(stack, axis=0)
-    agreed = np.isfinite(stack).all(axis=0) & (spread <= tolerance)
-    surface = RegularGridInterpolator((ys, xs), consensus, bounds_error=False, fill_value=np.nan)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    bounds = f"([{box[0]},{box[2]}],[{box[1]},{box[3]}])"
-    n_points = n_ground = 0
-    for f in files:
-        reader = pdal.Pipeline(json.dumps([str(f), {"type": "filters.crop", "bounds": bounds}]))
-        reader.execute()
-        points = reader.arrays[0]
-        if not len(points):
-            continue
-        z0 = surface(np.column_stack((points["Y"], points["X"])))
-        noise = np.isin(points["Classification"], NOISE_CLASSES)
-        ground = ~noise & (np.abs(points["Z"] - z0) <= band)
-        points["Classification"] = np.where(noise, points["Classification"], np.where(ground, 2, 1))
-        n_points, n_ground = n_points + len(points), n_ground + int(ground.sum())
-        pdal.Pipeline(
-            json.dumps([{"type": "writers.las", "filename": str(out_dir / f"{f.stem}.laz"),
-                         **({"a_srs": crs} if crs else {}), "minor_version": 4,
-                         "dataformat_id": 6, "extra_dims": "all", "scale_x": 0.001,
-                         "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
-                         "offset_y": "auto", "offset_z": "auto"}]),
-            arrays=[points],
-        ).execute()  # fmt: skip
-    stats = {
-        "box": list(box), "methods": list(dtms), "max_density": max_density, "cell": cell,
-        "tolerance": tolerance, "band": band, "agreed_share": float(agreed.mean()),
-        "median_spread": float(np.nanmedian(spread)), "files": len(files), "points": n_points,
-        "ground_share": n_ground / max(n_points, 1),
-        "mae_vs_consensus": {m: float(np.nanmean(np.abs(d - consensus))) for m, d in dtms.items()},
-    }  # fmt: skip
-    (out_dir / "consensus.json").write_text(json.dumps(stats, indent=2))
-    return stats
-
-
 def _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread):
     """Agreement and distance from the truth DTM per stratum of one area."""
     rows = []
@@ -1453,7 +1240,7 @@ def chm_on_ground(points, truth, ground, config=None):
     Every other non-noise point becomes vegetation (5), so the CHM differs from
     the provider's only through the ground. Scored against ``chm_centre``.
     """
-    from alsdb.processing._surface import CHMConfig, reconstruct_chm
+    from alsdb.methods._surface import CHMConfig, reconstruct_chm
 
     config = config or CHMConfig(method="spikefree")
     arr = points.copy()
@@ -1480,7 +1267,7 @@ def chm_on_ground(points, truth, ground, config=None):
 
 
 def _scene_chm_rows(scene, masks_path, done):
-    from alsdb.processing._surface import GROUND_CLASSES
+    from alsdb.methods._surface import GROUND_CLASSES
 
     scene = Path(scene)
     laz = sorted(p for p in (scene / "laz").iterdir() if p.suffix.lower() in (".las", ".laz"))
@@ -1503,13 +1290,11 @@ def _scene_chm_rows(scene, masks_path, done):
 
 
 def run_scene_chm(scenes_dirs, out_dir, *, workers: int = 1) -> Path:
-    """alsdb spike-free CHMs on each classifier's ground, for the scenes classified in *out_dir*.
+    """Spike-free CHMs on each classifier's ground, for the scenes in *out_dir*
 
-    Reads the ground masks :func:`run_scene_benchmark` saved in
-    ``<out_dir>/ground_masks`` and writes ``<out_dir>/chm.csv``: one row per
-    scene and classifier run, plus ``provider`` (the scene's own classes), so
-    the CHM error splits into the canopy step and the ground classification.
-    Needs the native spike-free backend (``spikefree`` environment).
+    Uses the ground masks of :func:`run_scene_benchmark` and writes
+    ``<out_dir>/chm.csv`` (one row per scene and run, plus the provider's
+    ground). Needs the native spike-free module.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 

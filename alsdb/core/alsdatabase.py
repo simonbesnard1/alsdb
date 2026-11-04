@@ -17,7 +17,7 @@ import tiledb
 from retry import retry
 
 from alsdb.core.alstile import ALSTile
-from alsdb.core.classification import ClassificationConfig, resolve_classification_config
+from alsdb.methods.classification import ClassificationConfig
 from alsdb.providers.tiledb_provider import TileDBProvider
 from alsdb.tile.tile import Tile
 from alsdb.utils.schema import TileDBSchemaConfig, create_schema
@@ -123,12 +123,8 @@ class ALSDatabase(TileDBProvider):
     s3_config_overrides:
         Raw TileDB ``vfs.s3.*`` overrides.
     max_reader_threads:
-        Per-query internal TileDB thread count. Size relative to the largest
-        ``n_workers`` you'll pass to ``ingest_many``/``compute_*`` on this
-        instance, e.g. ``max(1, os.cpu_count() // n_workers)`` — otherwise
-        Python-level worker threads multiply with per-query internal threads
-        and can oversubscribe the machine. See
-        :class:`~alsdb.providers.tiledb_provider.TileDBProvider` for details.
+        Threads per query inside TileDB; see
+        :class:`~alsdb.providers.tiledb_provider.TileDBProvider`.
     """
 
     def __init__(
@@ -381,9 +377,6 @@ class ALSDatabase(TileDBProvider):
         classification_filter: list[int] | None,
         stored_crs: str | None,
         _tile: ALSTile | None = None,
-        reclassify: bool = False,
-        ground_classifier: str = "csf",
-        denoise: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
         classification_context: tuple[Path, ...] = (),
@@ -398,12 +391,7 @@ class ALSDatabase(TileDBProvider):
         Raises ``ValueError`` on CRS mismatch.
         """
         filename = laz_path.name
-        classification_config = resolve_classification_config(
-            classification_config,
-            reclassify=reclassify,
-            ground_method=ground_classifier,
-            denoise=denoise,
-        )
+        classification_config = classification_config or ClassificationConfig(enabled=False)
         tile = _tile or ALSTile(
             laz_path,
             classification_filter=classification_filter,
@@ -467,9 +455,7 @@ class ALSDatabase(TileDBProvider):
         year_arr = np.full(total, year, dtype=np.int16)
 
         # Merge per-chunk attribute dicts; attributes a file lacks are zeros.
-        # The schema is cached (it used to be reopened for every file), and zero
-        # arrays are made only for missing attributes (dict.get built one per
-        # attribute and chunk even when the attribute was there).
+        # Zero arrays are made only for attributes the file lacks.
         schema = self.schema
         attrs_all: dict[str, np.ndarray] = {}
         for attr in (schema.attr(i) for i in range(schema.nattr)):
@@ -510,9 +496,6 @@ class ALSDatabase(TileDBProvider):
         chunk_size: int | None = None,
         classification_filter: list[int] | None = None,
         overwrite: bool = False,
-        reclassify: bool = False,
-        ground_classifier: str = "csf",
-        denoise: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
         classification_workers: int | None = None,
@@ -538,12 +521,6 @@ class ALSDatabase(TileDBProvider):
             Optional list of LAS classification codes to retain.
         overwrite:
             Re-ingest even if the file is already in the manifest as ``"ok"``.
-        reclassify:
-            If ``True``, run ground classification (``ground_classifier``:
-            CSF or PMF) + HAG during ingestion to assign ground (2)
-            and vegetation (3/4/5) classes to unclassified (class 1) points.
-            Use this for surveys delivered with minimal classification (e.g.
-            USGS LPC files where non-ground returns are all class 1).
         reproject_to:
             Target CRS for the stored points.  ``"auto"`` detects feet-based
             CRS and reprojects to the appropriate UTM zone; an explicit
@@ -557,12 +534,7 @@ class ALSDatabase(TileDBProvider):
         filename = laz_path.name
         if classification_workers is None:
             classification_workers = _available_cpus()
-        classification_config = resolve_classification_config(
-            classification_config,
-            reclassify=reclassify,
-            ground_method=ground_classifier,
-            denoise=denoise,
-        )
+        classification_config = classification_config or ClassificationConfig(enabled=False)
         if classification_config.active and classification_config.buffer > 0:
             logger.warning(
                 "Classification buffer %.1f m has no neighboring files in ingest(); "
@@ -645,9 +617,6 @@ class ALSDatabase(TileDBProvider):
         consolidate_every: int = 50,
         n_workers: int = 1,
         overwrite: bool = False,
-        reclassify: bool = False,
-        ground_classifier: str = "csf",
-        denoise: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
         optimize: bool = True,
@@ -680,10 +649,9 @@ class ALSDatabase(TileDBProvider):
             ignoring the manifest.  If ``False`` (default), files already
             marked ``"ok"`` in the manifest are skipped.
         optimize:
-            Merge the per-file fragments at the end (:meth:`optimize`) when
-            files were written. ``False`` leaves that to a separate
-            :meth:`optimize` call, e.g. to time or schedule it on its own;
-            it is the memory peak of an ingest (~7 GB on large arrays).
+            Merge the per-file fragments at the end (:meth:`optimize`);
+            ``False`` leaves it to a separate call (it is the memory peak of
+            an ingest).
         classification_workers:
             Threads per file for the runs of the PTD tilt ensemble (default:
             the CPUs available to this process divided by *n_workers*, so
@@ -699,12 +667,7 @@ class ALSDatabase(TileDBProvider):
         if classification_workers is None:
             classification_workers = max(1, _available_cpus() // max(1, n_workers))
         chunk_size = chunk_size or (self._schema_cfg.chunk_size if self._schema_cfg else 1_000_000)
-        classification_config = resolve_classification_config(
-            classification_config,
-            reclassify=reclassify,
-            ground_method=ground_classifier,
-            denoise=denoise,
-        )
+        classification_config = classification_config or ClassificationConfig(enabled=False)
         laz_paths = [Path(p) for p in laz_paths]
         neighbors = _classification_neighbors(laz_paths, classification_config.buffer)
 

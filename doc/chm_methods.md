@@ -1,4 +1,4 @@
-# CHM methods, quality and uncertainty
+# CHM methods and quality
 
 Surface processing uses one north-up pixel lattice, a buffered ground TIN, and
 explicit quality layers. CHM is a statistic/interpolation of normalized surface
@@ -16,7 +16,6 @@ All horizontal and vertical coordinates must use compatible metric units.
 | `max` | Bin normalized eligible returns; `height_statistic` can select another statistic | `first_returns_only`, `height_statistic` |
 | `pitfree` | Maximum of height-threshold TIN layers (Khosravipour 2014, as lidR `pitfree()`) | `pitfree_thresholds`, `pitfree_max_edge`, optional `max_triangle_edge` |
 | `tin` | Delaunay TIN of all first returns (vegetation and ground), no pit protection; as Fischer et al. (2024) `CHMtin` and lidR `dsmtin(max_edge = 0, highest = FALSE)` | optional `max_triangle_edge` |
-| `highest_subcell_tin` | Legacy: highest return per small subcell, followed by a TIN; has no pit protection (mean CHM 2.0 m below LAStools on Barcelona NFI plots), prefer `spikefree` | `spikefree_subcell_resolution`, optional `max_triangle_edge` |
 | `spikefree` | Incremental constrained Delaunay with triangle freezing (Khosravipour 2016) | `freeze_distance` (`"auto"` default, `"local"` = Fischer et al. 2024, or metres), `spikefree_first_returns`, `height_buffer`, optional `max_triangle_edge` |
 | `lastools` | Explicit external las2dem spike-free backend | `lastools_executable`, `freeze_interval`, `freeze_distance`, `height_buffer` |
 
@@ -50,7 +49,7 @@ the height-ordered insertion and freezing logic. The native loop releases the
 Python GIL, so independent tiles can execute concurrently.
 
 ```python
-from alsdb.processing.chm import compute_chm
+from alsdb.products.chm import compute_chm
 
 compute_chm(
     provider, store, year=2021, resolution=1.0,
@@ -280,64 +279,6 @@ means every variable has data. Zarr writes are serialized per resolution within
 one store instance to avoid shared-chunk races. Separate processes/store instances
 must not write the same output concurrently.
 
-## Conditional uncertainty ensembles
-
-```python
-from alsdb.processing import CHMConfig, CHMErrorModel, compute_chm_uncertainty
-
-config = CHMConfig(
-    method="spikefree", freeze_distance=1.5, height_buffer=0.5,
-    max_triangle_edge=10.0, max_ground_distance=20.0,
-)
-# Illustrative only: substitute independently estimated survey error parameters.
-errors = CHMErrorModel(
-    strip_z_sigma=0.10, strip_xy_sigma=0.15,
-    pulse_z_sigma=0.05, terrain_sigma=0.20,
-    terrain_correlation_length=20.0,
-    calibration="Example parameters; replace with survey validation reference",
-)
-compute_chm_uncertainty(
-    provider, store, year=2021, resolution=1.0, config=config,
-    error_model=errors, n_realizations=100, seed=42,
-    interval=0.95, min_valid_fraction=0.8,
-    tile_size=500.0, tile_buffer=50.0, n_workers=2,
-)
-```
-
-Use the same configuration, footprint and input revision as the base CHM. This
-function writes separate layers and does not overwrite CHM:
-
-- `chm_uncertainty_lower`, `chm_uncertainty_upper`: ensemble quantiles.
-- `chm_uncertainty_std`: sample standard deviation.
-- `chm_uncertainty_n_valid`: finite realizations per pixel.
-
-Bounds and SD remain missing when fewer than the required fraction (or fewer than
-two realizations) is valid. All model parameters and the seed are persisted.
-`estimate_chm_uncertainty` offers the same calculation on a buffered structured
-point array without database I/O.
-
-Strip offsets affect canopy and ground jointly, so shared vertical error can
-cancel in relative height. Pulse errors preserve within-pulse dependence.
-`PointSourceId` must identify flight strips and `GpsTime` pulses within each strip;
-the software cannot infer whether a survey used those fields correctly. Optional
-pulse thinning (`pulse_keep_probability < 1`) measures sampling sensitivity.
-The terrain residual uses a smooth random Fourier field approximating a Gaussian
-spatial covariance. Random draws are keyed by strip/pulse identity and global
-coordinates, so overlapping tiles share the same perturbations.
-
-Every realization reruns ground cleaning, normalization and CHM reconstruction.
-Horizontal-error queries include an additional six-sigma margin; Gaussian errors
-are not strictly bounded. Finite-buffer and filtering sensitivity still need
-checking. Ensemble storage requires about `4 * realizations * tile_pixels` bytes
-per worker, plus temporary arrays and triangulation; start with small tiles.
-
-These are **conditional error-model intervals**, not automatically calibrated
-95% confidence intervals. Validate empirical coverage against independent,
-spatially matched references (the `interval_coverage` helper is provided).
-Missed treetops, incorrect classification, temporal mismatch and unknown sensor
-bias are not repaired by resampling observed returns. Algorithm differences should
-be reported as method sensitivity separately from these intervals.
-
 ## Benchmarking and LAStools reference adapter
 
 Full-region reference CHMs (lasR, LAStools) and matched scoring of stores are
@@ -374,34 +315,8 @@ Native continuous freezing and LAStools interval freezing remain documented
 algorithmic differences. The adjacent `.npz` contains each method's raster.
 
 The reproducible synthetic example is `doc/benchmarks/synthetic_chm.py`.
-Real-survey comparisons with a LAStools binary and independently calibrated
-uncertainty coverage remain necessary before claiming numerical equivalence or
-operational accuracy.
-
-## Migration
-
-- `spikefree=True` still selects the old approximation with a deprecation warning.
-  Use `method="highest_subcell_tin"` to name it explicitly or `method="spikefree"`
-  for the new native implementation.
-- Surface algorithm 4: points are triangulated (pitfree, tin, highest-subcell
-  TIN, DTM TIN) in a fixed order (X, Y, Z), and equal heights in the
-  highest-point thinning are broken by position. Before, the input order, which
-  TileDB sets by fragment layout and consolidation, picked among equally valid
-  triangulations: a shuffled real tile changed 11.7% of pitfree cells (mean
-  0.01 m, 99th percentile 0.32 m, at most 2.9 m) and 0.1% of TIN cells, with
-  unchanged accuracy. Spike-free, binned max and the terrain model were already
-  order-independent. Products are now identical whatever the storage layout;
-  stores written with algorithm 3 need `overwrite=True`.
-- Surface algorithm 3: ground returns enter the CHM surface, class 9 is ground,
-  and pitfree trims upper layers by edge length. `pitfree_max_distance` and
-  `spikefree_max_distance` no longer exist; drop them (or set
-  `pitfree_max_edge`). Existing stores need `overwrite=True` or a new path.
-- Pit filling and ground extrapolation are opt-in. New support masks can reduce
-  coverage compared with previous plausible-looking but unsupported values.
-- The CHM ground model now explicitly interpolates the buffered ground TIN rather
-  than relying on PDAL's local-neighbour HAG defaults. Results can change.
-- Use a new store or `overwrite=True` when migrating legacy products; incompatible
-  spatial grids require a new store.
+Real-survey comparisons with a LAStools binary remain necessary before claiming
+numerical equivalence or operational accuracy.
 
 ## References
 

@@ -1,42 +1,25 @@
-"""A stratified random sample of forest blocks from IGN Lidar HD, for the benchmark.
+"""Stratified random sample of forest blocks from IGN Lidar HD
 
-IGN's Lidar HD covers France with classified ALS (about 10 pulses/m2 or more);
-tiles whose classification was corrected by hand (``ST_AUTO_MANUEL``) give a
-ground reference of the quality of the Chapitre Petit Buech data, which is
-itself Lidar HD (F. Fischer, pers. comm., suggested using it systematically).
-This module draws 2 x 2 km blocks (four 1 km tiles) from mainland France and
-Corsica so that every combination of slope class and leaf type is
-represented, then picks scored areas inside each block. The benchmark then
-treats each area like a ULS area (:mod:`alsdb.benchmark.uls`, ``thinned``
-variant): pulses thinned to lower densities against the full-density
-reference.
+Lidar HD tiles whose classification was corrected by hand
+(``ST_AUTO_MANUEL``) give a trustworthy ground reference; using them
+systematically was suggested by Fabian Fischer (University of Bristol).
 
 Steps (each writes a CSV; the draw is reproducible from the seed):
 
-1. :func:`build_frame` - every 2 km block of the Lambert-93 grid with its
-   tree cover (ESA WorldCover 2021, read at ~80 m) and mean slope
-   (Copernicus DEM GLO-30, read at ~60 m). Both are coarse and only sort
-   blocks into strata; the scenes measure terrain and canopy from the lidar.
-2. :func:`draw` - for each slope class, eligible blocks in random order; a
-   block is accepted when its leaf type (IGN BD Foret v2: broadleaf, conifer
-   or mixed by area of typed forest) still has room in that slope class, it
-   lies at least *min_distance* from the blocks already accepted, and all
-   four tiles are published with a hand-corrected classification. Strata
-   with too few eligible blocks are reported, not filled from others.
-3. :func:`choose_cores` - inside each block, *n_cores* random 250 m cells
-   with high tree cover (WorldCover at 10 m), each holding a 200 m scored
-   core and its 15 m margin.
-4. :func:`download` - the tiles of the selected blocks (run on a machine
-   with internet access, e.g. the cluster).
+1. :func:`build_frame`: tree cover and mean slope of every 2 x 2 km block.
+2. :func:`tile_index`: classification method and dates of every tile.
+3. :func:`draw`: per slope class and leaf type, random blocks that are
+   hand-corrected and at least *min_distance* apart.
+4. :func:`choose_cores`: random 200 m scored cores inside each block.
+5. :func:`download`: the tiles of the selected blocks.
 
 Sources (all open):
 
-- IGN Lidar HD, classified point clouds (COPC), Licence Ouverte Etalab 2.0,
-  https://geoservices.ign.fr/lidarhd; tile metadata and links from the
-  STAC catalogue https://api.stac.teledetection.fr (collection ``lidarhd``).
-- IGN BD Foret v2 (Licence Ouverte Etalab 2.0), Geoplateforme WFS layer
-  ``LANDCOVER.FORESTINVENTORY.V2:formation_vegetale``; IGN ADMIN EXPRESS
-  regions (Etalab 2.0) for the outline of France.
+- IGN Lidar HD point clouds (COPC), Licence Ouverte Etalab 2.0,
+  https://geoservices.ign.fr/lidarhd; tile metadata from the STAC catalogue
+  https://api.stac.teledetection.fr (collection ``lidarhd``).
+- IGN BD Foret v2 and ADMIN EXPRESS (Licence Ouverte Etalab 2.0), from the
+  Geoplateforme WFS.
 - ESA WorldCover 10 m 2021 v200, Zanaga et al. (2022),
   https://doi.org/10.5281/zenodo.7254221 (CC BY 4.0).
 - Copernicus DEM GLO-30, (c) DLR e.V. 2010-2014 and (c) Airbus Defence and
@@ -44,7 +27,8 @@ Sources (all open):
   ESA; all rights reserved.
 
     python -m alsdb.benchmark lidarhd-frame <frame.csv>
-    python -m alsdb.benchmark lidarhd-select <frame.csv> <selection.csv>
+    python -m alsdb.benchmark lidarhd-index <tiles.csv>
+    python -m alsdb.benchmark lidarhd-select <frame.csv> <selection.csv> --index <tiles.csv>
     python -m alsdb.benchmark lidarhd-download <selection.csv> <data_dir>
 """
 
@@ -385,20 +369,20 @@ def lidarhd_tiles(x0, y0, size=BLOCK):
     return tiles
 
 
-def block_tiles_ok(tiles, x0, y0, size=BLOCK):
-    """True when every 1 km tile of the block is published and corrected by hand."""
+def block_tiles_ok(tiles, x0, y0, size=BLOCK, hand_corrected=True):
+    """True when every 1 km tile of the block is published (and corrected by hand)."""
     n = round(size / TILE)
     needed = {(round(x0 + i * TILE), round(y0 + j * TILE)) for i in range(n) for j in range(n)}
     if set(tiles) != needed:
         return False
-    return all(
+    return not hand_corrected or all(
         t["properties"].get("lidarhd:procede_classement") == CLASSIFIED for t in tiles.values()
     )
 
 
-def corrected_blocks(index_csv):
+def published_blocks(index_csv, hand_corrected=True):
     """{(x0, y0): first acquisition date} of the blocks whose four tiles are all
-    published and corrected by hand, from :func:`tile_index`."""
+    published (and corrected by hand), from :func:`tile_index`."""
     per_block = {}
     with open(index_csv) as handle:
         for r in csv.DictReader(handle):
@@ -407,28 +391,30 @@ def corrected_blocks(index_csv):
             per_block.setdefault(key, []).append(r)
     n = round(BLOCK / TILE) ** 2
     return {key: min(r["acquired"] for r in rows) for key, rows in per_block.items()
-            if len(rows) == n and all(r["method"] == CLASSIFIED for r in rows)}  # fmt: skip
+            if len(rows) == n
+            and (not hand_corrected or all(r["method"] == CLASSIFIED for r in rows))}  # fmt: skip
 
 
 def leaf_season(date):
-    """ "leaf-on" for acquisitions from May to October, else "leaf-off" (deciduous trees)."""
+    """Return "leaf-on" for acquisitions from May to October, else "leaf-off"."""
     month = int(date[5:7]) if len(date) >= 7 else 0
     return "leaf-on" if 5 <= month <= 10 else "leaf-off"
 
 
 def draw(frame_csv, out_csv, *, per_stratum=2, seed=0, min_distance=50_000.0, max_checks=400,
-         index_csv=None, lookup_forest=bdforet, lookup_tiles=lidarhd_tiles):  # fmt: skip
+         index_csv=None, hand_corrected=True, lookup_forest=bdforet,
+         lookup_tiles=lidarhd_tiles):  # fmt: skip
     """Draw *per_stratum* blocks per (slope class, leaf type); write *out_csv*.
 
-    Blocks with enough tree cover (and, with *index_csv* from
-    :func:`tile_index`, only those whose four tiles are all corrected by hand)
-    are visited in a random order (seeded) per slope class; each is checked
+    Blocks with enough tree cover whose four tiles are published (with
+    *index_csv* from :func:`tile_index`) and, with *hand_corrected*, corrected
+    by hand are visited in a random order (seeded) per slope class; each is checked
     against BD Foret (leaf type, forest share), the distance to blocks already
     accepted and the Lidar HD tiles. At most *max_checks* blocks are checked
     per slope class. Returns the selected rows and a per-stratum summary
     (also printed).
     """
-    corrected = corrected_blocks(index_csv) if index_csv else None
+    corrected = published_blocks(index_csv, hand_corrected) if index_csv else None
     with open(frame_csv) as handle:
         frame = [r for r in csv.DictReader(handle)
                  if float(r["tree_share"]) >= MIN_TREE_COVER and float(r["land_share"]) >= 0.95
@@ -456,7 +442,7 @@ def draw(frame_csv, out_csv, *, per_stratum=2, seed=0, min_distance=50_000.0, ma
             if leaf is None or shares["forest"] < MIN_FOREST or counts[leaf] >= per_stratum:
                 continue
             tiles = lookup_tiles(x0, y0)
-            if not block_tiles_ok(tiles, x0, y0):
+            if not block_tiles_ok(tiles, x0, y0, hand_corrected=hand_corrected):
                 continue
             counts[leaf] += 1
             props = [t["properties"] for t in tiles.values()]
@@ -469,6 +455,7 @@ def draw(frame_csv, out_csv, *, per_stratum=2, seed=0, min_distance=50_000.0, ma
                 "acquired": ";".join(sorted({p.get("lidarhd:date_debut_acquisition", "") for p in props})),
                 "leaf_season": leaf_season(min(p.get("lidarhd:date_debut_acquisition", "") for p in props)),
                 "mission": ";".join(sorted({p.get("lidarhd:code_mission", "") for p in props})),
+                "classification": ";".join(sorted({p.get("lidarhd:procede_classement", "") for p in props})),
                 "classified_by": ";".join(sorted({p.get("lidarhd:moe_classement_manuel", "") for p in props})),
                 "points": sum(int(p.get("pc:count", 0)) for p in props),
                 "tiles": ";".join(tiles[k]["assets"]["data"]["href"] for k in sorted(tiles)),
@@ -512,9 +499,10 @@ def choose_cores(x0, y0, *, n_cores=4, seed=0, tree_cover=None):
 
 
 def _worldcover_share(x0, y0, size):
-    """WorldCover 2021 tree share of a Lambert-93 square, at 10 m."""
+    """Return the WorldCover 2021 tree share of a Lambert-93 square, at 10 m."""
     import pyproj
     import rasterio
+    from rasterio.transform import rowcol
     from rasterio.windows import from_bounds
 
     to_deg = pyproj.Transformer.from_crs(CRS, "EPSG:4326", always_xy=True)
@@ -527,7 +515,7 @@ def _worldcover_share(x0, y0, size):
     with rasterio.open("/vsicurl/" + WORLDCOVER.format(tile=name)) as ds:
         window = from_bounds(min(lon), min(lat), max(lon), max(lat), ds.transform)
         a = ds.read(1, window=window, boundless=True)
-        rows, cols = ds.index(lon, lat)
+        rows, cols = rowcol(ds.transform, lon, lat)
         r0, c0 = int(window.row_off), int(window.col_off)
         r = np.clip(np.asarray(rows) - r0, 0, a.shape[0] - 1)
         c = np.clip(np.asarray(cols) - c0, 0, a.shape[1] - 1)

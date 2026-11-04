@@ -10,25 +10,16 @@ from pathlib import Path
 import numpy as np
 import pdal
 
-from alsdb.core.classification import (
+from alsdb.methods.classification import (
     ClassificationConfig,
     classification_stages,
     denoise_stages,
-    resolve_classification_config,
 )
 from alsdb.tile.tile import Tile
 from alsdb.tile.tile_name import TileNameBase
 from alsdb.utils.schema import LAS_ATTRIBUTES
 
 logger = logging.getLogger(__name__)
-
-# Height-above-ground thresholds in metres for LAS vegetation classes 3 / 4 / 5.
-# Only applied to unclassified (class 1) points when reclassify=True.
-# Data is always in metres at the point of reclassification (reprojected if needed).
-_HAG_LOW: float = 0.5  # below this → leave as class 1 (noise / bare ground fringe)
-_HAG_MED: float = 2.0  # 0.5–2.0 m  → class 3 (low vegetation)
-_HAG_HIGH: float = 5.0  # 2.0–5.0 m  → class 4 (medium vegetation)
-# ≥ 5.0 m    → class 5 (high vegetation)
 
 _UNRESOLVED = object()  # sentinel for lazy CRS resolution
 
@@ -92,31 +83,9 @@ class ALSTile:
     classification_filter:
         If provided, only points whose ``Classification`` code is in this list
         are passed through.
-    reclassify:
-        If ``True``, run ground classification + HAG to assign ground (class 2)
-        and vegetation (classes 3/4/5) labels to unclassified (class 1) points.
-        Thresholds are always in metres; use together with ``reproject_to`` for
-        non-metric source files.
-    ground_classifier:
-        Algorithm used for ground classification when ``reclassify=True``.
-
-        - ``"csf"`` (default) — Cloth Simulation Filter (Zhang et al. 2016);
-          robust across pulse densities on the benchmark sites.
-        - ``"ptd"`` — progressive TIN densification (Axelsson 2000), lasR's
-          implementation compiled into alsdb; lowest DTM and CHM errors on steep and
-          dense benchmark sites from ~1 pulse/m2 up (see doc/benchmarking.md).
-        - ``"smrf"`` — Simple Morphological Filter (Pingel et al. 2013); good at
-          full density, failed below ~2 pulses/m2 with PDAL's defaults.
-        - ``"pmf"`` — Progressive Morphological Filter (Zhang et al. 2003).
-    denoise:
-        If ``True``, run noise detection before reclassification:
-
-        - ``filters.elm`` flags below-ground outliers as class 7.
-        - ``filters.outlier`` (radius method) flags isolated points as class 7.
-
-        These class-7 points are then excluded from the ground classifier and
-        HAG computation.  Useful when the source LAZ has no pre-existing noise
-        classification (classes 7/18 not set).
+    classification_config:
+        Ground and vegetation classification during ingestion; ``None`` keeps
+        the file's classes. See :class:`~alsdb.methods.classification.ClassificationConfig`.
     reproject_to:
         Target CRS for the output points.
 
@@ -130,13 +99,7 @@ class ALSTile:
         self,
         path: str | Path,
         classification_filter: list[int] | None = None,
-        reclassify: bool = False,
-        ground_classifier: str = "csf",
-        denoise: bool = False,
         reproject_to: str | None = None,
-        hag_low: float = _HAG_LOW,
-        hag_med: float = _HAG_MED,
-        hag_high: float = _HAG_HIGH,
         classification_config: ClassificationConfig | None = None,
         classification_context: tuple[str | Path, ...] = (),
         classification_workers: int = 1,
@@ -144,15 +107,7 @@ class ALSTile:
         self._tile = Tile(path)
         self._classification_workers = max(1, int(classification_workers))
         self._classification_filter = classification_filter
-        self._classification = resolve_classification_config(
-            classification_config,
-            reclassify=reclassify,
-            ground_method=ground_classifier,
-            denoise=denoise,
-            vegetation_low=hag_low,
-            vegetation_medium=hag_med,
-            vegetation_high=hag_high,
-        )
+        self._classification = classification_config or ClassificationConfig(enabled=False)
         self._classification_context = tuple(Path(path) for path in classification_context)
         self._reproject_to = reproject_to
         self._resolved_crs = _UNRESOLVED  # type: ignore[assignment]
@@ -267,7 +222,7 @@ class ALSTile:
         """
         original = data["Classification"].copy()
         if self._classification.ground_method == "ptd":
-            from alsdb.core.ptd import ptd_ground
+            from alsdb.methods.ptd import ptd_ground
 
             ground = ptd_ground(data, workers=self._classification_workers,
                                 **self._classification.ptd_parameters)  # fmt: skip

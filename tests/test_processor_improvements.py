@@ -4,21 +4,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from alsdb.processing._grid import GridSpec
-from alsdb.processing.biomass import (
+from alsdb.methods._grid import GridSpec
+from alsdb.products.biomass import (
     _extract_metrics,
     _extract_metrics_baba,
     compute_biomass,
     compute_metrics,
 )
-from alsdb.processing.gap import compute_gap_fraction, gap_statistics
-from alsdb.processing.pavd import (
+from alsdb.products.gap import compute_gap_fraction, gap_statistics
+from alsdb.products.pavd import (
     _pavd_profile_from_hag,
     compute_als_pavd_batch,
     compute_als_pavd_profile,
     pavd_from_points,
 )
-from alsdb.processing.waveform import (
+from alsdb.products.waveform import (
     _build_histogram,
     _load_pulse,
     simulate_batch,
@@ -132,11 +132,11 @@ def test_waveform_keeps_tails_and_reports_ground_support():
     assert abs(result.ground_offset) <= 0.15
 
 
-def test_forest_fusion_and_cached_model_avoid_duplicate_work(provider, store, monkeypatch):
-    from alsdb.processing import forest
+def test_area_fusion_and_cached_model_avoid_duplicate_work(provider, store, monkeypatch):
+    from alsdb.products import _area
 
     calls = {"query": 0, "normalize": 0}
-    query, normalize = forest.query_to_array, forest.normalize_points
+    query, normalize = _area.query_to_array, _area.normalize_points
 
     def counted_query(*args, **kwargs):
         calls["query"] += 1
@@ -146,10 +146,10 @@ def test_forest_fusion_and_cached_model_avoid_duplicate_work(provider, store, mo
         calls["normalize"] += 1
         return normalize(*args, **kwargs)
 
-    monkeypatch.setattr(forest, "query_to_array", counted_query)
-    monkeypatch.setattr(forest, "normalize_points", counted_normalize)
+    monkeypatch.setattr(_area, "query_to_array", counted_query)
+    monkeypatch.setattr(_area, "normalize_points", counted_normalize)
     bbox = (308000.0, 4688000.0, 309000.0, 4689000.0)
-    forest.compute_forest_products(
+    _area.compute_area_products(
         provider,
         store,
         10,
@@ -247,42 +247,6 @@ def test_pavd_batch_matches_single(provider):
         np.testing.assert_allclose(result.pavd, single.pavd)
 
 
-def test_tree_boundary_keeps_whole_crown(monkeypatch):
-    from alsdb.processing import trees
-
-    p = points([0.5, 0.9, 1.2, 1.5], [0.5] * 4, [8, 15, 10, 7])
-    p["Classification"] = 5
-    ground = points([0, 2, 0, 2], [0, 0, 2, 2], [0] * 4, [2] * 4)
-    arr = np.concatenate([p, ground])
-    monkeypatch.setattr(trees, "query_to_array", lambda *a, **kw: arr)
-    monkeypatch.setattr(trees, "_filter_ground_outliers", lambda a: a)
-
-    class Pipeline:
-        def __init__(self, stages, arrays):
-            array = arrays[0]
-            if "litree" in stages:
-                from numpy.lib.recfunctions import append_fields
-
-                array = append_fields(
-                    array, "TreeID", np.ones(len(array), dtype=np.uint64), usemask=False
-                )
-            self.arrays = [array]
-
-        def execute(self):
-            pass
-
-    monkeypatch.setattr(trees.pdal, "Pipeline", Pipeline)
-    result = trees._process_tile(None, (-1, -1, 3, 3), (0, 0, 1, 1), 0, 2021, 1, 3, 2, None)
-    assert result is not None
-    segmented, records = result
-    assert len(segmented) == 4
-    assert segmented["X"].max() > 1
-    assert records.n_points.iloc[0] == 4
-    assert records.apex_x.iloc[0] == 0.9
-    other = trees._process_tile(None, (-1, -1, 3, 3), (1, 0, 2, 1), 1, 2021, 1, 3, 2, None)
-    assert other is None
-
-
 def test_exact_boundaries_give_same_metrics_when_tiled():
     p = points([0.5, 1, 1.5, 1, 0.5, 1.5], [0.5, 1, 1.5, 0.5, 1, 1], [4, 5, 6, 7, 8, 9])
     whole = _extract_metrics(p, 1, (0, 0, 2, 2))
@@ -294,22 +258,6 @@ def test_exact_boundaries_give_same_metrics_when_tiled():
             assembled[name][row, col] = values[name][0, 0]
     for name in whole:
         np.testing.assert_equal(whole[name], assembled[name])
-
-
-def test_tree_streaming_compacts_sparse_ids(monkeypatch):
-    from numpy.lib.recfunctions import append_fields
-
-    from alsdb.processing import trees
-
-    def worker(provider, query, crop, index, *args, **kwargs):
-        p = points([crop[0] + 0.5], [0.5], [10])
-        p = append_fields(p, "TreeID", np.array([2**40], dtype=np.uint64), usemask=False)
-        return p, pd.DataFrame(trees._tree_metrics(p))
-
-    monkeypatch.setattr(trees, "_process_tile", worker)
-    results = list(trees.iter_segment_trees(None, (0, 0, 2, 1), 2021, tile_size=1, n_workers=2))
-    assert [int(p["TreeID"][0]) for p, _ in results] == [1, 2]
-    assert [int(df.tree_id.iloc[0]) for _, df in results] == [1, 2]
 
 
 def test_fractional_returns_preserve_single_pulse_weight():
@@ -324,7 +272,7 @@ def test_fractional_returns_preserve_single_pulse_weight():
 
 
 def test_spatial_biomass_validation_holds_out_whole_groups():
-    from alsdb.processing.biomass import validate_naesset
+    from alsdb.products.biomass import validate_naesset
 
     rng = np.random.default_rng(14)
     h = rng.uniform(5, 35, 100)
@@ -339,7 +287,7 @@ def test_spatial_biomass_validation_holds_out_whole_groups():
 
 
 def test_failed_biomass_run_restarts_and_clears_stale_data(provider, store):
-    from alsdb.processing.forest import compute_forest_products
+    from alsdb.products._area import compute_area_products
 
     options = {
         "resolution": 10,
@@ -355,11 +303,11 @@ def test_failed_biomass_run_restarts_and_clears_stale_data(provider, store):
         raise RuntimeError("model failed")
 
     with pytest.raises(RuntimeError, match="model failed"):
-        compute_forest_products(provider, store, model_fn=fail, **options)
+        compute_area_products(provider, store, model_fn=fail, **options)
     assert store._root["10m"]["biomass"].attrs["processing_runs"]["2021"]["status"] == "failed"
-    compute_forest_products(provider, store, model_fn=lambda m: m["h95"], **options)
+    compute_area_products(provider, store, model_fn=lambda m: m["h95"], **options)
     assert store.has_data("biomass", 10, 2021)
-    compute_forest_products(
+    compute_area_products(
         provider,
         store,
         model_fn=lambda m: np.full_like(m["h95"], np.nan),
@@ -368,19 +316,3 @@ def test_failed_biomass_run_restarts_and_clears_stale_data(provider, store):
     )
     assert np.isnan(store.to_dataset(10).biomass.values).all()
     assert store._root["10m"]["biomass"].attrs["processing_runs"]["2021"]["status"] == "complete"
-
-
-def test_real_pdal_tree_clusters_are_exposed_as_tree_ids(monkeypatch):
-    from alsdb.processing import trees
-
-    rng = np.random.default_rng(17)
-    gx, gy = np.meshgrid(np.arange(-10, 11, 2), np.arange(-10, 11, 2))
-    ground = points(gx.ravel(), gy.ravel(), np.zeros(gx.size), np.full(gx.size, 2))
-    crown = points(rng.normal(0, 1, 100), rng.normal(0, 1, 100), rng.uniform(10, 20, 100))
-    arr = np.concatenate([ground, crown])
-    monkeypatch.setattr(trees, "query_to_array", lambda *a, **kw: arr)
-    segmented, records = trees.segment_trees(None, (-5, -5, 5, 5), 2021, min_points=5)
-    assert len(records) > 0  # An empty result used to hide ClusterID/TreeID incompatibility.
-    assert "TreeID" in segmented.dtype.names
-    assert (segmented["TreeID"] > 0).all()
-    assert records.height.max() > 15
