@@ -417,11 +417,14 @@ def voxel_scene(scan, zgrid, area, density, out, *, max_returns=4, seed=0):
 
 def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", "helios"),
              tools=("alsdb", "lasr"), lastools_dir=None, max_angle=20.0, candidate_fraction=0.05,
-             threads=8, seed=0, keep=False, keep_classes=None):  # fmt: skip
+             threads=8, seed=0, keep=False, keep_classes=None, centre=0.2):  # fmt: skip
     """Scan *area*, build every variant x density scene, run the tools, append to results.csv.
 
     *keep_classes*: only these classes are read (e.g. ground, vegetation and
     water of national ALS, without buildings or artefacts); default all but noise.
+    *candidate_fraction*: share of pulses kept as candidates for thinning; 0.05
+    suits ULS (thousands of pulses/m2), aircraft ALS needs 1. *centre*: window of
+    the cell-centre reference (m; 0.2 for ULS, ~0.4 for ALS density).
     """
     out_dir = Path(out_dir)
     results = out_dir / "results.csv"
@@ -434,7 +437,7 @@ def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", 
                      keep_classes=keep_classes)  # fmt: skip
     if scan.crs is None:
         raise ValueError("no CRS in the LAZ headers; pass Area(crs=...)")
-    truth_ref, zgrid = reference(scan, area)
+    truth_ref, zgrid = reference(scan, area, centre=centre)
     x0, y1 = area.x0, area.y0 + area.core
     trees = {"tree_x": np.zeros(0), "tree_y": np.zeros(0), "tree_h": np.zeros(0)}
     if area.trees:
@@ -445,7 +448,8 @@ def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", 
           f"{scan.nadir_pulses_per_m2:,.0f} near-nadir pulses/m2, "
           f"{scan.candidates.size:,} candidate returns", flush=True)  # fmt: skip
     base = {"site": area.site, "x0": area.x0, "y0": area.y0, "core": area.core,
-            "margin": area.margin, "max_angle": max_angle, "seed": seed}  # fmt: skip
+            "margin": area.margin, "max_angle": max_angle, "seed": seed,
+            "candidate_fraction": candidate_fraction, "reference_centre_m": centre}  # fmt: skip
     for variant, density in todo:
         name = f"{area.name}_{variant}_d{density:g}"
         scene = out_dir / name

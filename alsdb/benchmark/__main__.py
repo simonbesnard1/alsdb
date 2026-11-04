@@ -205,6 +205,14 @@ def main(argv=None):
     p.add_argument("--max-angle", type=float, default=20.0, help="near-nadir limit, degrees")
     p.add_argument("--classes", type=int, nargs="+",
                    help="read only these classes (e.g. 2 3 4 5 9 for national ALS); default: all")  # fmt: skip
+    p.add_argument(
+        "--candidate-fraction",
+        type=float,
+        default=0.05,
+        help="share of pulses kept for thinning: 0.05 for ULS, 1 for aircraft ALS",
+    )
+    p.add_argument("--centre", type=float, default=0.2,
+                   help="cell-centre reference window (m): 0.2 for ULS, 0.4 for ALS density")  # fmt: skip
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
                    choices=["alsdb", "lasr", "lastools"])  # fmt: skip
     p.add_argument("--lastools-dir")
@@ -365,7 +373,8 @@ def main(argv=None):
         print(run_area(args.out_dir, area, densities=args.density, variants=args.variants,
                        tools=args.tools, lastools_dir=args.lastools_dir,
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep,
-                       keep_classes=tuple(args.classes) if args.classes else None))  # fmt: skip
+                       keep_classes=tuple(args.classes) if args.classes else None,
+                       candidate_fraction=args.candidate_fraction, centre=args.centre))  # fmt: skip
     elif args.command == "decimated":
         from alsdb.benchmark import decimated
         from alsdb.benchmark.uls import Area
