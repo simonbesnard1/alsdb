@@ -40,20 +40,27 @@ def _add_ptd_arguments(p):
         ("--ptd-votes", "votes", int, "runs that must call a point ground"),
     ):
         p.add_argument(flag, type=kind, nargs="+", default=[d[key]], help=unit)
+    p.add_argument("--ptd-lasr", action="store_true",
+                   help="also run lasR's single PTD (angle 30, distance 2) as a baseline")  # fmt: skip
 
 
 def _ptd_sets(args):
     import itertools
 
     from alsdb.benchmark.classification import PTDParameters
+    from alsdb.core.ptd import LASR_DEFAULTS
 
-    return tuple(
+    sets = [
         PTDParameters(*values)
         for values in itertools.product(
             args.ptd_res, args.ptd_angle, args.ptd_distance, args.ptd_spacing,
             args.ptd_tilt_runs, args.ptd_tilt, args.ptd_votes,
         )
-    )  # fmt: skip
+    ]  # fmt: skip
+    lasr = PTDParameters(**LASR_DEFAULTS, tilt_runs=1, votes=1)
+    if args.ptd_lasr and lasr not in sets:
+        sets.append(lasr)  # after the defaults: the first set is each method's default run
+    return tuple(sets)
 
 
 def main(argv=None):
@@ -177,6 +184,15 @@ def main(argv=None):
     p.add_argument("--understorey", nargs="+", default=["no"], choices=["no", "yes"],
                    help="low vegetation 0.5-3 m under the forest")  # fmt: skip
     p.add_argument("--placement", nargs="+", default=["regular"], choices=["regular", "clumped"])
+    p.add_argument(
+        "--beam-divergence",
+        type=float,
+        nargs="+",
+        default=[0.22],
+        help="mrad (footprint at 1000 m: divergence in m)",
+    )
+    p.add_argument("--voxel", type=float, nargs="+", default=[0.5],
+                   help="crown voxel size (m): 0.5 or 0.25")  # fmt: skip
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
                    choices=["alsdb", "lasr", "lastools"])  # fmt: skip
     p.add_argument("--lastools-dir")
@@ -223,6 +239,31 @@ def main(argv=None):
                    choices=["alsdb", "lasr", "lastools"], help="none given: only build the scenes")  # fmt: skip
     p.add_argument("--lastools-dir")
     p.add_argument("--keep", action="store_true", help="keep tool products")
+    p.add_argument(
+        "--mixed",
+        nargs="*",
+        default=[],
+        metavar="SPARSE:DENSE",
+        help="uneven-density scenes: SPARSE copy with DENSE in strips, e.g. pd_01:pd_02",
+    )
+    p.add_argument("--strips", type=float, nargs=3, default=[100.0, 30.0, 35.0],
+                   metavar=("PERIOD", "WIDTH", "OFFSET"), help="dense strips (m)")  # fmt: skip
+
+    p = sub.add_parser(
+        "uls-ground", help="ground labels from the classifiers' consensus (ULS without them)"
+    )
+    p.add_argument("laz_dir")
+    p.add_argument("out_laz", help="classified copy of the area (all points and fields)")
+    p.add_argument("--x0", type=float, required=True, help="area lower-left x")
+    p.add_argument("--y0", type=float, required=True)
+    p.add_argument("--size", type=float, default=190.0, help="area side (m): core, margin, buffer")
+    p.add_argument("--tools", nargs="+", default=["csf", "pmf", "smrf", "ptd"],
+                   choices=["csf", "pmf", "smrf", "ptd"])  # fmt: skip
+    p.add_argument("--max-density", type=float, default=200.0, help="points/m2 for classifying")
+    p.add_argument(
+        "--band", type=float, default=0.15, help="ground: within this of the consensus (m)"
+    )
+    p.add_argument("--crs", help="default: from the LAZ headers")
 
     p = sub.add_parser("sensitivity", help="spike-free freeze distances on finished scenes")
     p.add_argument("scenes_dir", help="folder of synthetic or uls scenes")
@@ -338,11 +379,11 @@ def main(argv=None):
         scenarios = [
             Scenario(
                 terrain=t, forest=f, density=d, pad_scale=p, max_returns=args.max_returns, seed=s,
-                understorey=u == "yes", placement=pl,
+                understorey=u == "yes", placement=pl, beam_divergence=bd, voxel=v,
             )
-            for t, f, d, p, s, u, pl in itertools.product(
+            for t, f, d, p, s, u, pl, bd, v in itertools.product(
                 args.terrain, args.forest, args.density, args.pad_scale, args.seeds,
-                args.understorey, args.placement,
+                args.understorey, args.placement, args.beam_divergence, args.voxel,
             )
         ]  # fmt: skip
         print(run_grid(args.out_dir, scenarios, tools=args.tools, lastools_dir=args.lastools_dir,
@@ -365,12 +406,19 @@ def main(argv=None):
         area = Area(site=args.site, laz_dir=args.original, x0=args.x0, y0=args.y0,
                     core=args.core, margin=args.margin, year=args.year, crs=args.crs)  # fmt: skip
         versions = _pairs(args.versions) if args.versions else None
+        mix = {"mixed": tuple(args.mixed), "strips": tuple(args.strips)}
         if args.tools:
             print(decimated.run_area(args.out_dir, area, versions, tools=args.tools,
-                                     lastools_dir=args.lastools_dir, keep=args.keep))  # fmt: skip
+                                     lastools_dir=args.lastools_dir, keep=args.keep, **mix))  # fmt: skip
         else:
-            for scene in decimated.build_area(args.out_dir, area, versions):
+            for scene in decimated.build_area(args.out_dir, area, versions, **mix):
                 print(scene)
+    elif args.command == "uls-ground":
+        from alsdb.benchmark.classification import consensus_ground
+
+        box = (args.x0, args.y0, args.x0 + args.size, args.y0 + args.size)
+        print(json.dumps(consensus_ground(args.laz_dir, box, args.out_laz, methods=tuple(args.tools),
+                                          max_density=args.max_density, band=args.band, crs=args.crs), indent=2))  # fmt: skip
     elif args.command == "sensitivity":
         from alsdb.benchmark.sensitivity import run
 

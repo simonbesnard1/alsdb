@@ -56,6 +56,7 @@ ALSDB_METHODS = {
     },
 }
 FLIGHT_HEIGHT = 1000.0  # m above the highest terrain point
+BEAM_DIVERGENCE = 0.22  # mrad, Leica ALS50-II: a 0.22 m footprint at 1000 m
 SCAN_HALF_ANGLE = 15.0  # degrees; HELIOS++ scanAngle_deg is the half angle
 SPEED = 60.0  # m/s
 
@@ -73,6 +74,7 @@ class Scenario:
     seed: int = 0
     understorey: bool = False  # add low vegetation (UNDERSTOREY)
     placement: str = "regular"  # "clumped": trees in groups (CLUMP_SIZE, CLUMP_SPREAD)
+    beam_divergence: float = BEAM_DIVERGENCE  # mrad; at 1000 m the footprint is this many m wide
 
     def __post_init__(self):
         if self.terrain not in TERRAINS or self.forest not in FORESTS:
@@ -81,6 +83,8 @@ class Scenario:
             raise ValueError(f"placement in {PLACEMENTS}")
         if self.density <= 0 or self.pad_scale <= 0 or self.max_returns < 1:
             raise ValueError("density, pad_scale and max_returns must be positive")
+        if not self.beam_divergence > 0:
+            raise ValueError("beam_divergence must be positive (mrad)")
         if abs(1.0 / self.voxel - round(1.0 / self.voxel)) > 1e-9 or round(1.0 / self.voxel) % 2:
             raise ValueError("voxel must divide 1 m into an even number of columns (0.5, 0.25)")
 
@@ -88,6 +92,10 @@ class Scenario:
     def name(self):
         # Suffixes only for the newer options, so earlier scenes keep their names.
         extra = ("_u" if self.understorey else "") + ("_c" if self.placement == "clumped" else "")
+        if self.beam_divergence != BEAM_DIVERGENCE:
+            extra += f"_bd{self.beam_divergence:g}"
+        if self.voxel != 0.5:
+            extra += f"_v{self.voxel:g}"
         return (f"{self.terrain}_{self.forest}_d{self.density:g}_p{self.pad_scale:g}"
                 f"_r{self.max_returns}_s{self.seed}{extra}")  # fmt: skip
 
@@ -299,7 +307,7 @@ def voxel_truth(occ, origin, zmin, voxel, zgrid, margin, core):
 
 
 def write_helios_scene(out, *, name, zgrid, voxels, pad, origin, zmin, shape, voxel, xy0, density,
-                       max_returns, seed):  # fmt: skip
+                       max_returns, seed, beam_divergence=BEAM_DIVERGENCE):  # fmt: skip
     """Write terrain mesh, voxel crowns, scene, scanner and survey for HELIOS++.
 
     *zgrid* is the 1 m terrain (local coordinates, ``zgrid[j, i]`` at x=i,
@@ -361,8 +369,8 @@ def write_helios_scene(out, *, name, zgrid, voxels, pad, origin, zmin, shape, vo
     prf, scan_freq = survey_settings(density)
     (out / "scanner.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <document>
-  <!-- Leica ALS50-II geometry; maxNOR and pulse rate set per scenario -->
-  <scanner id="syn_als" accuracy_m="0.05" beamDivergence_rad="0.00022" name="synthetic ALS"
+  <!-- Leica ALS50-II geometry; maxNOR, pulse rate and beam divergence set per scenario -->
+  <scanner id="syn_als" accuracy_m="0.05" beamDivergence_rad="{beam_divergence / 1000:g}" name="synthetic ALS"
            optics="oscillating" pulseFreqs_Hz="{prf}" pulseLength_ns="10" rangeMin_m="200"
            scanAngleMax_deg="37.5" scanFreqMin_Hz="0" scanFreqMax_Hz="400"
            maxNOR="{max_returns}"/>
@@ -437,6 +445,7 @@ def make_scene(scenario, out_dir):
         out, name=scenario.name, zgrid=zgrid, voxels=np.nonzero(occ), pad=pad, origin=origin,
         zmin=zmin, shape=occ.shape, voxel=voxel, xy0=(X0, Y0), density=scenario.density,
         max_returns=scenario.max_returns, seed=scenario.seed,
+        beam_divergence=scenario.beam_divergence,
     )  # fmt: skip
     meta = {"scenario": asdict(scenario), "crs": CRS, "year": YEAR, "trees": int(canopy["x"].size),
             "shrubs": int(trees["low"].sum()),

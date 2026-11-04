@@ -193,3 +193,14 @@ def test_understorey_gets_its_own_plant_area_index(tmp_path):
         synthetic.UNDERSTOREY["pai"], rel=1e-3)  # fmt: skip
     t = np.load(tmp_path / "truth.npz")
     assert t["tree_h"].min() > 3.0  # shrubs are not scored as trees
+
+
+def test_beam_divergence_and_voxel_reach_names_and_scanner(tmp_path):
+    assert (
+        Scenario(beam_divergence=0.5, voxel=0.25).name == "rolling_conifer_d2_p1_r4_s0_bd0.5_v0.25"
+    )
+    assert Scenario(beam_divergence=0.22).name == Scenario().name  # default: name unchanged
+    with pytest.raises(ValueError):
+        Scenario(beam_divergence=0)
+    make_scene(Scenario(forest="open", core=20.0, margin=5.0, beam_divergence=0.5), tmp_path)
+    assert 'beamDivergence_rad="0.0005"' in (tmp_path / "scanner.xml").read_text()

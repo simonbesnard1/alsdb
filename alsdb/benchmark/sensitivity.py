@@ -5,7 +5,8 @@ Works on any folder of scenes written by :mod:`alsdb.benchmark.synthetic` or
 Every scene's LAZ is ingested once and alsdb spike-free is run with each
 freeze distance below; the outputs are scored with
 :func:`~alsdb.benchmark.synthetic.score` and appended to one CSV (one row per
-scene and setting). Finished scenes are skipped on rerun.
+scene and setting). Finished scenes are skipped on rerun. The CHMs of every setting
+are kept in the scene folder (``preds_sensitivity.npz``).
 
 Freeze settings (``spacing`` is the mean spacing of first surface returns of
 the scene, as alsdb's ``"auto"`` rule computes it); all returns unless noted:
@@ -94,6 +95,8 @@ def sweep_scene(scene, keep=False):
         chm = zarr.open(str(store), mode="r")["1m"]["chm"][0, :n, :n]
         preds[f"spikefree_{name}"] = np.asarray(chm, np.float32)
     np.savez_compressed(work / "preds.npz", **preds)
+    # Kept beside the scene for later analyses (density strata, derived metrics).
+    np.savez_compressed(scene / "preds_sensitivity.npz", **preds)
     for f in ("truth.npz", "scene.json"):
         shutil.copy(scene / f, work / f)
     rows = synthetic.score(work)

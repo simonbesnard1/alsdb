@@ -24,6 +24,14 @@ pulses at regular steps in acquisition order (preserving the scan pattern),
 The Robson Creek original is TERN data. The reference classification of
 Robson Creek is less reliable than Petit Buech's (F. Fischer, pers. comm.).
 
+Uneven density (``mixed``): flight-line overlaps make real surveys such as
+PNOA denser in strips. A mixed scene takes a sparse copy everywhere and a
+denser copy (e.g. ``pd_01`` and ``pd_02``) in north-south strips (default
+30 m wide every 100 m, the first 35 m from the scene's west edge, so 30% of
+the core), against the same reference. ``truth.npz`` marks the dense cells
+(``dense``) so errors can be split by strip. Unlike a real overlap, the
+strips keep one flight line's scan angles.
+
 Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
 characterisation of forest structure from airborne laser scanning - A
 systematic assessment and sample workflow for ecologists. Methods in Ecology
@@ -44,6 +52,24 @@ from alsdb.benchmark import synthetic, uls
 
 SURFACE = (2, 3, 4, 5, 9)
 VEG = (3, 4, 5)
+STRIPS = (100.0, 30.0, 35.0)  # period, width, offset from the scene's west edge (m)
+
+
+def in_strips(x, xmin, strips=STRIPS):
+    """True where *x* lies in a dense strip of a scene starting at *xmin*."""
+    period, width, offset = strips
+    return ((np.asarray(x) - xmin - offset) % period) < width
+
+
+def mixed_versions(versions, pairs):
+    """{``mix_<sparse>_<dense>``: (sparse folder, dense folder)} for ``SPARSE:DENSE`` names."""
+    out = {}
+    for pair in pairs:
+        sparse, _, dense = pair.partition(":")
+        if sparse not in versions or dense not in versions:
+            raise ValueError(f"{pair}: both copies must be among {sorted(versions)}")
+        out[f"mix_{sparse}_{dense}"] = (versions[sparse], versions[dense])
+    return out
 
 
 def versions_next_to(original):
@@ -73,15 +99,29 @@ def crop(laz_dir, box):
         p.execute()
         a = p.arrays[0]
         parts.append(a[np.isin(a["Classification"], SURFACE)])
-    pts = np.concatenate(parts)
+    names = set.intersection(*(set(a.dtype.names) for a in parts))
+    pts = np.concatenate([a[[n for n in parts[0].dtype.names if n in names]] for a in parts])
     pts["Classification"][np.isin(pts["Classification"], VEG)] = 5
     return pts
 
 
-def build_area(out_dir, area, versions=None, *, centre=0.4):
-    """Write one scene per decimated copy of *area*; return their folders."""
+def crop_mixed(sparse_dir, dense_dir, box, strips=STRIPS):
+    """The sparse copy outside the strips and the dense copy inside them."""
+    sparse, dense = crop(sparse_dir, box), crop(dense_dir, box)
+    names = [n for n in sparse.dtype.names if n in dense.dtype.names]
+    return np.concatenate((sparse[names][~in_strips(sparse["X"], box[0], strips)],
+                           dense[names][in_strips(dense["X"], box[0], strips)]))  # fmt: skip
+
+
+def build_area(out_dir, area, versions=None, *, centre=0.4, mixed=(), strips=STRIPS):
+    """Write one scene per decimated copy of *area*; return their folders.
+
+    *mixed*: ``SPARSE:DENSE`` pairs of copy names, each one more scene with
+    the dense copy in *strips* (period, width, offset in m).
+    """
     out_dir = Path(out_dir)
     versions = versions or versions_next_to(area.laz_dir)
+    versions = {**versions, **mixed_versions(versions, mixed)}
     todo = {n: d for n, d in versions.items()
             if not (out_dir / f"{area.name}_{n}" / "truth.npz").exists()}  # fmt: skip
     scenes = [out_dir / f"{area.name}_{n}" for n in versions]
@@ -98,32 +138,44 @@ def build_area(out_dir, area, versions=None, *, centre=0.4):
     trees = {"tree_x": np.zeros(0), "tree_y": np.zeros(0), "tree_h": np.zeros(0)}
     for name, folder in todo.items():
         scene = out_dir / f"{area.name}_{name}"
-        pts = crop(folder, scan.box)
+        extra, strip_meta = {}, {}
+        if isinstance(folder, tuple):  # mixed: (sparse, dense)
+            pts = crop_mixed(*folder, scan.box, strips)
+            density, variant = parse_version(Path(folder[0]).name)
+            dense_density, _ = parse_version(Path(folder[1]).name)
+            variant = f"mix{dense_density:g}" + (f"_{variant}" if variant else "")
+            n = round(area.core)
+            columns = in_strips(area.x0 + np.arange(n) + 0.5, scan.box[0], strips)
+            extra["dense"] = np.broadcast_to(columns, (n, n)).copy()
+            strip_meta = {"dense_density": dense_density, "strips_period_width_offset_m": strips,
+                          "dense_share": float(columns.mean())}  # fmt: skip
+        else:
+            pts = crop(folder, scan.box)
+            density, variant = parse_version(name)
         uls.write_laz(pts, scene / "laz" / f"SYN_{area.year}_scene.laz", scan.crs)
-        density, variant = parse_version(name)
         first = np.sum(pts["ReturnNumber"] == 1) / (scan.box[2] - scan.box[0]) ** 2
         meta = {
             "scenario": {"site": area.site, "x0": area.x0, "y0": area.y0, "core": area.core,
                          "margin": area.margin, "version": name, "density": density,
                          "variant": variant},
             "crs": scan.crs, "year": area.year, "points": int(pts.size),
-            "first_returns_per_m2": float(first), "reference_centre_m": centre,
+            "first_returns_per_m2": float(first), "reference_centre_m": centre, **strip_meta,
         }  # fmt: skip
         (scene / "scene.json").write_text(json.dumps(meta, indent=2))
         np.savez_compressed(scene / "truth.npz", **truth, x0=area.x0,
-                            y1=area.y0 + area.core, **trees)  # fmt: skip
+                            y1=area.y0 + area.core, **trees, **extra)  # fmt: skip
     return scenes
 
 
 def run_area(out_dir, area, versions=None, *, tools=("alsdb", "lasr"), lastools_dir=None,
-             keep=False):  # fmt: skip
+             keep=False, mixed=(), strips=STRIPS):  # fmt: skip
     """Build the scenes of *area*, run the tools on each, append to results.csv."""
     import shutil
 
     out_dir = Path(out_dir)
     results = out_dir / "results.csv"
     done = synthetic.finished_scenarios(results)
-    for scene in build_area(out_dir, area, versions):
+    for scene in build_area(out_dir, area, versions, mixed=mixed, strips=strips):
         if scene.name in done:
             continue
         t = time.perf_counter()

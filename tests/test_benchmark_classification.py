@@ -345,3 +345,48 @@ def test_pylasr_runs_with_a_private_temp_dir(tmp_path, monkeypatch):
     classification.run_pylasr_ptd(tmp_path / "in.laz", tmp_path / "out.laz")
     assert seen[0] != "/original" and "alsdb-pylasr-" in seen[0]
     assert os.environ["TMPDIR"] == "/original"
+
+
+def test_consensus_ground_labels_an_unclassified_survey(tmp_path):
+    import pdal
+
+    from alsdb.benchmark.classification import _read_las, consensus_ground
+
+    points, truth = synthetic_points(
+        SyntheticClassificationScenario(terrain="rolling", size=60, density=8, noise_fraction=0)
+    )
+    points["Classification"] = 0  # delivered without classification
+    (tmp_path / "in").mkdir()
+    pdal.Pipeline(
+        json.dumps([{"type": "writers.las", "filename": str(tmp_path / "in" / "s.laz"),
+                     "a_srs": "EPSG:25831", "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001}]),
+        arrays=[points],
+    ).execute()  # fmt: skip
+    out = tmp_path / "out" / "area.laz"
+    stats = consensus_ground(tmp_path / "in", (0, 0, 60, 60), out, methods=("csf", "ptd"),
+                             max_density=None)  # fmt: skip
+    assert stats["methods"] == ["csf", "ptd"] and stats["agreed_share"] > 0.8
+    assert json.loads(out.with_suffix(".json").read_text())["points"] == len(points)
+    from alsdb.benchmark.classification import _terrain_height
+
+    labelled = _read_las(out)
+    assert len(labelled) == len(points)
+    assert set(np.unique(labelled["Classification"]).tolist()) <= {1, 2}
+    ground = labelled["Classification"] == 2
+    height = labelled["Z"] - _terrain_height(labelled["X"], labelled["Y"], "rolling")
+    assert ground.mean() == pytest.approx(truth.mean(), abs=0.03)
+    assert np.mean(np.abs(height[ground]) < 0.2) > 0.95  # ground labels sit on the terrain
+    assert np.mean(height[~ground] > 0.15) > 0.9
+
+
+def test_ptd_lasr_baseline_is_added_after_the_defaults():
+    import argparse
+
+    from alsdb.benchmark.__main__ import _add_ptd_arguments, _ptd_sets
+
+    parser = argparse.ArgumentParser()
+    _add_ptd_arguments(parser)
+    sets = _ptd_sets(parser.parse_args(["--ptd-lasr"]))
+    assert sets[0] == PTDParameters()
+    assert sets[1] == PTDParameters(angle=30.0, distance=2.0, tilt_runs=1, votes=1)
+    assert _ptd_sets(parser.parse_args([])) == (PTDParameters(),)

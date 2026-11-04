@@ -151,6 +151,12 @@ groups (a Thomas cluster process) instead of a jittered grid, so canopy gaps
 vary in size. Both only add suffixes (`_u`, `_c`) to the scene names; the
 default scenes are unchanged.
 
+Sensor sweeps: `--beam-divergence` (mrad; default 0.22, the ALS50-II's, a
+0.22 m footprint at 1000 m) changes the laser footprint, and `--voxel 0.25`
+halves the crown voxels (HELIOS++ then needs 8x the memory: ~15 GB for open
+and ~45 GB for conifer stands, too much for broadleaf and tropical). They add
+`_bd<x>` and `_v<x>` to the scene names.
+
 ### ULS canopies
 
 ```bash
@@ -178,6 +184,24 @@ returns.
 Classes: ground (2) stays, every other non-noise class becomes vegetation (5).
 The tools reuse the ULS ground classification; it is not under test.
 
+Surveys delivered without ground classification (e.g. ICOS DE-HoH) first get
+labels from the classifiers' consensus:
+
+```bash
+pixi run -e spikefree python -m alsdb.benchmark uls-ground <ULS tiles> <area>/area.laz \
+    --x0 <x> --y0 <y> --size 190
+```
+
+classifies the area thinned to 200 points/m² with CSF, PMF, SMRF and PTD,
+takes their median DTM on 0.5 m cells, and labels every point within 0.15 m
+of it ground; all points and fields are written, so the pulse thinning still
+works, and the agreement statistics go to `area.json`. On a Petit Buëch area
+with provider labels (24 points/m², steep) this matched the provider's
+ground share (63% against 62%); the extra points were mostly the provider's
+low vegetation within 0.3 m of the ground, and 11% of the provider's ground
+was missed. Scenes built on such labels test the CHM, not the ground
+classifiers: their terrain is the classifiers' consensus.
+
 Caveats. The thinned samples keep the UAV sensor: centimetre footprints and
 low flying height hit crown tops and gaps more easily than aircraft ALS.
 Density-harmonised ULS (one point per 2 cm voxel) has lost some returns of
@@ -200,7 +224,14 @@ each copy of the area becomes one scene. The reference comes from the
 original as for ULS, with the centre truth over 0.4 m (enough returns at ~30
 pulses/m2); only ground, water and vegetation classes are used, vegetation
 written as class 5. Unlike thinned ULS, the input keeps the aircraft sensor
-and footprint. `--tools` without names only builds the scenes (for
+and footprint.
+
+`--mixed pd_01:pd_02 ...` adds uneven-density scenes, as flight-line overlaps
+make in real surveys such as PNOA: the first copy everywhere, the second in
+north-south strips (`--strips`, default 30 m every 100 m, 35 m from the scene's
+west edge: 30% of the core). `truth.npz` marks the dense cells (`dense`), so
+errors can be split by strip. Unlike a real overlap, the strips keep one
+flight line's scan angles. `--tools` without names only builds the scenes (for
 `sensitivity`).
 
 ### Robustness
@@ -223,7 +254,9 @@ spacings, `max(3 spacings, 1.5 m)`, a fixed 1.5 m, the formula of Fischer et
 al. (2024) at the scene's mean density (`lsf_tile`) and per 5 m cell
 (`lsf_local`), and on first returns only `k3_first` and `lspikefree` (Fischer
 et al.'s full method), and scores each like the benchmark (one row per scene and setting; resumable). Scenes that the
-benchmark in the same folder has not scored yet are skipped. Results:
+benchmark in the same folder has not scored yet are skipped. Each scene keeps
+the CHMs of every setting (`preds_sensitivity.npz`), e.g. to split errors by
+the dense strips of mixed scenes. Results:
 [chm_methods.md](chm_methods.md#how-sensitive-is-the-freeze-distance).
 
 ## Ground classification
@@ -258,7 +291,8 @@ and canopy cover (share of first returns above 2 m: 0-50, 50-80, 80-95,
 95-100%) in 5 m cells, on points and cells inside the 5 m edge strip only.
 PTD runs alsdb's tilt ensemble by default ([below](#ptd-tilt-ensemble));
 `--ptd-tilt-runs 1 --ptd-votes 1 --ptd-angle 30 --ptd-distance 2` is lasR's
-single run. Several `--ptd-*` values run every combination as separate rows. With
+single run, and `--ptd-lasr` adds that run to the others as a baseline.
+Several `--ptd-*` values run every combination as separate rows. With
 `--laz-dir` at a site folder, every version (`original/`, `pd_*/`) is scored;
 `--reference-dir` takes terrain and cover from the full-density original, so
 DTM errors at all densities are against the same terrain.

@@ -70,3 +70,36 @@ def test_build_area_writes_scenes_with_full_density_reference(site, tmp_path):
     p.execute()
     assert set(np.unique(p.arrays[0]["Classification"]).tolist()) == {2, 5}
     assert decimated.build_area(tmp_path, area) == [scene]  # rerun: nothing rebuilt
+
+
+def test_mixed_scene_has_dense_strips(tmp_path_factory, tmp_path):
+    root = tmp_path_factory.mktemp("mixed")
+    seen = set()
+    _write(root / "original" / "tile.laz", 0.2, seen)
+    _write(root / "pd_01" / "tile.laz", 1.0, seen)  # 1 pulse/m2
+    _write(root / "pd_04" / "tile.laz", 0.5, seen)  # 4 pulses/m2
+    area = Area(site="T", laz_dir=str(root / "original"), x0=X0, y0=Y0, core=20.0, margin=5.0)
+    strips = (10.0, 4.0, 2.0)  # dense where (x - west edge - 2) mod 10 < 4
+    scenes = decimated.build_area(tmp_path, area, mixed=("pd_01:pd_04",), strips=strips)
+    scene = tmp_path / "T_500000_4600000_20_mix_pd_01_pd_04"
+    assert scene in scenes
+    meta = json.loads((scene / "scene.json").read_text())
+    assert meta["scenario"]["density"] == 1.0 and meta["scenario"]["variant"] == "mix4"
+    t = np.load(scene / "truth.npz")
+    dense = t["dense"]
+    assert dense.shape == (20, 20) and (dense == dense[0]).all()
+    expected = decimated.in_strips(X0 + np.arange(20) + 0.5, X0 - 5, strips)
+    np.testing.assert_array_equal(dense[0], expected)
+    assert meta["dense_share"] == pytest.approx(expected.mean())
+    import pdal
+
+    p = pdal.Pipeline(f'["{scene / "laz" / "SYN_2024_scene.laz"}"]')
+    p.execute()
+    x = p.arrays[0]["X"]
+    inside = decimated.in_strips(x, X0 - 5, strips)
+    width = strips[1] / strips[0]
+    per_m2_in = inside.sum() / (30 * 30 * width)
+    per_m2_out = (~inside).sum() / (30 * 30 * (1 - width))
+    assert per_m2_in == pytest.approx(4, rel=0.25) and per_m2_out == pytest.approx(1, rel=0.25)
+    with pytest.raises(ValueError, match="both copies"):
+        decimated.mixed_versions({"pd_01": root}, ["pd_01:pd_08"])

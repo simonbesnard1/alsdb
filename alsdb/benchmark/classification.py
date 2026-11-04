@@ -1318,6 +1318,94 @@ def build_dtm_references(
     return rows
 
 
+def consensus_ground(
+    laz_dir,
+    box,
+    out_laz,
+    *,
+    methods: tuple[str, ...] = ("csf", "pmf", "smrf", "ptd"),
+    max_density: float | None = 200.0,
+    tolerance: float = REFERENCE_TOLERANCE,
+    band: float = 0.15,
+    cell: float = 0.5,
+    crs: str | None = None,
+) -> dict:
+    """Ground labels from the classifiers' consensus, for a survey delivered without them.
+
+    Some ULS deliveries (e.g. ICOS DE-HoH) leave every point unclassified, so
+    the ULS benchmark has no ground to build its reference from. Each method
+    (default settings) classifies the survey inside *box*, thinned to
+    *max_density* points/m2; their median DTM on *cell* m cells is the
+    consensus. Every point of the survey within *band* m of it (vertically)
+    becomes ground (2), every other non-noise point 1. All points and fields
+    are written to *out_laz*, so the ULS benchmark can thin its pulses
+    (*crs*: default from the input headers).
+
+    The reference terrain is then the classifiers' consensus, not an
+    independent classification: on drone data over gentle terrain they agree
+    on 95-99% of cells within 0.25 m (benchmark run of 2026-11). Returns the
+    agreement statistics, also written beside *out_laz* (``.json``).
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    from alsdb.benchmark.uls import _files_and_header
+    from alsdb.processing._terrain import TerrainModel
+
+    crs = crs or _files_and_header(laz_dir, box)[2]
+    nx, ny = round((box[2] - box[0]) / cell), round((box[3] - box[1]) / cell)
+    xs = box[0] + (np.arange(nx) + 0.5) * cell
+    ys = box[1] + (np.arange(ny) + 0.5) * cell
+    gx, gy = np.meshgrid(xs, ys)
+    cells = np.column_stack((gx.ravel(), gy.ravel()))
+    dtms = {}
+    with tempfile.TemporaryDirectory(prefix="alsdb-consensus-") as tmp:
+        sample_laz = Path(tmp) / "sample.laz"
+        pdal.Pipeline(
+            json.dumps([{"type": "writers.las", "filename": str(sample_laz), "scale_x": 0.001,
+                         "scale_y": 0.001, "scale_z": 0.001, "offset_x": "auto",
+                         "offset_y": "auto", "offset_z": "auto"}]),
+            arrays=[_crop_source(laz_dir, box, max_density)],
+        ).execute()  # fmt: skip
+        sample = _read_las(sample_laz)
+        noise = np.isin(sample["Classification"], NOISE_CLASSES)
+        for method, settings, _ in _runs(methods, (PTDParameters(),)):
+            run = _file_classifier(method, sample_laz, sample, Path(tmp),
+                                   lastools_executable="lasground64", fastgc_executable="fastgc",
+                                   ptd=settings)  # fmt: skip
+            model = TerrainModel(sample[run.is_ground & ~noise])
+            dtms[method] = model.evaluate(cells, distances=False)[0].reshape(ny, nx)
+    stack = np.stack(list(dtms.values()))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        consensus = np.nanmedian(stack, axis=0)
+        spread = np.nanmax(stack, axis=0) - np.nanmin(stack, axis=0)
+    agreed = np.isfinite(stack).all(axis=0) & (spread <= tolerance)
+    points = _crop_source(laz_dir, box)
+    surface = RegularGridInterpolator((ys, xs), consensus, bounds_error=False, fill_value=np.nan)
+    z0 = surface(np.column_stack((points["Y"], points["X"])))
+    noise = np.isin(points["Classification"], NOISE_CLASSES)
+    ground = ~noise & (np.abs(points["Z"] - z0) <= band)
+    points["Classification"] = np.where(noise, points["Classification"], np.where(ground, 2, 1))
+    out_laz = Path(out_laz)
+    out_laz.parent.mkdir(parents=True, exist_ok=True)
+    pdal.Pipeline(
+        json.dumps([{"type": "writers.las", "filename": str(out_laz),
+                     **({"a_srs": crs} if crs else {}), "minor_version": 4, "dataformat_id": 6, "extra_dims": "all",
+                     "scale_x": 0.001, "scale_y": 0.001, "scale_z": 0.001,
+                     "offset_x": "auto", "offset_y": "auto", "offset_z": "auto"}]),
+        arrays=[points],
+    ).execute()  # fmt: skip
+    stats = {
+        "box": list(box), "methods": list(dtms), "max_density": max_density, "cell": cell,
+        "tolerance": tolerance, "band": band, "agreed_share": float(agreed.mean()),
+        "median_spread": float(np.nanmedian(spread)), "points": len(points),
+        "ground_share": float(ground.mean()),
+        "mae_vs_consensus": {m: float(np.nanmean(np.abs(d - consensus))) for m, d in dtms.items()},
+    }  # fmt: skip
+    out_laz.with_suffix(".json").write_text(json.dumps(stats, indent=2))
+    return stats
+
+
 def _agreement_rows(site, x0, y0, ref, dtms, defaults, consensus, agreed, spread):
     """Agreement and distance from the truth DTM per stratum of one area."""
     rows = []
