@@ -9,6 +9,11 @@ terrain, the voxel canopy top (at cell centres and as cell maxima) and the
 tree apices. Results go to ``<out_dir>/results.csv``; finished scenarios are
 skipped on rerun.
 
+Forests can also come from tree lists (:func:`read_tree_list`), e.g. stands
+simulated by the forest gap model FORMIND (:func:`formind_tree_list`; Fischer
+et al. 2016, https://doi.org/10.1016/j.ecolmodel.2015.11.018), whose tree
+biomass then enters the truth.
+
     python -m alsdb.benchmark synthetic <out_dir> --terrain flat rolling \
         --forest conifer broadleaf --density 2 10 --tools alsdb lasr
 """
@@ -29,6 +34,8 @@ CRS = "EPSG:25831"
 YEAR = 2020
 TERRAINS = ("flat", "rolling", "steep", "rough", "cliff", "ravine")
 PLACEMENTS = ("regular", "clumped")
+SHAPES = ("ellipsoid", "cone", "cylinder")  # crown shapes
+TREE_LIST_COLUMNS = ("x", "y", "h", "crown_base", "crown_radius", "shape", "leaf_area", "agb")
 FORESTS = ("open", "conifer", "broadleaf", "tropical")
 METHODS = ("pitfree", "spikefree")  # run by alsdb and lasR
 # alsdb outputs: name -> compute_all options. "tin" is the first-return TIN
@@ -64,10 +71,15 @@ class Scenario:
     understorey: bool = False  # add low vegetation (UNDERSTOREY)
     placement: str = "regular"  # "clumped": trees in groups (CLUMP_SIZE, CLUMP_SPREAD)
     beam_divergence: float = BEAM_DIVERGENCE  # mrad; at 1000 m the footprint is this many m wide
+    trees: str | None = None  # tree list (read_tree_list) instead of a generated forest type
 
     def __post_init__(self):
-        if self.terrain not in TERRAINS or self.forest not in FORESTS:
-            raise ValueError(f"terrain in {TERRAINS}, forest in {FORESTS}")
+        if self.terrain not in TERRAINS:
+            raise ValueError(f"terrain in {TERRAINS}")
+        if self.trees is None and self.forest not in FORESTS:
+            raise ValueError(f"forest in {FORESTS}, or give a tree list")
+        if self.trees is not None and (self.understorey or self.placement != "regular"):
+            raise ValueError("understorey and placement apply to generated forests only")
         if self.placement not in PLACEMENTS:
             raise ValueError(f"placement in {PLACEMENTS}")
         if self.density <= 0 or self.pad_scale <= 0 or self.max_returns < 1:
@@ -167,8 +179,8 @@ CLUMP_SIZE, CLUMP_SPREAD = 8, 1.2
 
 
 def make_trees(forest, size, rng, *, placement="regular", understorey=False):
-    """Return the stems of every layer: arrays x, y, h, r, base, cone and low (understorey)."""
-    out = {k: [] for k in ("x", "y", "h", "r", "base", "cone", "low")}
+    """Return the stems of every layer: arrays x, y, h, r, base, shape (SHAPES index) and low (understorey)."""
+    out = {k: [] for k in ("x", "y", "h", "r", "base", "shape", "low")}
     layers = [(layer, False) for layer in FOREST_TYPES[forest]["layers"]]
     if understorey:
         layers += [(layer, True) for layer in UNDERSTOREY["layers"]]
@@ -196,18 +208,20 @@ def make_trees(forest, size, rng, *, placement="regular", understorey=False):
         out["h"].append(h)
         out["r"].append(layer["r"] * h * rng.uniform(0.8, 1.2, x.size))
         out["base"].append(layer["base"] * h)
-        out["cone"].append(np.full(x.size, layer["shape"] == "cone"))
+        out["shape"].append(np.full(x.size, SHAPES.index(layer["shape"])))
         out["low"].append(np.full(x.size, low))
     return {k: np.concatenate(v) for k, v in out.items()}
 
 
-def voxelise(trees, terrain, size, voxel):
+def voxelise(trees, terrain, size, voxel, *, with_pad=False):
     """Occupied voxels of all crowns, and the grid geometry.
 
     Columns are centred on multiples of *voxel* (grid origin at -voxel/2), so
     every 1 m cell centre lies on a column centre. A voxel is occupied when
     its centre lies inside a crown; crown heights are relative to the ground
-    at the stem.
+    at the stem. With *with_pad*, also returns the plant area density of every
+    voxel: each tree's ``leaf_area`` spread evenly over its crown voxels,
+    summed where crowns overlap.
     """
     n_xy = round(size / voxel) + 1
     origin = -voxel / 2
@@ -219,8 +233,12 @@ def voxelise(trees, terrain, size, voxel):
     ztop = float((ground_at_stem + trees["h"]).max()) + 1
     nz = math.ceil((ztop - zmin) / voxel)
     occ = np.zeros((n_xy, n_xy, nz), dtype=bool)
-    for x, y, h, r, cb, cone, g in zip(*(trees[k] for k in ("x", "y", "h", "r", "base", "cone")),
-                                       ground_at_stem):  # fmt: skip
+    pad = np.zeros((n_xy, n_xy, nz), dtype=np.float32) if with_pad else None
+    leaf_area = trees.get("leaf_area")
+    if with_pad and leaf_area is None:
+        raise ValueError("with_pad needs a leaf_area per tree")
+    for t, (x, y, h, r, cb, shape, g) in enumerate(zip(
+            *(trees[k] for k in ("x", "y", "h", "r", "base", "shape")), ground_at_stem)):  # fmt: skip
         i0, i1 = max(0, int((x - r - origin) / voxel)), min(n_xy, int((x + r - origin) / voxel) + 1)
         j0, j1 = max(0, int((y - r - origin) / voxel)), min(n_xy, int((y + r - origin) / voxel) + 1)
         k0, k1 = max(0, int((g + cb - zmin) / voxel)), min(nz, int((g + h - zmin) / voxel) + 1)
@@ -229,13 +247,19 @@ def voxelise(trees, terrain, size, voxel):
         cz = zmin + (np.arange(k0, k1) + 0.5) * voxel - g  # height above the stem's ground
         dx, dy, hz = np.meshgrid(cx - x, cy - y, cz, indexing="ij")
         d2 = dx * dx + dy * dy
-        if cone:
+        if SHAPES[shape] == "cone":
             rad = r * (h - hz) / (h - cb)
             inside = (hz >= cb) & (hz <= h) & (d2 <= rad * rad)
+        elif SHAPES[shape] == "cylinder":
+            inside = (hz >= cb) & (hz <= h) & (d2 <= r * r)
         else:
             a = (h - cb) / 2
             inside = d2 / (r * r) + ((hz - cb - a) / a) ** 2 <= 1
         occ[i0:i1, j0:j1, k0:k1] |= inside
+        if with_pad and inside.any():
+            pad[i0:i1, j0:j1, k0:k1] += inside * (leaf_area[t] / (inside.sum() * voxel**3))
+    if with_pad:
+        return occ, origin, zmin, pad
     return occ, origin, zmin
 
 
@@ -381,16 +405,120 @@ def write_helios_scene(out, *, name, zgrid, voxels, pad, origin, zmin, shape, vo
     return prf, scan_freq
 
 
+def read_tree_list(path, size):
+    """Trees of a tree-list CSV in the arrays :func:`voxelise` takes.
+
+    Columns (scene-local metres, origin at the scene's south-west corner):
+    ``x, y, h, crown_base, crown_radius, shape`` (ellipsoid, cone or cylinder),
+    ``leaf_area`` (m2 per tree) and optionally ``agb`` (t per tree). Trees with
+    their stem outside the *size* x *size* m scene are left out.
+    """
+    import pandas as pd
+
+    table = pd.read_csv(path)
+    missing = set(TREE_LIST_COLUMNS[:-1]) - set(table.columns)
+    if missing:
+        raise ValueError(f"{path}: missing columns {sorted(missing)}")
+    unknown = set(table["shape"]) - set(SHAPES)
+    if unknown:
+        raise ValueError(f"{path}: unknown crown shapes {sorted(unknown)}")
+    table = table[(table.x >= 0) & (table.x < size) & (table.y >= 0) & (table.y < size)
+                  & (table.h > table.crown_base) & (table.crown_radius > 0)]  # fmt: skip
+    trees = {"x": table.x.to_numpy(float), "y": table.y.to_numpy(float),
+             "h": table.h.to_numpy(float), "r": table.crown_radius.to_numpy(float),
+             "base": table.crown_base.to_numpy(float),
+             "shape": table["shape"].map(SHAPES.index).to_numpy(int),
+             "leaf_area": table.leaf_area.to_numpy(float), "low": np.zeros(len(table), bool)}  # fmt: skip
+    if "agb" in table:
+        trees["agb"] = table.agb.to_numpy(float)
+    return trees
+
+
+FORMIND_COLUMNS = ("Time", "Grp", "Species", "N", "BT", "D", "H", "SV", "LAITREE", "IR", "IR_rel",
+                   "PB", "BInc", "DInc", "OBA", "AGE", "Plot", "Hec", "X", "Y", "CLP", "LAI", "CD",
+                   "R", "RespMain", "RespGrowth", "ID", "CR")  # fmt: skip
+TREE_FIELDS = ("Time", "BT", "H", "X", "Y", "CLP", "LAI", "CR")  # what a tree list needs
+
+
+def formind_tree_list(res_path, year, out_csv, *, size=None, x0=0.0, y0=0.0, shape="cylinder"):
+    """Tree list of one year of a FORMIND ``.res`` file (per-tree output).
+
+    FORMIND (Fischer et al. 2016, https://doi.org/10.1016/j.ecolmodel.2015.11.018;
+    UFZ Leipzig, AGPL-3) writes every tree with its position, height (H),
+    crown length share (CLP), crown radius (CR), leaf area index per crown
+    area (LAI) and above-ground biomass (BT, t). FORMIND treats crowns as
+    cylinders from H * (1 - CLP) to H; *shape* can replace them by an
+    ellipsoid or cone of the same height, base, radius and leaf area. The
+    snapshot nearest *year* is used; with *size*,
+    trees with stems in [x0, x0 + size) x [y0, y0 + size) are kept and shifted
+    to the scene origin. Returns the snapshot year used.
+    """
+    return formind_tree_lists(res_path, {year: out_csv}, size=size, x0=x0, y0=y0, shape=shape)[year]
+
+
+def formind_tree_lists(res_path, outputs, *, size=None, x0=0.0, y0=0.0, shape="cylinder",
+                       chunksize=500_000):  # fmt: skip
+    """:func:`formind_tree_list` for several years in one pass over the file.
+
+    *outputs* maps each wanted year to its CSV path. The file is streamed, so
+    multi-GB ``.res`` files (yearly output of many hectares) fit in memory.
+    Returns the snapshot year used for each wanted year.
+    """
+    import pandas as pd
+
+    if shape not in SHAPES:
+        raise ValueError(f"shape in {SHAPES}")
+    best = {}  # wanted year -> [snapshot year, row blocks]
+    # Columns by the short names of the third header line: FORMIND versions
+    # differ in which columns they write (newer ones add e.g. effNPP).
+    chunks = pd.read_csv(res_path, sep="\t", skiprows=2, header=0, encoding="latin-1",
+                         usecols=lambda c: c.strip() in TREE_FIELDS, chunksize=chunksize)  # fmt: skip
+    for chunk in chunks:
+        chunk.columns = chunk.columns.str.strip()
+        if missing := set(TREE_FIELDS) - set(chunk.columns):
+            raise ValueError(f"{res_path} lacks FORMIND columns {sorted(missing)}")
+        chunk = chunk.apply(pd.to_numeric, errors="coerce").dropna(subset=["Time", "X", "Y", "H"])
+        times = chunk.Time.unique()  # before cropping: a snapshot may have no trees in the crop
+        if size is not None:
+            chunk = chunk[(chunk.X >= x0) & (chunk.X < x0 + size) & (chunk.Y >= y0)
+                          & (chunk.Y < y0 + size)]  # fmt: skip
+        for snap in times:
+            rows = chunk[chunk.Time == snap]
+            for year in outputs:
+                kept = best.get(year)
+                if kept is None or abs(snap - year) < abs(kept[0] - year):
+                    best[year] = [snap, [rows]]
+                elif snap == kept[0]:
+                    kept[1].append(rows)
+    used = {}
+    for year, out_csv in outputs.items():
+        if year not in best:
+            raise ValueError(f"no trees in {res_path}")
+        snap, blocks = best[year]
+        t = pd.concat(blocks)
+        out = pd.DataFrame({"x": t.X - x0, "y": t.Y - y0, "h": t.H, "crown_base": t.H * (1 - t.CLP),
+                            "crown_radius": t.CR, "shape": shape,
+                            "leaf_area": t.LAI * np.pi * t.CR**2, "agb": t.BT})  # fmt: skip
+        Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(out_csv, index=False)
+        used[year] = float(snap)
+    return used
+
+
 def make_scene(scenario, out_dir):
     """Write the HELIOS++ scene and survey, and the truth, for *scenario*."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(scenario.seed)
     size, voxel = scenario.size, scenario.voxel
-    trees = make_trees(scenario.forest, size, rng, placement=scenario.placement,
-                       understorey=scenario.understorey)  # fmt: skip
+    if scenario.trees is not None:
+        trees = read_tree_list(scenario.trees, size)
+        occ, origin, zmin, pad_grid = voxelise(trees, scenario.terrain, size, voxel, with_pad=True)
+    else:
+        trees = make_trees(scenario.forest, size, rng, placement=scenario.placement,
+                           understorey=scenario.understorey)  # fmt: skip
+        occ, origin, zmin = voxelise(trees, scenario.terrain, size, voxel)
     canopy = {k: v[~trees["low"]] for k, v in trees.items()}
-    occ, origin, zmin = voxelise(trees, scenario.terrain, size, voxel)
     g = np.arange(int(size) + 1, dtype=float)
     zgrid = terrain_height(scenario.terrain, *np.meshgrid(g, g))  # 1 m mesh, [y, x]
     # Crowns are placed relative to the ground at the stem; on cliffs and in
@@ -399,8 +527,12 @@ def make_scene(scenario, out_dir):
     ground = mesh_height(zgrid, *np.meshgrid(centres, centres, indexing="ij"))
     cz = zmin + (np.arange(occ.shape[2]) + 0.5) * voxel
     occ &= cz[None, None, :] > ground[:, :, None]
-    pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
-    if scenario.understorey:
+    if scenario.trees is not None:
+        pad = pad_grid[np.nonzero(occ)] * scenario.pad_scale
+        pai = float(pad.sum() * voxel**3 / (size * size))
+        pad_meta = {"mean": float(pad.mean()), "max": float(pad.max())}
+    elif scenario.understorey:
+        pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
         # The canopy keeps its stand PAI over its own voxels, the understorey gets
         # UNDERSTOREY["pai"] over the voxels only it fills.
         upper, _, upper_zmin = voxelise(canopy, scenario.terrain, size, voxel)
@@ -414,6 +546,7 @@ def make_scene(scenario, out_dir):
         pad = pad_grid[np.nonzero(occ)]
         pad_meta = {"canopy": pad_canopy, "understorey": pad_low}
     else:
+        pai = FOREST_TYPES[scenario.forest]["pai"] * scenario.pad_scale
         pad = crown_pad(pai, occ, size, voxel)
         pad_meta = pad
 
@@ -421,10 +554,14 @@ def make_scene(scenario, out_dir):
     m0, nc = round(scenario.margin), round(scenario.core)
     in_core = ((canopy["x"] >= m0) & (canopy["x"] < m0 + nc)
                & (canopy["y"] >= m0) & (canopy["y"] < m0 + nc))  # fmt: skip
+    biomass = {}
+    if "agb" in canopy:  # tree biomass (t) and plot biomass (t/ha) of the core
+        biomass = {"tree_agb": canopy["agb"][in_core],
+                   "agb_t_ha": np.float64(canopy["agb"][in_core].sum() / (nc * nc / 1e4))}  # fmt: skip
     np.savez_compressed(
         out / "truth.npz", **truth, x0=X0 + m0, y1=Y0 + m0 + nc,
         tree_x=X0 + canopy["x"][in_core], tree_y=Y0 + canopy["y"][in_core],
-        tree_h=canopy["h"][in_core],
+        tree_h=canopy["h"][in_core], **biomass,
     )  # fmt: skip
     prf, scan_freq = write_helios_scene(
         out, name=scenario.name, zgrid=zgrid, voxels=np.nonzero(occ), pad=pad, origin=origin,

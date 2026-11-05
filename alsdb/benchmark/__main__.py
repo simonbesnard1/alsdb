@@ -181,11 +181,30 @@ def main(argv=None):
     )
     p.add_argument("--voxel", type=float, nargs="+", default=[0.5],
                    help="crown voxel size (m): 0.5 or 0.25")  # fmt: skip
+    p.add_argument("--trees", nargs="+",
+                   help="tree-list CSVs (e.g. from formind-trees) instead of --forest types")  # fmt: skip
+    p.add_argument("--core", type=float, default=150.0, help="scored square (m)")
+    p.add_argument("--margin", type=float, default=30.0, help="simulated around the core (m)")
     p.add_argument("--tools", nargs="+", default=["alsdb", "lasr"],
                    choices=["alsdb", "lasr", "lastools"])  # fmt: skip
     p.add_argument("--lastools-dir")
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
+
+    p = sub.add_parser("formind-trees", help="tree lists of chosen years from a FORMIND .res file")
+    p.add_argument("res_file")
+    p.add_argument("out_dir")
+    p.add_argument("--years", type=float, nargs="+", required=True)
+    p.add_argument("--size", type=float, default=210.0, help="scene side (m): core + 2 margins")
+    p.add_argument("--x0", type=float, default=0.0, help="crop origin in the FORMIND area (m)")
+    p.add_argument("--y0", type=float, default=0.0)
+    p.add_argument("--name", help="forest name in the file names; default: the .res file name")
+    p.add_argument(
+        "--crown-shape",
+        default="cylinder",
+        choices=["cylinder", "ellipsoid", "cone"],
+        help="FORMIND crowns are cylinders; ellipsoid or cone keep size and leaf area",
+    )
 
     p = sub.add_parser("uls", help="real ULS canopies at ALS density: thinned and HELIOS++")
     p.add_argument("out_dir")
@@ -350,18 +369,38 @@ def main(argv=None):
 
         from alsdb.benchmark.synthetic import Scenario, run_grid
 
+        if args.trees:  # forest from tree lists: the file name is the forest label
+            from pathlib import Path
+
+            forests = [(Path(f).stem, str(Path(f).resolve())) for f in args.trees]
+        else:
+            forests = [(f, None) for f in args.forest]
         scenarios = [
             Scenario(
-                terrain=t, forest=f, density=d, pad_scale=p, max_returns=args.max_returns, seed=s,
-                understorey=u == "yes", placement=pl, beam_divergence=bd, voxel=v,
+                terrain=t, forest=f, trees=tl, density=d, pad_scale=p, max_returns=args.max_returns,
+                seed=s, understorey=u == "yes", placement=pl, beam_divergence=bd, voxel=v,
+                core=args.core, margin=args.margin,
             )
-            for t, f, d, p, s, u, pl, bd, v in itertools.product(
-                args.terrain, args.forest, args.density, args.pad_scale, args.seeds,
+            for t, (f, tl), d, p, s, u, pl, bd, v in itertools.product(
+                args.terrain, forests, args.density, args.pad_scale, args.seeds,
                 args.understorey, args.placement, args.beam_divergence, args.voxel,
             )
         ]  # fmt: skip
         print(run_grid(args.out_dir, scenarios, tools=args.tools, lastools_dir=args.lastools_dir,
                        threads=args.threads, keep=args.keep))  # fmt: skip
+    elif args.command == "formind-trees":
+        from pathlib import Path
+
+        from alsdb.benchmark.synthetic import formind_tree_lists
+
+        name = args.name or Path(args.res_file).stem
+        if args.crown_shape != "cylinder":
+            name += f"-{args.crown_shape}"
+        outputs = {year: Path(args.out_dir) / f"{name}-y{year:g}.csv" for year in args.years}
+        used = formind_tree_lists(args.res_file, outputs, size=args.size, x0=args.x0, y0=args.y0,
+                                  shape=args.crown_shape)  # fmt: skip
+        for year, out in outputs.items():
+            print(f"{out} (FORMIND year {used[year]:g})")
     elif args.command == "uls":
         from alsdb.benchmark.uls import Area, run_area
 

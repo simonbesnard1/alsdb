@@ -76,7 +76,7 @@ def test_valley_crowns_are_not_clipped():
     # Rolling valleys lie below every scene corner; understory trees there used to crash voxelise.
     size, voxel = 210.0, 0.5
     trees = {"x": np.array([125.7]), "y": np.array([188.5]), "h": np.array([5.0]),
-             "r": np.array([1.5]), "base": np.array([1.5]), "cone": np.array([False])}  # fmt: skip
+             "r": np.array([1.5]), "base": np.array([1.5]), "shape": np.array([0])}  # fmt: skip
     ground = terrain_height("rolling", 125.7, 188.5)
     assert ground < terrain_height("rolling", *np.meshgrid([0, size], [0, size])).min() - 5
     occ, _origin, zmin = synthetic.voxelise(trees, "rolling", size, voxel)
@@ -204,3 +204,114 @@ def test_beam_divergence_and_voxel_reach_names_and_scanner(tmp_path):
         Scenario(beam_divergence=0)
     make_scene(Scenario(forest="open", core=20.0, margin=5.0, beam_divergence=0.5), tmp_path)
     assert 'beamDivergence_rad="0.0005"' in (tmp_path / "scanner.xml").read_text()
+
+
+def _tree_csv(path, rows):
+    import pandas as pd
+
+    pd.DataFrame(rows, columns=list(synthetic.TREE_LIST_COLUMNS)).to_csv(path, index=False)
+    return path
+
+
+def test_tree_list_crowns_keep_their_leaf_area(tmp_path):
+    rows = [(10.0, 10.0, 20.0, 12.0, 3.0, "cylinder", 100.0, 1.5),
+            (12.0, 10.0, 18.0, 10.0, 2.0, "cone", 40.0, 0.8),
+            (30.0, 30.0, 15.0, 5.0, 2.5, "ellipsoid", 60.0, 0.9),
+            (99.0, 99.0, 15.0, 5.0, 2.5, "ellipsoid", 60.0, 0.9)]  # outside a 40 m scene  # fmt: skip
+    trees = synthetic.read_tree_list(_tree_csv(tmp_path / "t.csv", rows), 40.0)
+    assert len(trees["x"]) == 3 and trees["agb"].sum() == pytest.approx(3.2)
+    occ, _, _, pad = synthetic.voxelise(trees, "flat", 40.0, 0.5, with_pad=True)
+    assert pad.sum() * 0.5**3 == pytest.approx(200.0, rel=1e-5)  # leaf area summed over crowns
+    assert (pad > 0).sum() == occ.sum()
+    with pytest.raises(ValueError, match="crown shapes"):
+        synthetic.read_tree_list(
+            _tree_csv(tmp_path / "bad.csv", [(1, 1, 5, 1, 1, "box", 1, 1)]), 40
+        )
+
+
+def test_formind_tree_list_picks_the_nearest_year_and_crops(tmp_path):
+    header = (
+        "Full simulation data of each tree.\nlong names\n"
+        + "\t".join(synthetic.FORMIND_COLUMNS)
+        + "\n"
+    )
+
+    def row(t, x, y, h):  # Time ... X Y CLP LAI CD R RespMain RespGrowth ID CR
+        vals = [
+            t,
+            1,
+            0,
+            1,
+            2.0,
+            0.3,
+            h,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            50,
+            1,
+            1,
+            x,
+            y,
+            0.4,
+            2.0,
+            6.0,
+            0,
+            0,
+            0,
+            7,
+            3.0,
+        ]
+        return "\t".join(map(str, vals))
+
+    res = tmp_path / "run.res"
+    res.write_text(header + "\n".join([row(11, 5, 5, 20), row(51, 5, 5, 30), row(51, 150, 5, 25),
+                                       row(101, 5, 5, 35)]) + "\n")  # fmt: skip
+    out = tmp_path / "trees.csv"
+    assert synthetic.formind_tree_list(res, 50, out, size=100.0) == 51
+    trees = synthetic.read_tree_list(out, 100.0)
+    assert trees["h"].tolist() == [30.0]  # the tree at x=150 lies outside the crop
+    assert trees["base"][0] == pytest.approx(30 * 0.6)
+    assert trees["leaf_area"][0] == pytest.approx(2.0 * np.pi * 9.0)
+    assert synthetic.SHAPES[trees["shape"][0]] == "cylinder"
+    synthetic.formind_tree_list(res, 50, out, size=100.0, shape="ellipsoid")
+    assert synthetic.SHAPES[synthetic.read_tree_list(out, 100.0)["shape"][0]] == "ellipsoid"
+    # several years in one streamed pass, with snapshots split across chunks
+    outs = {10: tmp_path / "a.csv", 100: tmp_path / "b.csv"}
+    used = synthetic.formind_tree_lists(res, outs, chunksize=1)
+    assert used == {10: 11.0, 100: 101.0}
+    assert len(synthetic.read_tree_list(outs[10], 200.0)["h"]) == 1
+    res.write_text(header + "\n".join([row(51, 5, 5, 30), row(51, 6, 6, 31), row(51, 7, 7, 32)])
+                   + "\n")  # fmt: skip
+    synthetic.formind_tree_lists(res, {50: out}, chunksize=2)
+    assert synthetic.read_tree_list(out, 100.0)["h"].tolist() == [30.0, 31.0, 32.0]
+    # newer FORMIND versions write extra columns (effNPP after BInc): read by name
+    names = list(synthetic.FORMIND_COLUMNS)
+    names.insert(names.index("DInc"), "effNPP")
+    vals = row(51, 5, 5, 30).split("\t")
+    vals.insert(names.index("effNPP"), "9.9")
+    res.write_text("a\nb\n" + "\t".join(names) + "\tExtra\n" + "\t".join(vals) + "\t0\n")
+    synthetic.formind_tree_lists(res, {50: out})
+    trees = synthetic.read_tree_list(out, 100.0)
+    assert trees["h"].tolist() == [30.0] and trees["base"][0] == pytest.approx(30 * 0.6)
+    assert trees["leaf_area"][0] == pytest.approx(2.0 * np.pi * 9.0)
+
+
+def test_tree_list_scene_records_biomass(tmp_path):
+    rows = [(x, y, 20.0, 12.0, 3.0, "cylinder", 50.0, 2.0)
+            for x in (12.0, 22.0, 32.0) for y in (12.0, 22.0, 32.0)]  # fmt: skip
+    trees = _tree_csv(tmp_path / "stand.csv", rows)
+    scenario = Scenario(terrain="flat", forest="stand", trees=str(trees), core=20.0, margin=10.0)
+    meta = make_scene(scenario, tmp_path / "scene")
+    truth = np.load(tmp_path / "scene" / "truth.npz")
+    core = [r for r in rows if 10 <= r[0] < 30 and 10 <= r[1] < 30]
+    assert truth["tree_agb"].sum() == pytest.approx(2.0 * len(core))
+    assert float(truth["agb_t_ha"]) == pytest.approx(2.0 * len(core) / (20 * 20 / 1e4))
+    assert meta["pai"] > 0 and np.nanmax(truth["chm_max"]) == pytest.approx(20.0, abs=0.3)
+    with pytest.raises(ValueError, match="generated forests"):
+        Scenario(forest="stand", trees=str(trees), understorey=True)

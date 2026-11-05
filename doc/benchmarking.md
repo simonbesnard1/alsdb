@@ -157,6 +157,50 @@ halves the crown voxels (HELIOS++ then needs 8x the memory: ~15 GB for open
 and ~45 GB for conifer stands, too much for broadleaf and tropical). They add
 `_bd<x>` and `_v<x>` to the scene names.
 
+#### Forests from tree lists (FORMIND)
+
+`--trees stand.csv ...` replaces the generated forest types with tree lists:
+one row per tree with `x, y` (m from the scene's south-west corner), `h`,
+`crown_base`, `crown_radius`, `shape` (`ellipsoid`, `cone` or `cylinder`),
+`leaf_area` (m² per tree) and optionally `agb` (above-ground biomass, t).
+Each crown gets its own plant area density (leaf area over crown volume,
+summed where crowns overlap) and sits on the terrain at its stem, so any
+terrain can be combined with any stand. With `agb`, `truth.npz` also holds
+the biomass of every tree in the core (`tree_agb`) and of the core
+(`agb_t_ha`). The file name is the forest label in the scene names.
+
+Tree lists can come from the forest gap model FORMIND (Fischer et al. 2016;
+UFZ Leipzig, AGPL-3, run as a separate program), which simulates growth,
+competition, mortality, regeneration and disturbance, so stands of any age
+or disturbance history can be scanned. Its per-tree output (`.res`, switch
+`myResultFileSwitch.res 1`) holds each tree's position, height, crown length
+share, crown radius, leaf area index per crown area and biomass; crowns are
+cylinders:
+
+```bash
+# FORMIND built from its source (g++ -std=c++11 ... -Wno-template-body -fpermissive), 5 x 5 ha
+formind paracouForest_controlPlots_8pft.par
+pixi run -e spikefree python -m alsdb.benchmark formind-trees results/run.res trees/ \
+    --years 50 100 500 --size 210 --x0 40 --y0 40 --name paracou --crown-shape ellipsoid
+pixi run -e spikefree python -m alsdb.benchmark synthetic <out_dir> --trees trees/*.csv \
+    --terrain flat rolling steep --density 0.5 2 4 10 --tools alsdb lasr lastools
+```
+
+`formind-trees` streams the `.res` file once for all years (it can reach
+several GB: some projects write every year whatever `OutputStep` says) and
+reads the columns by the names in its third header line, which differ
+between FORMIND versions. `--crown-shape ellipsoid` or `cone` replaces
+FORMIND's cylinders by a shape of the same height, crown base, radius and
+leaf area; the shape is added to the forest label.
+
+The FORMIND release includes four tropical parameterisations: Paracou,
+French Guiana (Hiltner et al. 2018), central Amazon (Rödig et al. 2017),
+Betampona, Madagascar (Armstrong et al. 2018) and Mt. Kilimanjaro montane
+forest (Fischer et al. 2015). With per-tree output switched on, the
+Madagascar project stops in FORMIND's tree-record writer, which reads the
+light above the canopy from an empty vector; guarding that read (only the
+relative-irradiance column uses it) lets it run.
+
 ### ULS canopies
 
 ```bash
@@ -405,6 +449,10 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
 - Axelsson, P. (2000). DEM generation from laser scanner data using adaptive
   TIN models. *International Archives of Photogrammetry and Remote Sensing*,
   33(B4), 110–117.
+- Armstrong, A. H., Fischer, R., Huth, A., Shugart, H. H., & Fatoyinbo, T. E.
+  (2018). Simulating forest dynamics of lowland rainforests in eastern
+  Madagascar. *Forests*, 9(4), 214. <https://doi.org/10.3390/f9040214>
+  (FORMIND Madagascar)
 - Asner, G. P., Scurlock, J. M. O., & Hicke, J. A. (2003). Global synthesis of
   leaf area index observations. *Global Ecology and Biogeography*, 12, 191–205.
   <https://doi.org/10.1046/j.1466-822X.2003.00026.x>
@@ -415,10 +463,24 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   tropical rainforest structure with airborne lidar: leaf area profile
   sensitivity to pulse density and spatial sampling. *Remote Sensing*, 11(1),
   92. <https://doi.org/10.3390/rs11010092> (leafR)
+- Fischer, R., Bohn, F., Dantas de Paula, M., et al. (2016). Lessons learned
+  from applying a forest gap model to understand ecosystem and carbon
+  dynamics of complex tropical forests. *Ecological Modelling*, 326, 124–133.
+  <https://doi.org/10.1016/j.ecolmodel.2015.11.018> (FORMIND)
+- Fischer, R., Ensslin, A., Rutten, G., Fischer, M., Schellenberger Costa, D.,
+  Kleyer, M., Hemp, A., Paulick, S., & Huth, A. (2015). Simulating carbon
+  stocks and fluxes of an African tropical montane forest with an
+  individual-based forest model. *PLoS ONE*, 10(4), e0123300.
+  <https://doi.org/10.1371/journal.pone.0123300> (FORMIND Kilimanjaro)
 - Fischer, F. J., Jackson, T., Vincent, G., & Jucker, T. (2024). Robust
   characterisation of forest structure from airborne laser scanning — A
   systematic assessment and sample workflow for ecologists. *Methods in Ecology
   and Evolution*, 15, 1873–1888. <https://doi.org/10.1111/2041-210X.14416>
+- Hiltner, U., Huth, A., Bräuning, A., Hérault, B., & Fischer, R. (2018).
+  Simulation of succession in a neotropical forest: High selective logging
+  intensities prolong the recovery times of ecosystem functions. *Forest
+  Ecology and Management*, 430, 517–525.
+  <https://doi.org/10.1016/j.foreco.2018.08.042> (FORMIND Paracou)
 - Khosravipour, A., Skidmore, A. K., Isenburg, M., Wang, T., & Hussin, Y. A.
   (2014). Generating pit-free canopy height models from airborne lidar.
   *Photogrammetric Engineering & Remote Sensing*, 80(9), 863–872.
@@ -433,6 +495,11 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   morphological filter for the terrain classification of airborne LIDAR data.
   *ISPRS Journal of Photogrammetry and Remote Sensing*, 77, 21–30.
   <https://doi.org/10.1016/j.isprsjprs.2012.12.002>
+- Rödig, E., Cuntz, M., Heinke, J., Rammig, A., & Huth, A. (2017). Spatial
+  heterogeneity of biomass and forest structure of the Amazon rain forest:
+  Linking remote sensing, forest modelling and field inventory. *Global
+  Ecology and Biogeography*, 26, 1292–1302. <https://doi.org/10.1111/geb.12639>
+  (FORMIND Amazon)
 - Roussel, J.-R., et al. (2020). lidR: An R package for analysis of Airborne
   Laser Scanning (ALS) data. *Remote Sensing of Environment*, 251, 112061.
   <https://doi.org/10.1016/j.rse.2020.112061>; lasR and r-lidar/PTD:
