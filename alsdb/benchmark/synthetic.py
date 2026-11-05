@@ -759,7 +759,9 @@ def score(scene_dir):
         if "_dtm_" in name:
             continue
         m = np.isfinite(p) & has_truth
-        row = {"scenario": Path(scene_dir).name, **meta["scenario"], "source": name,
+        # the tree-list path as "tree_list": "trees" is the count of scored tree tops
+        setup = {("tree_list" if k == "trees" else k): v for k, v in meta["scenario"].items()}
+        row = {"scenario": Path(scene_dir).name, **setup, "source": name,
                "valid": float(np.isfinite(p)[has_truth].mean())}  # fmt: skip
         for label in ("centre", "max"):
             d = p[m] - truth[f"chm_{label}"][m]

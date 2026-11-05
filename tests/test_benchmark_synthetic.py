@@ -313,5 +313,9 @@ def test_tree_list_scene_records_biomass(tmp_path):
     assert truth["tree_agb"].sum() == pytest.approx(2.0 * len(core))
     assert float(truth["agb_t_ha"]) == pytest.approx(2.0 * len(core) / (20 * 20 / 1e4))
     assert meta["pai"] > 0 and np.nanmax(truth["chm_max"]) == pytest.approx(20.0, abs=0.3)
+    # scoring keeps the tree-list path apart from the count of scored tree tops
+    np.savez(tmp_path / "scene" / "preds.npz", alsdb_pitfree=truth["chm_max"])
+    row = synthetic.score(tmp_path / "scene")[0]
+    assert row["tree_list"] == str(trees) and row["trees"] == len(core)
     with pytest.raises(ValueError, match="generated forests"):
         Scenario(forest="stand", trees=str(trees), understorey=True)
