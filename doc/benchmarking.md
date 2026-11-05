@@ -201,6 +201,15 @@ Madagascar project stops in FORMIND's tree-record writer, which reads the
 light above the canopy from an empty vector; guarding that read (only the
 relative-irradiance column uses it) lets it run.
 
+FORMIND is free after registration at <https://formind.org> (one request
+per project; the downloaded tools are not to be passed on to people outside
+the request). Its terms ask studies to cite Köhler & Huth (1998), Köhler &
+Huth (2010), Bohn et al. (2014), Fischer et al. (2016) and Rödig et al.
+(2018), to send published articles to info@formind.org, and to acknowledge:
+"The FORMIND forest model (www.formind.org) is continuously developed at the
+Helmholtz Centre for Environmental Research – UFZ in Leipzig, Germany in the
+group of Prof. Dr. Andreas Huth."
+
 ### ULS canopies
 
 ```bash
@@ -456,6 +465,10 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
 - Asner, G. P., Scurlock, J. M. O., & Hicke, J. A. (2003). Global synthesis of
   leaf area index observations. *Global Ecology and Biogeography*, 12, 191–205.
   <https://doi.org/10.1046/j.1466-822X.2003.00026.x>
+- Bohn, F. J., Frank, K., & Huth, A. (2014). Of climate and its resulting tree
+  growth: Simulating the productivity of temperate forests. *Ecological
+  Modelling*, 278, 9–17. <https://doi.org/10.1016/j.ecolmodel.2014.01.021>
+  (FORMIND)
 - Butler, H., Chambers, B., Hartzell, P., & Glennie, C. (2021). PDAL: An open
   source library for the processing and analysis of point clouds. *Computers &
   Geosciences*, 148, 104680. <https://doi.org/10.1016/j.cageo.2020.104680>
@@ -489,6 +502,14 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   spike-free digital surface models using LiDAR raw point clouds.
   *International Journal of Applied Earth Observation and Geoinformation*, 52,
   104–114. <https://doi.org/10.1016/j.jag.2016.06.005>
+- Köhler, P., & Huth, A. (1998). The effects of tree species grouping in
+  tropical rainforest modelling: Simulations with the individual-based model
+  FORMIND. *Ecological Modelling*, 109(3), 301–321.
+  <https://doi.org/10.1016/S0304-3800(98)00066-0> (FORMIND)
+- Köhler, P., & Huth, A. (2010). Towards ground-truthing of spaceborne
+  estimates of above-ground biomass and leaf area index in tropical rain
+  forests. *Biogeosciences*, 7(8), 2531–2543.
+  <https://doi.org/10.5194/bg-7-2531-2010> (FORMIND)
 - MacArthur, R. H., & Horn, H. S. (1969). Foliage profile by vertical
   measurements. *Ecology*, 50(5), 802–804. <https://doi.org/10.2307/1933693>
 - Pingel, T. J., Clarke, K. C., & McBride, W. A. (2013). An improved simple
@@ -500,6 +521,10 @@ implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
   Linking remote sensing, forest modelling and field inventory. *Global
   Ecology and Biogeography*, 26, 1292–1302. <https://doi.org/10.1111/geb.12639>
   (FORMIND Amazon)
+- Rödig, E., Cuntz, M., Rammig, A., Fischer, R., Taubert, F., & Huth, A.
+  (2018). The importance of forest structure for carbon fluxes of the Amazon
+  rainforest. *Environmental Research Letters*, 13(5), 054013.
+  <https://doi.org/10.1088/1748-9326/aabc61> (FORMIND)
 - Roussel, J.-R., et al. (2020). lidR: An R package for analysis of Airborne
   Laser Scanning (ALS) data. *Remote Sensing of Environment*, 251, 112061.
   <https://doi.org/10.1016/j.rse.2020.112061>; lasR and r-lidar/PTD:
