@@ -45,7 +45,7 @@ YEAR = 2021
 # single tiled pass.  The default DTM uses a Delaunay TIN (``dtm_method="tin"``);
 # IDW and min-Z binning are available as alternatives.
 
-from alsdb.products.chm import compute_all  # noqa: E402
+from alsdb.products.chm import compute_all
 
 compute_all(
     provider=reader,
@@ -68,7 +68,7 @@ compute_all(
 # Beer–Lambert inversion; use ``clumping_index`` to correct for foliage clumping
 # in conifers or dense broadleaf stands.
 
-from alsdb.products.gap import LAI_K_PRESETS, compute_gap_fraction  # noqa: E402
+from alsdb.products.gap import LAI_K_PRESETS, compute_gap_fraction
 
 compute_gap_fraction(
     provider=reader,
@@ -94,7 +94,7 @@ compute_gap_fraction(
 # * **Height stratum proportions**: pv_0_2, pv_2_5, pv_5_10, pv_10_20,
 #   pv_20_40, pv_above40
 
-from alsdb.products.biomass import compute_metrics  # noqa: E402
+from alsdb.products.biomass import compute_metrics
 
 compute_metrics(
     provider=reader,
@@ -114,7 +114,7 @@ compute_metrics(
 # Use :py:func:`alsdb.products.biomass.calibrate_naesset` to fit coefficients;
 # pass ``return_cov=True`` to also retrieve the parameter covariance matrix.
 
-from alsdb.products.biomass import (  # noqa: E402
+from alsdb.products.biomass import (
     compute_biomass,
 )
 
@@ -193,7 +193,7 @@ print(ds1m)
 # Three derived variables are written per call:
 # ``{variable}_delta``, ``{variable}_delta_pct``, ``{variable}_change_flag``
 
-from alsdb.products.change import compute_change  # noqa: E402
+from alsdb.products.change import compute_change
 
 for year in [2017, 2021, 2023]:
     compute_all(

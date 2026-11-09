@@ -92,7 +92,6 @@ def test_compute_change_delta_pct_is_correct(store, provider):
     t_to = int(np.where(np.array(grp["time"][:]) == YEAR_TO)[0][0])
     out_pct = np.array(grp["chm_delta_pct"][t_to], dtype=np.float32)
     out_delta = np.array(grp["chm_delta"][t_to], dtype=np.float32)
-    data_2022 = np.array(grp["chm"][t_to], dtype=np.float32)
 
     valid = ~np.isnan(data_2021) & ~np.isnan(out_pct)
     if valid.any():

@@ -52,7 +52,7 @@ print("\nStored CRS:", db.stored_crs())
 # using a ``ThreadPoolExecutor``. Fragment consolidation is triggered every
 # ``consolidate_every`` tiles.
 
-from pathlib import Path  # noqa: E402
+from pathlib import Path
 
 paths = sorted(Path("/path/to/als_tiles/").glob("*.laz"))
 

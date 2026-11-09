@@ -52,11 +52,18 @@ Python GIL, so independent tiles can execute concurrently.
 from alsdb.products.chm import compute_chm
 
 compute_chm(
-    provider, store, year=2021, resolution=1.0,
-    method="spikefree", freeze_distance=1.5, height_buffer=0.5,
+    provider,
+    store,
+    year=2021,
+    resolution=1.0,
+    method="spikefree",
+    freeze_distance=1.5,
+    height_buffer=0.5,
     max_triangle_edge=10.0,
     max_ground_distance=20.0,
-    tile_size=500.0, tile_buffer=50.0, n_workers=4,
+    tile_size=500.0,
+    tile_buffer=50.0,
+    n_workers=4,
 )
 ```
 

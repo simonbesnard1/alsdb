@@ -40,7 +40,7 @@ store = ALSZarrStore(ZARR_PATH)
 # both resolutions are available for comparison.  Skip this cell if the
 # data are already there.
 
-from alsdb.products.biomass import compute_metrics, compute_biomass  # noqa: E402
+from alsdb.products.biomass import compute_biomass, compute_metrics
 
 compute_metrics(
     provider=reader,
@@ -99,9 +99,10 @@ print(f"Points in sub-area: {len(df_pts):,}")
 # 4 · Simulate a GEDI waveform at scene centre
 # ---------------------------------------------
 
-from alsdb.products.waveform import simulate_waveform, simulate_batch  # noqa: E402
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
+import numpy as np
+import pandas as pd
+
+from alsdb.products.waveform import simulate_batch, simulate_waveform
 
 # Single shot at scene centre
 cx = (BBOX[0] + BBOX[2]) / 2.0  # 656 500 m
@@ -147,10 +148,11 @@ print(results_batch[["center_x", "center_y", "rh50", "rh98", "cover"]].head())
 #   top row    — point cloud (classification) · CHM 1 m · DTM 1 m (hill-shaded)
 #   bottom row — AGB 10 m · AGB 100 m · simulated waveform
 
-import matplotlib.pyplot as plt  # noqa: E402
-import matplotlib.gridspec as gridspec  # noqa: E402
-from matplotlib.colors import LightSource  # noqa: E402
-from alsdb.utils.viz import plot_classification  # noqa: E402
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.colors import LightSource
+
+from alsdb.utils.viz import plot_classification
 
 fig = plt.figure(figsize=(18, 11), constrained_layout=True)
 fig.suptitle(
@@ -294,7 +296,7 @@ plt.show()
 # (energy profile + RH bar chart).  :py:func:`~alsdb.utils.viz.plot_rh_profile`
 # mirrors the GEDI L2A style.
 
-from alsdb.utils.viz import plot_waveform, plot_rh_profile  # noqa: E402
+from alsdb.utils.viz import plot_rh_profile, plot_waveform
 
 fig_wave = plot_waveform(result, title=f"Brazil 2014 — ({cx:.0f}, {cy:.0f})")
 fig_wave.savefig("brazil_waveform.png", dpi=150, bbox_inches="tight")

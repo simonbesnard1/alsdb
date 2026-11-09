@@ -110,6 +110,7 @@ convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]  # test functions are named for what they check
+"doc/gallery/**" = ["D205", "D400"]  # sphinx-gallery titles: a heading line, then underline
 
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]

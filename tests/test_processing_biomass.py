@@ -324,7 +324,7 @@ def test_calibrate_naesset_fits_reasonable_coefficients():
 
 def test_calibrate_naesset_return_cov_shape():
     h95, cc, agb = _synthetic_plots(60)
-    (a, b, c), pcov = calibrate_naesset(h95, cc, agb, return_cov=True)
+    _, pcov = calibrate_naesset(h95, cc, agb, return_cov=True)
     assert pcov.shape == (3, 3)
 
 
@@ -340,7 +340,7 @@ def test_calibrate_naesset_ignores_nan_plots():
     cc[1] = np.nan
     agb[2] = np.nan
     # Should still fit on the remaining 57 valid plots
-    a, b, c = calibrate_naesset(h95, cc, agb)
+    a, _, _ = calibrate_naesset(h95, cc, agb)
     assert a > 0
 
 
@@ -445,12 +445,12 @@ def test_extract_metrics_min_density_masks_sparse_cells():
     metrics_with_guard = _extract_metrics(
         pts, resolution=10.0, bbox=(0.0, 0.0, 100.0, 100.0), min_density=100.0
     )
-    # With an impossibly high density threshold, all cells should be NaN
-    assert np.all(
-        np.isnan(metrics_with_guard["density"])
-        | (metrics_with_guard["h95"] == np.nan)
-        | np.isnan(metrics_with_guard["h95"])
-    )
+    # Without the threshold some cells hold values; with an impossibly high
+    # one, every metric of every cell is NaN
+    assert np.isfinite(metrics_no_guard["density"]).any()
+    assert np.isfinite(metrics_no_guard["h95"]).any()
+    for name, values in metrics_with_guard.items():
+        assert np.all(np.isnan(values)), name
 
 
 def test_compute_metrics_writes_new_variables(provider, store):

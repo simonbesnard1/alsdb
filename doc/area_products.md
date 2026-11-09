@@ -37,9 +37,13 @@ Supply the inputs and identity of a fitted model:
 from alsdb.products.biomass import compute_biomass, naesset_model
 
 compute_biomass(
-    provider, store, resolution=10, year=2014,
+    provider,
+    store,
+    resolution=10,
+    year=2014,
     model_fn=lambda m: naesset_model(m, a=a, b=b, c=c),
-    model_features=("h95", "cc"), model_id="local-inventory-fit-v2",
+    model_features=("h95", "cc"),
+    model_id="local-inventory-fit-v2",
 )
 ```
 
@@ -171,7 +175,11 @@ from alsdb.products.waveform import simulate_batch
 
 profiles = compute_als_pavd_batch(provider, shots, year=2014, n_workers=4)
 waveform_metrics = simulate_batch(
-    provider, shots, year=2014, n_workers=4, batch_tile_size=100,
+    provider,
+    shots,
+    year=2014,
+    n_workers=4,
+    batch_tile_size=100,
     rng=np.random.default_rng(42),
 )
 ```

@@ -2,11 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Sphinx configuration of the alsdb documentation."""
+
 import importlib
 import inspect
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib.metadata import version as version_
 from unittest.mock import MagicMock
 
@@ -65,7 +67,7 @@ templates_path = ["_templates"]
 source_suffix = ".rst"
 
 project = "alsdb"
-year = datetime.now().year
+year = datetime.now(UTC).year
 copyright = f"2026-{year}, Simon Besnard, GFZ Potsdam"
 
 version = version_("alsdb")
@@ -84,11 +86,11 @@ add_function_parentheses = False
 
 
 class LegacyDirective(Directive):
-    """
-    Adapted from docutils/parsers/rst/directives/admonitions.py
+    """Admonition marking a legacy object.
 
-    Uses a default text if the directive does not have contents. If it does,
-    the default text is concatenated to the contents.
+    Adapted from docutils/parsers/rst/directives/admonitions.py. Uses a
+    default text if the directive has no contents; otherwise the default text
+    is prepended to them.
     """
 
     has_content = True
@@ -96,6 +98,7 @@ class LegacyDirective(Directive):
     optional_arguments = 1
 
     def run(self):
+        """Return the admonition node."""
         try:
             obj = self.arguments[0]
         except IndexError:
@@ -123,6 +126,7 @@ class LegacyDirective(Directive):
 
 
 def setup(app):
+    """Register the config value and the legacy directive with Sphinx."""
     app.add_config_value("python_version_major", str(sys.version_info.major), "env")
     app.add_directive("legacy", LegacyDirective)
 
@@ -145,7 +149,7 @@ html_theme_options = {
     "show_version_warning_banner": True,
 }
 
-html_title = "%s v%s Manual" % (project, version)
+html_title = f"{project} v{version} Manual"
 html_static_path = ["_static"]
 html_last_updated_fmt = "%b %d, %Y"
 html_css_files = ["alsdb.css"] if os.path.exists("_static/alsdb.css") else []

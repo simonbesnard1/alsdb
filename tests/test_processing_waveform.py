@@ -87,7 +87,7 @@ def test_build_histogram_energy_preserved():
 def test_build_histogram_single_point():
     z = np.array([5.0])
     weights = np.array([1.0])
-    centres, hist = _build_histogram(z, weights, z_step=0.15)
+    _, hist = _build_histogram(z, weights, z_step=0.15)
     # Single point → single non-zero bin
     assert hist.sum() == pytest.approx(1.0)
 
@@ -100,7 +100,7 @@ def test_build_histogram_bins_ascending():
 
 def test_build_histogram_uniform_weights():
     z = np.linspace(0.0, 5.0, 100)
-    centres, hist = _build_histogram(z, np.ones(100), z_step=0.5)
+    _, hist = _build_histogram(z, np.ones(100), z_step=0.5)
     # All bins should have similar counts
     nonzero = hist[hist > 0]
     assert nonzero.std() / nonzero.mean() < 0.5

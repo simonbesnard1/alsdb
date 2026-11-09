@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+import dataclasses
+
 import pytest
 
 from alsdb.tile.tile_name import parse_tile_filename
@@ -64,5 +66,5 @@ def test_invalid_filename_raises():
 
 def test_frozen_dataclass():
     name = parse_tile_filename(EXAMPLE)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         name.year = 2022  # type: ignore[misc]

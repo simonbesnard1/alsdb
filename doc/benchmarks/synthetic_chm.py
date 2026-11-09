@@ -11,6 +11,7 @@ import numpy as np
 
 
 def main():
+    """Write the synthetic canopy and run the benchmark in a separate process."""
     directory = Path(sys.argv[1])
     directory.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(2026)

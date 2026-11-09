@@ -4,9 +4,8 @@
 
 """Tests for shared tiling utilities (_tiling.py)."""
 
-import pytest
-
 import numpy as np
+import pytest
 
 from alsdb.products._tiling import (
     _filter_ground_outliers,
@@ -55,7 +54,7 @@ def test_tile_bboxes_non_divisible_count():
 
 def test_tile_bboxes_buffer_inflates_query():
     tiles = tile_bboxes((0.0, 0.0, 500.0, 500.0), tile_size=500.0, buffer=50.0)
-    qb, cb = tiles[0]
+    qb, _ = tiles[0]
     assert qb[0] == pytest.approx(-50.0)  # min_x inflated
     assert qb[1] == pytest.approx(-50.0)  # min_y inflated
     assert qb[2] == pytest.approx(550.0)  # max_x inflated

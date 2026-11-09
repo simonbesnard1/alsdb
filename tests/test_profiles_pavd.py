@@ -52,7 +52,7 @@ def _make_canopy(rng, pavd0, height, n_gnd=None, n_veg=60_000, gap_band=None):
     r = _K * pavd0
     denom = 1.0 - np.exp(-r * height)
     if n_gnd is None:
-        n_gnd = int(round(n_veg * np.exp(-r * height) / denom))
+        n_gnd = round(n_veg * np.exp(-r * height) / denom)
     u = rng.uniform(0.0, 1.0, size=n_veg)
     z = height + np.log(1.0 - u * denom) / r
     z = np.clip(z, 0.0, height)
@@ -107,7 +107,6 @@ def test_total_pai_matches_gap_to_lai_at_ground():
     profile = _pavd_profile_from_hag(hag, cls, z_step=0.25)
     assert profile is not None
 
-    n_tot = n_gnd + len(hag) - n_gnd  # = n_gnd + n_veg_actual
     p_gap_2d = n_gnd / (n_gnd + (len(hag) - n_gnd))
     expected_total_pai = float(_gap_to_lai(np.array([[p_gap_2d]], dtype=np.float32), k=_K)[0, 0])
     assert profile.total_pai == pytest.approx(expected_total_pai, rel=1e-6)

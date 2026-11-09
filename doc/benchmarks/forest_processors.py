@@ -28,6 +28,7 @@ from alsdb.products.gap import _compute_gap_grid
 
 
 def timed(fn, repeats=3):
+    """Return the result of *fn* and its timings over *repeats* runs."""
     samples = []
     for _ in range(repeats):
         start = time.perf_counter()
@@ -37,6 +38,7 @@ def timed(fn, repeats=3):
 
 
 def main():
+    """Run the benchmark from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
@@ -133,6 +135,7 @@ def main():
 
 
 def database_bench(raw, center, bbox, report):
+    """Time the database-backed products and add them to *report*."""
     from alsdb.core.alsdatabase import ALSDatabase
     from alsdb.core.alsprovider import ALSProvider
     from alsdb.products._area import compute_area_products

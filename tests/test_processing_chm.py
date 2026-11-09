@@ -676,7 +676,7 @@ def test_cap_height_nulls_values_above_threshold():
 # ---------------------------------------------------------------------------
 
 
-def _dense_canopy_lattice(spike_z: float = None) -> np.ndarray:
+def _dense_canopy_lattice(spike_z: float | None = None) -> np.ndarray:
     """
     A dense, level canopy (~1 pt/m^2, height ~15 m, small jitter) - the small
     nearest-neighbour distances a real ALS survey has, unlike a sparse
