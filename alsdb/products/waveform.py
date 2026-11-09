@@ -138,6 +138,12 @@ class WaveformResult:
     ground_supported: bool = False
     ground_offset: float = np.nan
     slope_corrected: bool = False
+    # Canopy (non-ground) and ground (class 2) parts of the noise-free waveform,
+    # on z_bins, scaled so together they sum to 1 (gediRat's -ground option).
+    canopy_waveform: np.ndarray | None = None
+    ground_waveform: np.ndarray | None = None
+    # Footprint-weighted mean elevation of the ground returns (gediRat's ground).
+    z_ground_true: float = np.nan
 
     def rh_array(self, levels: tuple[int, ...] = _RH_LEVELS) -> np.ndarray:
         """Return RH values as a 1-D array for the given levels."""
@@ -540,8 +546,10 @@ def waveform_from_points(
     if weights.sum() <= 0:
         return None
 
-    # 1. Vertical histogram
+    # 1. Vertical histogram, and its ground part (class 2) on the same bins
+    is_ground = data["Classification"] == 2
     z_bins, hist = _build_histogram(z, weights, z_step)
+    _, hist_ground = _build_histogram(z, np.where(is_ground, weights, 0.0), z_step)
 
     # Retain convolution tails: trimming here biases ground and canopy energy.
     if beam_id is not None and beam_id in _BEAM_IDS:
@@ -555,7 +563,16 @@ def waveform_from_points(
     # Reversed: kernel positions run with time, so later (positive) offsets
     # land lower, as in gediRat; measured GEDI pulses have a long trailing tail.
     waveform = np.convolve(hist, kernel[::-1], mode="full")
+    ground_waveform = np.convolve(hist_ground, kernel[::-1], mode="full")
+    canopy_waveform = np.clip(waveform - ground_waveform, 0.0, None)
+    parts = canopy_waveform.sum() + ground_waveform.sum()
+    if parts > 0:
+        canopy_waveform, ground_waveform = canopy_waveform / parts, ground_waveform / parts
     z_bins = z_bins[0] + (np.arange(len(waveform)) - pad) * z_step
+    w_ground = weights[is_ground]
+    z_ground_true = (
+        float(np.sum(w_ground * z[is_ground]) / w_ground.sum()) if w_ground.sum() > 0 else np.nan
+    )
 
     # 3. Add noise
     if noise_std > 0.0:
@@ -589,6 +606,9 @@ def waveform_from_points(
         ground_supported=ground_supported,
         ground_offset=ground_offset,
         slope_corrected=slope_corrected,
+        canopy_waveform=canopy_waveform,
+        ground_waveform=ground_waveform,
+        z_ground_true=z_ground_true,
     )
 
 
@@ -685,6 +705,39 @@ def _shot_chunks(centers, block_size, max_shots):
             yield np.asarray(indices[start : start + max_shots])
 
 
+def _run_chunks(fn, tasks, n_workers, provider, options, radius, year):
+    """Yield ``fn(task)`` for every task, in this process or in worker processes.
+
+    Workers start with ``spawn`` (a forked child would inherit TileDB's threads
+    in whatever state they were), each with its own TileDB context of
+    cores / n_workers threads; at most two tasks per worker are in flight.
+    """
+    import multiprocessing
+    import os
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+    if n_workers < 1:
+        raise ValueError("n_workers must be positive")
+    if n_workers == 1:
+        _init_worker(provider, options, radius, year, threads=None)
+        for task in tasks:
+            yield fn(task)
+        return
+    threads = max(1, (os.cpu_count() or n_workers) // n_workers)
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(n_workers, mp_context=context, initializer=_init_worker,
+                             initargs=(provider, options, radius, year, threads)) as pool:  # fmt: skip
+        pending = set()
+        for task in tasks:
+            pending.add(pool.submit(fn, task))
+            if len(pending) >= 2 * n_workers:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    yield future.result()
+        for future in pending:
+            yield future.result()
+
+
 def simulate_batch(
     provider: TileDBProvider,
     shots: pd.DataFrame,
@@ -742,10 +795,6 @@ def simulate_batch(
         Shot columns plus ground elevation, HOME, cover, point count and RH
         metrics (NaN without enough points).
     """
-    import multiprocessing
-    import os
-    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-
     if n_workers < 1:
         raise ValueError("n_workers must be positive")
     if not np.isfinite(batch_tile_size) or batch_tile_size <= 0 or max_shots_per_batch < 1:
@@ -767,28 +816,9 @@ def simulate_batch(
         for idx in _shot_chunks(centers, batch_tile_size, max_shots_per_batch)
     )
     results = [None] * len(shots)
-    if n_workers == 1:
-        _init_worker(provider, kwargs, radius, year, threads=None)
-        for task in tasks:
-            for index, result in _simulate_chunk(task):
-                results[index] = result
-    else:
-        threads = max(1, (os.cpu_count() or n_workers) // n_workers)
-        # spawn: TileDB keeps threads, which a forked child would inherit locked
-        context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(n_workers, mp_context=context, initializer=_init_worker,
-                                 initargs=(provider, kwargs, radius, year, threads)) as pool:  # fmt: skip
-            pending = set()
-            for task in tasks:
-                pending.add(pool.submit(_simulate_chunk, task))
-                if len(pending) >= 2 * n_workers:  # bounded: few chunks in flight
-                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                    for future in done:
-                        for index, result in future.result():
-                            results[index] = result
-            for future in pending:
-                for index, result in future.result():
-                    results[index] = result
+    for output in _run_chunks(_simulate_chunk, tasks, n_workers, provider, kwargs, radius, year):
+        for index, result in output:
+            results[index] = result
     nan_metrics = dict(
         z_ground=np.nan,
         home=np.nan,

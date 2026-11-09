@@ -138,6 +138,39 @@ i7-12800H), against 565 s for gediRat; waveforms agree with gediRat to within
 0.6% of their energy and RH10-RH98 to one 0.15 m bin. Larger blocks (250 m)
 help dense footprint grids; sparse tracks keep the 100 m default.
 
+## Simulated GEDI canopy profiles (attenuation)
+
+`alsdb.products.gedi_profiles.simulate_profiles(provider, shots, out_dir)`
+simulates, for every shot, the canopy and ground parts of the waveform (split
+by ALS class, as the GEDI simulator's `-ground` option) and three gap
+probability profiles on one height-above-ground grid (default -10 to 80 m in
+0.15 m bins):
+
+- `pgap_waveform`: the GEDI L2B estimate, `1 - Rv(h) / (Rv + rv_rg * Rg)`,
+  with `rv_rg` the canopy-to-ground reflectance ratio (`rv_rg`, or
+  `rv_rg_col` for per-shot values such as `rhov / rhog` of matched L2B shots);
+- `pgap_als_first`, `pgap_als_all`: the MacArthur-Horn estimate from the same
+  points with the same footprint and density weights, from first returns and
+  from all returns weighted by `1/NumberOfReturns`.
+
+It writes `profiles.zarr` (arrays of shape shots x heights, plus `height`) and
+`footprints.parquet` (shot columns, `shot_index`, waveform metrics,
+`signal_top`, `z_ground_true`, `canopy_energy`, `ground_energy`, `rv_rg`).
+The gap profiles are NaN above `signal_top`, as GEDI's `pgap_theta_z` covers
+only the signal. `gap_probability(canopy, ground, rv_rg, totals=...)` recomputes
+`pgap_waveform` for another ratio from the stored arrays, without simulating
+again.
+
+All three profiles go through the same retrieval, e.g. gedidb's
+`GEDIVerticalProfiler.compute_profiles(pgap, signal_heights(height,
+signal_top), np.pi / 2, 0.5, 1.0)` for `cp_pavd`; `fit_transmittance_model`
+then relates the ratio of simulated to ALS PAVD to the plant area above.
+Simulated waveforms inherit the ALS occlusion: simulated against ALS isolates
+what the waveform and the L2B retrieval add, real GEDI against simulated what
+the simulation cannot represent. Heights above ground come from one TIN per
+chunk of shots; on the 64 Petit Buech test footprints the canopy/ground split
+agreed with gediRat's to 0.3% of the energy and its ground height to 0.21 m.
+
 ## Validation and performance
 
 The regression tests cover buffer contamination, exact boundary ownership,
