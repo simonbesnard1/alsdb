@@ -30,7 +30,10 @@ import numpy as np
 from alsdb.methods._grid import GridSpec
 
 LOCAL_FREEZE_CELL = 5.0  # m, cells for the local pulse density (as PULSE_DENSITY_CELL)
-# Parameters reproduce Fischer et al.'s (2024) published R workflow.
+# Fischer et al. (2024): freeze = m / ln(s * pd + o) + 1 with (m, s, o) below, pd in
+# pulses/m2. This is the form the authors' R workflow computes; the paper prints
+# m / (ln(s * pd + o) + 1), and lidR's lspikefree() approximates it as
+# 1.42 + 1.96 / sqrt(pd).
 LOCAL_FREEZE_PARAMETERS = (3.1, 1.75, 2.1)
 # Densities are clamped to this range, as in the authors' workflow.
 LOCAL_DENSITY_RANGE = (0.5, 100.0)

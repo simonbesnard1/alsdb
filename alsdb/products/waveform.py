@@ -50,7 +50,8 @@ _RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0  # m  above ground
 _BEAM_EXTENT_SIGMA: float = 3.0  # query out to this many sigma_beam (see _effective_query_radius)
 
-# Empirical GEDI L1B transmit kernels; other sensors use a Gaussian kernel.
+# Empirical GEDI L1B transmit kernels, from Hancock et al.'s (2019) gediSimulator;
+# other sensors use a Gaussian kernel.
 _BEAM_IDS: frozenset[str] = frozenset(
     {
         "BEAM0000",
