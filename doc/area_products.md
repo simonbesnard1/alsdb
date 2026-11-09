@@ -113,11 +113,30 @@ Slope-plane fits use centered coordinates and require full rank. Output reports
 height), and `slope_corrected`. The ground flag requires three ground returns and
 agreement within `max(2*sigma, z_step)`; it is a diagnostic heuristic.
 
+Defaults follow the GEDI simulator (Hancock et al. 2019, `gediRat`): a
+Gaussian footprint of sigma `0.44 * footprint_radius` (5.5 m for GEDI), a
+Gaussian pulse of 15 ns FWHM (sigma 0.955 m) unless a measured GEDI pulse is
+chosen with `beam_id`, and each point divided by the number of pulses (last
+returns) in its 1.5 m cell (`density_cell`; `None` turns it off), so flight-line
+overlaps do not count twice. The pulse is applied with its later parts below
+each return, as in `gediRat` (measured GEDI pulses have a long trailing tail).
+RH follows libclidar's `findRH`: energy accumulated from the lowest bin, with RH0
+the bottom of the signal (usually negative), as GEDI's `rh_000`.
+
 Optional `return_weighting="fractional"` gives each return weight
-`1/NumberOfReturns`. Optional `density_radius` weights by inverse first-return
-sampling density measured within that radius; the query includes an extra halo
-for this calculation. The default remains count weighting. These options do not
-provide radiometric calibration or establish equivalence with the GEDI simulator.
+`1/NumberOfReturns`. The default remains count weighting. These options do not
+provide radiometric calibration.
+
+`simulate_batch` groups shots into spatial blocks (`batch_tile_size`), reads
+each chunk once and, with `n_workers > 1`, simulates chunks in separate
+processes, each with its own TileDB context (cores / workers threads, small
+cache); results do not depend on the number of workers. Scripts using workers
+need an `if __name__ == "__main__":` guard (processes start with `spawn`).
+On 6,241 footprints over 2 x 2 km of 30 pulses/m2 ALS (Chapitre Petit Buech)
+it took 41 s on one worker and 19 s on four (250 m blocks, laptop
+i7-12800H), against 565 s for gediRat; waveforms agree with gediRat to within
+0.6% of their energy and RH10-RH98 to one 0.15 m bin. Larger blocks (250 m)
+help dense footprint grids; sparse tracks keep the 100 m default.
 
 ## Validation and performance
 

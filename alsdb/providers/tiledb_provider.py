@@ -155,6 +155,44 @@ class TileDBProvider:
         return cfg, tiledb.Ctx(cfg)
 
     # ------------------------------------------------------------------
+    # Pickling (worker processes): the TileDB context is rebuilt from its config
+    # ------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        """Return the picklable state: everything but the TileDB context."""
+        state = self.__dict__.copy()
+        state.pop("ctx", None)
+        state["_schema_cache"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore the state and rebuild the TileDB context from its config."""
+        self.__dict__.update(state)
+        self.ctx = tiledb.Ctx(tiledb.Config(self._raw_cfg))
+
+    def with_config(self, **overrides: str):
+        """Return a copy whose TileDB context uses *overrides* on top of this config.
+
+        Parameters
+        ----------
+        **overrides : str
+            TileDB config keys and values, e.g. ``{"sm.tile_cache_size": "0"}``
+            passed as a dict with ``**``.
+
+        Returns
+        -------
+        TileDBProvider
+            Same class and array, new context.
+        """
+        import copy
+
+        clone = copy.copy(self)
+        clone._raw_cfg = {**self._raw_cfg, **{k: str(v) for k, v in overrides.items()}}
+        clone.ctx = tiledb.Ctx(tiledb.Config(clone._raw_cfg))
+        clone._schema_cache = None
+        return clone
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 

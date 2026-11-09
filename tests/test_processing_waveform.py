@@ -14,6 +14,7 @@ from alsdb.products.waveform import (
     _detect_ground,
     _effective_query_radius,
     _rh_metrics,
+    waveform_from_points,
 )
 
 # ---------------------------------------------------------------------------
@@ -29,15 +30,15 @@ def test_effective_query_radius_no_weighting_returns_footprint_radius():
 
 
 def test_effective_query_radius_default_sigma_beam_extends_past_footprint():
-    # sigma_beam defaults to footprint_radius / 2 = 6.25; beam_extent_sigma=3.0
-    # -> 3 * 6.25 = 18.75, larger than the nominal 12.5 m footprint.
+    # sigma_beam defaults to 0.44 * footprint_radius = 5.5 m (GEDI simulator);
+    # beam_extent_sigma=3.0 -> 16.5 m, larger than the nominal 12.5 m footprint.
     r = _effective_query_radius(
         footprint_radius=12.5,
         gaussian_beam_weighting=True,
         sigma_beam=None,
         beam_extent_sigma=3.0,
     )
-    assert r == pytest.approx(18.75)
+    assert r == pytest.approx(16.5)
     assert r > 12.5
 
 
@@ -252,8 +253,9 @@ def test_rh_metrics_low_percentile_can_be_negative():
     """
     z_bins, waveform = _waveform_with_energy_below_ground_peak()
     rh = _rh_metrics(waveform, z_bins, z_ground=0.0, levels=(0, 2))
-    assert rh[0] == pytest.approx(0.0)
-    assert rh[2] <= 0.0
+    # RH0 is the bottom of the signal, below the ground peak (GEDI rh_000)
+    assert rh[0] == pytest.approx(z_bins[np.flatnonzero(waveform > 0)[0]])
+    assert rh[0] <= rh[2] <= 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -410,3 +412,65 @@ def test_waveform_result_to_dict_no_arrays():
     d = res.to_dict()
     for v in d.values():
         assert not isinstance(v, np.ndarray)
+
+
+# ---------------------------------------------------------------------------
+# GEDI simulator conventions (gediRat / libclidar)
+# ---------------------------------------------------------------------------
+
+
+def _points(z, x=None, y=None, nret=None):
+    n = len(z)
+    rng = np.random.default_rng(0)
+    return {"X": rng.uniform(-3, 3, n) if x is None else x, "Y": rng.uniform(-3, 3, n) if y is None else y,
+            "Z": np.asarray(z, float), "Intensity": np.ones(n), "ReturnNumber": np.ones(n, int),
+            "NumberOfReturns": np.ones(n, int) if nret is None else nret,
+            "Classification": np.full(n, 2), "Withheld": np.zeros(n, bool)}  # fmt: skip
+
+
+def test_measured_pulse_tail_lands_below_the_return():
+    # GEDI pulses have a long trailing tail: later energy comes from lower down.
+    r = waveform_from_points(_points(np.zeros(50)), 0.0, 0.0, beam_id="BEAM0000",
+                             gaussian_beam_weighting=False, min_points=1)  # fmt: skip
+    centroid = float(np.sum(r.z_bins * r.waveform))
+    assert centroid < -0.2
+    assert r.z_bins[np.argmax(r.waveform)] == pytest.approx(0.0, abs=0.15)
+
+
+def test_rh0_is_the_bottom_of_the_signal():
+    r = waveform_from_points(_points(np.r_[np.zeros(40), np.full(40, 15.0)]), 0.0, 0.0,
+                             gaussian_beam_weighting=False, min_points=1)  # fmt: skip
+    assert r.rh[0] < -1.0  # the pulse spreads the ground return below its peak
+    assert r.rh[0] == pytest.approx(r.z_bins[np.flatnonzero(r.waveform > 0)[0]] - r.z_ground)
+
+
+def test_density_cell_removes_overlap_double_counting():
+    # Duplicating the pulses of one area (a flight-line overlap) must not change
+    # the waveform when each point is divided by the pulses in its cell.
+    x = np.repeat(np.arange(-4.5, 5, 1.5) + 0.7, 7)
+    y = np.tile(np.arange(-4.5, 5, 1.5) + 0.7, 7)
+    z = np.where(x > 0, 10.0, 0.0)
+    once = _points(z, x, y)
+    dup = x > 0
+    twice = _points(np.r_[z, z[dup]], np.r_[x, x[dup]], np.r_[y, y[dup]])
+    options = {"gaussian_beam_weighting": False, "min_points": 1}
+    a = waveform_from_points(once, 0.0, 0.0, **options)
+    b = waveform_from_points(twice, 0.0, 0.0, **options)
+    np.testing.assert_allclose(a.waveform, b.waveform, atol=1e-12)
+    c = waveform_from_points(twice, 0.0, 0.0, density_cell=None, **options)
+    assert not np.allclose(a.waveform, c.waveform)
+
+
+def test_point_grid_disc_matches_kdtree():
+    from scipy.spatial import cKDTree
+
+    from alsdb.products.waveform import _PointGrid
+
+    rng = np.random.default_rng(3)
+    x, y = rng.uniform(0, 100, 20000), rng.uniform(0, 60, 20000)
+    radius = 7.0
+    grid = _PointGrid(x, y, np.array([-radius, -radius]), radius)
+    tree = cKDTree(np.column_stack((x, y)))
+    for x0, y0 in rng.uniform([-5, -5], [105, 65], (200, 2)):
+        expected = np.sort(tree.query_ball_point((x0, y0), radius))
+        np.testing.assert_array_equal(grid.disc(x0, y0, radius), expected)

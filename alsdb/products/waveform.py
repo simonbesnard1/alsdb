@@ -4,15 +4,21 @@
 
 """Large-footprint waveform simulation from ALS point clouds.
 
-Defaults follow GEDI (25 m footprint, 0.15 m bins, GEDI TX pulse kernels);
-other instruments are simulated by changing ``footprint_radius``, ``sigma``
-and ``beam_id`` (e.g. LVIS: radius 10 m, sigma 0.7 m; ICESat/GLAS: radius
-32.5 m, sigma 2 m).
+Defaults follow the GEDI simulator (Hancock et al. 2019; ``gediRat``):
+Gaussian footprint of sigma 5.5 m (0.44 x the 12.5 m radius), Gaussian pulse
+of 15 ns FWHM (sigma 0.955 m) or a measured GEDI pulse (``beam_id``), 0.15 m
+bins, and each point weighted by the inverse number of pulses in its 1.5 m
+cell (``density_cell``), which keeps flight-line overlaps from counting
+twice. Other instruments are simulated by changing ``footprint_radius``,
+``sigma`` and ``beam_id`` (e.g. LVIS: radius 10 m, sigma 0.7 m; ICESat/GLAS:
+radius 32.5 m, sigma 2 m).
 
 Steps: query the points of a circular footprint (beyond its radius when the
 Gaussian beam weighting is on), build a vertical histogram, convolve it with
-the transmitted pulse, detect the ground peak, and derive relative heights
-(RH) and canopy cover.
+the transmitted pulse (later parts of the pulse land lower, as in
+``gediRat``), detect the ground peak (the lowest maximum, as gediMetric's
+``maxGround``), and derive relative heights (RH, as libclidar's ``findRH``)
+and canopy cover.
 
 References
 ----------
@@ -43,8 +49,14 @@ logger = logging.getLogger(__name__)
 # Default constants — tuned for GEDI; override via simulate_waveform() parameters
 _FOOTPRINT_RADIUS: float = 12.5  # m  (25 m diameter)
 _Z_STEP: float = 0.15  # m  native vertical resolution
-_SIGMA_FULL: float = 0.64  # m  GEDI full-power beam pulse σ
-_SIGMA_COV: float = 0.93  # m  GEDI coverage beam pulse σ
+# gediRat's default pulse: 15 ns FWHM outgoing, two-way range 15 * 0.2998 / 2 m,
+# sigma = FWHM / 2.35482 (gediIO.c, setGediPulse).
+_SIGMA_PULSE: float = 15.0 * 0.2998 / 2.0 / 2.35482  # m, 0.955
+# gediRat's footprint sigma, 5.5 m for GEDI's 12.5 m radius ("86% of energy
+# within a diameter of 20-25 m"), as a fraction of the radius.
+_SIGMA_BEAM_FRACTION: float = 5.5 / 12.5
+# gediRat's sampling-density grid (normCover): pulses per 1.5 m cell.
+_DENSITY_CELL: float = 1.5  # m
 _MIN_POINTS: int = 25
 _RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0  # m  above ground
@@ -168,7 +180,7 @@ def _effective_query_radius(
         raise ValueError("beam_extent_sigma must be finite and positive")
     if not gaussian_beam_weighting:
         return footprint_radius
-    sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
+    sb = sigma_beam if sigma_beam is not None else _SIGMA_BEAM_FRACTION * footprint_radius
     return max(footprint_radius, beam_extent_sigma * sb)
 
 
@@ -228,7 +240,10 @@ def _build_histogram(
     z_max = float(z.max())
     n_bins = max(1, int(np.ceil((z_max - z_min) / z_step)))
     edges = z_min + np.arange(n_bins + 1) * z_step
-    hist, _ = np.histogram(z, bins=edges, weights=weights)
+    # Equal-width bins: index each point directly (np.histogram sorts the points);
+    # the top edge belongs to the last bin, as in np.histogram.
+    index = np.clip(np.floor((z - z_min) / z_step).astype(np.int64), 0, n_bins - 1)
+    hist = np.bincount(index, weights=weights, minlength=n_bins)
     centres = (edges[:-1] + edges[1:]) / 2.0
     return centres, hist.astype(np.float64)
 
@@ -271,8 +286,9 @@ def _rh_metrics(
     """Relative heights above the ground peak.
 
     RH(x) is the height at which x% of the total waveform energy is reached,
-    counted from the lowest bin. Low percentiles can be slightly negative where
-    pulse or slope broadening puts ground energy below the peak.
+    counted from the lowest bin, as libclidar's ``findRH`` (GEDI simulator).
+    RH0 is the lowest bin with energy, usually below the ground peak (pulse
+    and slope broadening), as GEDI's ``rh_000``.
     """
     ground_idx = int(np.searchsorted(z_bins, z_ground))
     total = float(waveform.sum())
@@ -283,15 +299,11 @@ def _rh_metrics(
     cumulative = np.cumsum(waveform) / total
     z_above = z_bins - z_ground  # height relative to ground peak; can be negative
 
+    first = int(np.flatnonzero(waveform > 0)[0])  # bottom of the signal
     rh = {}
     for level in levels:
-        idx = int(np.searchsorted(cumulative, level / 100.0))
+        idx = int(np.searchsorted(cumulative, level / 100.0)) if level > 0 else first
         rh[level] = float(z_above[min(idx, len(z_above) - 1)])
-    # RH0 is defined as 0 m by construction (ground return height).
-    # searchsorted may return a non-zero z_above[0] if the ground bin is
-    # slightly offset, so we force it to the correct value.
-    if 0 in levels:
-        rh[0] = 0.0
     return rh
 
 
@@ -331,7 +343,7 @@ def simulate_waveform(
     year: int | None = None,
     footprint_radius: float = _FOOTPRINT_RADIUS,
     z_step: float = _Z_STEP,
-    sigma: float = _SIGMA_FULL,
+    sigma: float = _SIGMA_PULSE,
     beam_id: str | None = None,
     noise_std: float = 0.0,
     intensity_weighted: bool = False,
@@ -345,7 +357,7 @@ def simulate_waveform(
     rh_levels: tuple[int, ...] = _RH_LEVELS,
     rng: np.random.Generator | None = None,
     return_weighting: str = "count",
-    density_radius: float | None = None,
+    density_cell: float | None = _DENSITY_CELL,
 ) -> WaveformResult | None:
     """Query a footprint and simulate its waveform; see :func:`waveform_from_points`."""
     options = dict(locals())
@@ -353,9 +365,7 @@ def simulate_waveform(
     radius = _effective_query_radius(
         footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
     )
-    if density_radius is not None and (not np.isfinite(density_radius) or density_radius <= 0):
-        raise ValueError("density_radius must be finite and positive")
-    data = _query_footprint(provider, center_x, center_y, radius + (density_radius or 0), year)
+    data = _query_footprint(provider, center_x, center_y, radius, year)
     return waveform_from_points(data, **options)
 
 
@@ -366,7 +376,7 @@ def waveform_from_points(
     year: int | None = None,
     footprint_radius: float = _FOOTPRINT_RADIUS,
     z_step: float = _Z_STEP,
-    sigma: float = _SIGMA_FULL,
+    sigma: float = _SIGMA_PULSE,
     beam_id: str | None = None,
     noise_std: float = 0.0,
     intensity_weighted: bool = False,
@@ -380,7 +390,7 @@ def waveform_from_points(
     rh_levels: tuple[int, ...] = _RH_LEVELS,
     rng: np.random.Generator | None = None,
     return_weighting: str = "count",
-    density_radius: float | None = None,
+    density_cell: float | None = _DENSITY_CELL,
 ) -> WaveformResult | None:
     """Simulate a large-footprint waveform from points.
 
@@ -397,7 +407,8 @@ def waveform_from_points(
     z_step : float
         Vertical bin size (m).
     sigma : float
-        Gaussian pulse width (m), used when ``beam_id`` is None.
+        Gaussian pulse sigma (m), used when ``beam_id`` is None; default 0.955 m,
+        the GEDI simulator's 15 ns FWHM.
     beam_id : str, optional
         GEDI beam (e.g. ``"BEAM0000"``) whose measured pulse is used.
     noise_std : float
@@ -407,7 +418,8 @@ def waveform_from_points(
     gaussian_beam_weighting : bool
         Weight points by the Gaussian beam profile.
     sigma_beam : float, optional
-        Beam sigma (m); default ``footprint_radius / 2``.
+        Beam sigma (m); default ``0.44 * footprint_radius`` (5.5 m for GEDI, the
+        GEDI simulator's value).
     beam_extent_sigma : float
         Query out to this many ``sigma_beam`` when weighting.
     slope_correction : bool
@@ -422,13 +434,17 @@ def waveform_from_points(
         RH percentiles to compute.
     rng : np.random.Generator, optional
         Generator for the noise.
+    return_weighting : {"count", "fractional"}
+        ``"fractional"`` weights each return by ``1 / NumberOfReturns``.
+    density_cell : float, optional
+        Divide each point's weight by the number of pulses (last returns) in its
+        cell of this size (m), as the GEDI simulator's ``normCover``; None
+        turns the correction off.
 
     Returns
     -------
     WaveformResult or None
     """
-    from scipy.spatial import cKDTree
-
     from alsdb.methods._surface import clean_points
     from alsdb.products._footprints import point_array
 
@@ -442,8 +458,8 @@ def waveform_from_points(
         raise ValueError("Invalid waveform bin, pulse, noise or reflectance parameters")
     if return_weighting not in ("count", "fractional"):
         raise ValueError("return_weighting must be count or fractional")
-    if density_radius is not None and (not np.isfinite(density_radius) or density_radius <= 0):
-        raise ValueError("density_radius must be finite and positive")
+    if density_cell is not None and (not np.isfinite(density_cell) or density_cell <= 0):
+        raise ValueError("density_cell must be finite and positive")
     radius = _effective_query_radius(
         footprint_radius, gaussian_beam_weighting, sigma_beam, beam_extent_sigma
     )
@@ -451,16 +467,17 @@ def waveform_from_points(
     if data is not None:
         data = clean_points(point_array(data))
         inside = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2 <= radius**2
-        if density_radius is not None:
-            first = data[data["ReturnNumber"] == 1]
-            tree = cKDTree(np.column_stack((first["X"], first["Y"])))
-            support = tree.query_ball_point(
-                np.column_stack((data["X"][inside], data["Y"][inside])),
-                density_radius,
-                return_length=True,
-            )
-            density_weight = np.divide(1.0, support, out=np.zeros(len(support)), where=support > 0)
         data = data[inside]
+        if density_cell is not None and len(data):
+            # pulses per cell, counted once per pulse at its last return (gediRat)
+            ix = np.floor(data["X"] / density_cell).astype(np.int64)
+            iy = np.floor(data["Y"] / density_cell).astype(np.int64)
+            ix -= ix.min()
+            iy -= iy.min()
+            index = ix * (int(iy.max()) + 1) + iy  # flat cell index; counting needs no sort
+            last = data["ReturnNumber"] >= data["NumberOfReturns"]
+            pulses = np.bincount(index, weights=last)[index]
+            density_weight = np.divide(1.0, pulses, out=np.ones(len(pulses)), where=pulses > 0)
     n_pts = 0 if data is None else len(data["Z"])
     if data is None or n_pts < min_points:
         logger.debug(
@@ -502,7 +519,7 @@ def waveform_from_points(
 
     # Build point weights: beam profile × optional intensity
     if gaussian_beam_weighting:
-        sb = sigma_beam if sigma_beam is not None else footprint_radius / 2.0
+        sb = sigma_beam if sigma_beam is not None else _SIGMA_BEAM_FRACTION * footprint_radius
         r2 = (data["X"] - center_x) ** 2 + (data["Y"] - center_y) ** 2
         beam_w = np.exp(-r2 / (2.0 * sb**2))
     else:
@@ -535,7 +552,9 @@ def waveform_from_points(
         kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
         kernel /= kernel.sum()
     pad = (len(kernel) - 1) // 2
-    waveform = np.convolve(hist, kernel, mode="full")
+    # Reversed: kernel positions run with time, so later (positive) offsets
+    # land lower, as in gediRat; measured GEDI pulses have a long trailing tail.
+    waveform = np.convolve(hist, kernel[::-1], mode="full")
     z_bins = z_bins[0] + (np.arange(len(waveform)) - pad) * z_step
 
     # 3. Add noise
@@ -573,6 +592,99 @@ def waveform_from_points(
     )
 
 
+_ATTRIBUTES = ("Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "Withheld")
+_WORKER: dict = {}  # per-process state of simulate_batch workers (set by _init_worker)
+
+
+def _init_worker(provider, options, radius, year, threads):
+    """Set up one simulate_batch worker: its own TileDB context and the options."""
+    if threads is not None:
+        # Several processes share the machine: fewer TileDB threads and a small
+        # tile cache each, instead of every process claiming all cores and 1 GiB.
+        n = str(threads)
+        provider = provider.with_config(**{
+            "sm.num_reader_threads": n, "sm.num_tiledb_threads": n,
+            "sm.compute_concurrency_level": n, "sm.io_concurrency_level": n,
+            "sm.tile_cache_size": str(128 * 1024**2), "py.init_buffer_bytes": str(64 * 1024**2),
+        })  # fmt: skip
+    _WORKER.update(provider=provider, options=options, radius=radius, year=year)
+
+
+class _PointGrid:
+    """Points sorted into square cells of the search radius, for disc queries.
+
+    A disc of that radius touches at most the 3 x 3 cells around its centre,
+    each a contiguous run of the sorted points, so a query returns an index
+    array without building per-point Python lists (as cKDTree's
+    ``query_ball_point`` does: millions of ints for dense footprints).
+    """
+
+    def __init__(self, x, y, origin, cell):
+        self.x, self.y, self.origin, self.cell = x, y, origin, cell
+        cx = np.floor((x - origin[0]) / cell).astype(np.int64)
+        cy = np.floor((y - origin[1]) / cell).astype(np.int64)
+        self.nx, self.ny = int(cx.max()) + 1, int(cy.max()) + 1
+        key = cy * self.nx + cx
+        self.order = np.argsort(key, kind="stable")
+        self.bounds = np.searchsorted(key[self.order], np.arange(self.nx * self.ny + 1))
+
+    def disc(self, x0, y0, radius):
+        """Return the indices of the points within *radius* of (x0, y0), ascending."""
+        fx = int(np.floor((x0 - self.origin[0]) / self.cell))
+        fy = int(np.floor((y0 - self.origin[1]) / self.cell))
+        runs = []
+        for gy in range(max(fy - 1, 0), min(fy + 2, self.ny)):
+            lo, hi = max(fx - 1, 0), min(fx + 2, self.nx)
+            if lo < hi:  # the cells of one row are consecutive in the sorted order
+                runs.append(
+                    self.order[self.bounds[gy * self.nx + lo] : self.bounds[gy * self.nx + hi]]
+                )
+        if not runs:
+            return np.empty(0, np.int64)
+        idx = np.concatenate(runs)
+        inside = (self.x[idx] - x0) ** 2 + (self.y[idx] - y0) ** 2 <= radius**2
+        return np.sort(idx[inside])
+
+
+def _simulate_chunk(task):
+    """Waveform metrics of one chunk of nearby shots, read with one query."""
+    from alsdb.products._tiling import query_to_array
+
+    indices, xy, seeds, beams = task
+    w = _WORKER
+    radius = w["radius"]
+    low, high = xy.min(axis=0) - radius, xy.max(axis=0) + radius
+    points = query_to_array(w["provider"], (low[0], low[1], high[0], high[1]), year=w["year"],
+                            attributes=_ATTRIBUTES)  # fmt: skip
+    grid = _PointGrid(points["X"], points["Y"], low, radius) if len(points) else None
+    output = []
+    for k in range(len(indices)):
+        neighborhood = grid.disc(xy[k, 0], xy[k, 1], radius) if grid is not None else ()
+        options = dict(w["options"])
+        if beams is not None:
+            options["beam_id"] = beams[k]
+        result = waveform_from_points(points[neighborhood] if len(neighborhood) else None, *xy[k],
+                                      year=w["year"], rng=np.random.default_rng(seeds[k]),
+                                      **options)  # fmt: skip
+        output.append((int(indices[k]), result.to_dict() if result is not None else None))
+    return output
+
+
+def _shot_chunks(centers, block_size, max_shots):
+    """Yield indices of nearby shots: spatial blocks, sorted inside, cut into chunks.
+
+    Sorting by row then column keeps each chunk of a crowded block compact, so
+    chunks of the same block read little of each other's area.
+    """
+    blocks = {}
+    cells = np.floor(centers / block_size).astype(np.int64)
+    for index in np.lexsort((centers[:, 0], centers[:, 1])):
+        blocks.setdefault((cells[index, 0], cells[index, 1]), []).append(index)
+    for indices in blocks.values():
+        for start in range(0, len(indices), max_shots):
+            yield np.asarray(indices[start : start + max_shots])
+
+
 def simulate_batch(
     provider: TileDBProvider,
     shots: pd.DataFrame,
@@ -584,9 +696,21 @@ def simulate_batch(
     output_path: str | None = None,
     rng: np.random.Generator | None = None,
     batch_tile_size: float = 100.0,
+    max_shots_per_batch: int = 256,
     **kwargs,
 ) -> pd.DataFrame:
-    """Simulate waveforms for many shots in parallel.
+    """Simulate waveforms for many shots, in parallel worker processes.
+
+    Shots are grouped into spatial blocks of ``batch_tile_size`` (at most
+    ``max_shots_per_batch`` per chunk); each chunk is read with one query.
+    With ``n_workers > 1`` chunks run in separate processes, each with its own
+    TileDB context (cores / n_workers threads, a small cache), so the work
+    scales with cores; the per-footprint loop holds the GIL, so threads did
+    not. Every shot has its own noise seed: results do not depend on
+    ``n_workers``. Workers start with ``spawn`` (TileDB's threads make
+    ``fork`` unsafe), so a script calling this with ``n_workers > 1`` must
+    guard its entry point with ``if __name__ == "__main__":``; notebooks and
+    the interactive interpreter need nothing.
 
     Parameters
     ----------
@@ -600,11 +724,15 @@ def simulate_batch(
     year : int, optional
         Survey year.
     n_workers : int
-        Threads.
+        Worker processes (1: run in this process).
     output_path : str, optional
         Also write the result to this Parquet file.
     rng : np.random.Generator, optional
         Generator for reproducible noise.
+    batch_tile_size : float
+        Side (m) of the spatial blocks shots are grouped by.
+    max_shots_per_batch : int
+        Largest number of shots read and simulated as one task.
     **kwargs
         Passed to :func:`simulate_waveform`.
 
@@ -614,9 +742,17 @@ def simulate_batch(
         Shot columns plus ground elevation, HOME, cover, point count and RH
         metrics (NaN without enough points).
     """
-    from alsdb.products._footprints import footprint_batches
+    import multiprocessing
+    import os
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
+    if n_workers < 1:
+        raise ValueError("n_workers must be positive")
+    if not np.isfinite(batch_tile_size) or batch_tile_size <= 0 or max_shots_per_batch < 1:
+        raise ValueError("Batch size and maximum shot count must be positive")
     centers = shots[[x_col, y_col]].to_numpy(dtype=float)
+    if not np.isfinite(centers).all():
+        raise ValueError("Shot coordinates must be finite")
     random = rng if rng is not None else np.random.default_rng()
     seeds = random.integers(0, np.iinfo(np.uint64).max, size=len(shots), dtype=np.uint64)
     radius = _effective_query_radius(
@@ -624,39 +760,35 @@ def simulate_batch(
         kwargs.get("gaussian_beam_weighting", True),
         kwargs.get("sigma_beam"),
         kwargs.get("beam_extent_sigma", _BEAM_EXTENT_SIGMA),
-    ) + (kwargs.get("density_radius") or 0)
-    results = [None] * len(shots)
-    attributes = ("Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "Withheld")
+    )
     beam_ids = shots[beam_col].astype(str).to_numpy() if beam_col in shots.columns else None
-
-    def process(indices, points, neighborhoods):
-        output = []
-        for index, neighborhood in zip(indices, neighborhoods):
-            options = dict(kwargs)
-            if beam_ids is not None:
-                options["beam_id"] = beam_ids[index]
-            result = waveform_from_points(
-                points[neighborhood],
-                *centers[index],
-                year=year,
-                rng=np.random.default_rng(seeds[index]),
-                **options,
-            )
-            output.append((index, result.to_dict() if result is not None else None))
-        return output
-
-    for batch in footprint_batches(
-        provider,
-        centers,
-        radius,
-        year=year,
-        attributes=attributes,
-        batch_tile_size=batch_tile_size,
-        n_workers=n_workers,
-        process=process,
-    ):
-        for index, result in batch:
-            results[index] = result
+    tasks = (
+        (idx, centers[idx], seeds[idx], None if beam_ids is None else beam_ids[idx])
+        for idx in _shot_chunks(centers, batch_tile_size, max_shots_per_batch)
+    )
+    results = [None] * len(shots)
+    if n_workers == 1:
+        _init_worker(provider, kwargs, radius, year, threads=None)
+        for task in tasks:
+            for index, result in _simulate_chunk(task):
+                results[index] = result
+    else:
+        threads = max(1, (os.cpu_count() or n_workers) // n_workers)
+        # spawn: TileDB keeps threads, which a forked child would inherit locked
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(n_workers, mp_context=context, initializer=_init_worker,
+                                 initargs=(provider, kwargs, radius, year, threads)) as pool:  # fmt: skip
+            pending = set()
+            for task in tasks:
+                pending.add(pool.submit(_simulate_chunk, task))
+                if len(pending) >= 2 * n_workers:  # bounded: few chunks in flight
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        for index, result in future.result():
+                            results[index] = result
+            for future in pending:
+                for index, result in future.result():
+                    results[index] = result
     nan_metrics = dict(
         z_ground=np.nan,
         home=np.nan,

@@ -199,6 +199,23 @@ def test_gap_lai_toggle_preserves_gap(provider, store):
     assert "gap_n_classified" in store.variables(10)
 
 
+def test_provider_pickles_for_worker_processes(provider):
+    import pickle
+
+    from alsdb.products._tiling import query_to_array
+
+    bbox = (308400.0, 4688400.0, 308500.0, 4688500.0)
+    clone = pickle.loads(pickle.dumps(provider))  # the TileDB context is rebuilt
+    assert clone.array_uri == provider.array_uri
+    assert len(query_to_array(clone, bbox, 2021, ("Z",))) == len(
+        query_to_array(provider, bbox, 2021, ("Z",))
+    )
+    lean = provider.with_config(**{"sm.tile_cache_size": "0"})
+    assert lean._raw_cfg["sm.tile_cache_size"] == "0"
+    assert provider._raw_cfg["sm.tile_cache_size"] != "0"  # the original is untouched
+    assert len(query_to_array(lean, bbox, 2021, ("Z",))) > 0
+
+
 def test_batched_waveforms_duplicate_indices_and_worker_determinism(provider):
     shots = pd.DataFrame(
         {"center_x": [308400.0, 308600.0, 308410.0], "center_y": [4688400.0, 4688600.0, 4688410.0]},
