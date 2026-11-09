@@ -62,6 +62,7 @@ import pandas as pd
 
 from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
 from alsdb.products import waveform as _wf
+from alsdb.products._tiling import PointGrid
 from alsdb.products.gap import _GROUND_CLASS, _LAI_K_DEFAULT, _LAI_MAX
 
 logger = logging.getLogger(__name__)
@@ -698,7 +699,7 @@ def _pavd_chunk(task):
     hag[first] = normalized["HeightAboveGround"]
     extrapolated = np.zeros(len(points), bool)
     extrapolated[first] = normalized["GroundExtrapolated"].astype(bool)
-    grid = _wf._PointGrid(points["X"], points["Y"], low, radius)
+    grid = PointGrid(points["X"], points["Y"], low, radius)
     cls = points["Classification"]
     output = []
     for k in range(len(indices)):
@@ -814,7 +815,7 @@ def _gedi_chunk(task):
     # Normalise once per chunk: footprints share most of their points, and one
     # TIN of all the chunk's ground serves every footprint.
     hag = heights_above_ground(points, TerrainModel(ground)) if len(ground) >= 3 else None
-    grid = _wf._PointGrid(points["X"], points["Y"], low, radius) if hag is not None else None
+    grid = PointGrid(points["X"], points["Y"], low, radius) if hag is not None else None
     output = []
     for k in range(len(indices)):
         neighborhood = grid.disc(xy[k, 0], xy[k, 1], radius) if grid is not None else ()

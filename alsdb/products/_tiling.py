@@ -413,34 +413,40 @@ def bounded_map(fn, items, n_workers=1):
                 pending.append(executor.submit(fn, item))
 
 
-def baba_neighbourhoods(
-    points: np.ndarray,
-    resolution: float,
-    bbox: tuple[float, float, float, float],
-    baba_radius: float,
-) -> tuple[int, int, list, float]:
-    """Build per-cell circular-neighbourhood point indices for BABA.
+class PointGrid:
+    """Points sorted into square cells of the search radius, for disc queries.
 
-    Returns ``(nx, ny, indices_list, neighbourhood_area)`` where
-    ``indices_list[row * nx + col]`` holds the indices into *points* that
-    fall within *baba_radius* of that cell's centre.
-
-    Shared by :mod:`alsdb.products.gap` and :mod:`alsdb.products.biomass`.
+    A disc of that radius touches at most the 3 x 3 cells around its centre,
+    each a contiguous run of the sorted points, so a query returns an index
+    array without building per-point Python lists (as cKDTree's
+    ``query_ball_point`` does: millions of ints for dense footprints).
     """
-    from scipy.spatial import cKDTree
 
-    from alsdb.methods._grid import GridSpec
+    def __init__(self, x, y, origin, cell):
+        self.x, self.y, self.origin, self.cell = x, y, origin, cell
+        cx = np.floor((x - origin[0]) / cell).astype(np.int64)
+        cy = np.floor((y - origin[1]) / cell).astype(np.int64)
+        self.nx, self.ny = int(cx.max()) + 1, int(cy.max()) + 1
+        key = cy * self.nx + cx
+        self.order = np.argsort(key, kind="stable")
+        self.bounds = np.searchsorted(key[self.order], np.arange(self.nx * self.ny + 1))
 
-    grid = GridSpec.from_bbox(bbox, resolution)
-    nx, ny = grid.nx, grid.ny
-    cx, cy = grid.centers()
-    # Preserve this helper's historical south-up index order for its callers.
-    centres = np.column_stack((np.flipud(cx).ravel(), np.flipud(cy).ravel()))
-
-    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    indices_list = cKDTree(xy).query_ball_point(centres, r=baba_radius)
-
-    return nx, ny, indices_list, np.pi * baba_radius**2
+    def disc(self, x0, y0, radius):
+        """Return the indices of the points within *radius* of (x0, y0), ascending."""
+        fx = int(np.floor((x0 - self.origin[0]) / self.cell))
+        fy = int(np.floor((y0 - self.origin[1]) / self.cell))
+        runs = []
+        for gy in range(max(fy - 1, 0), min(fy + 2, self.ny)):
+            lo, hi = max(fx - 1, 0), min(fx + 2, self.nx)
+            if lo < hi:  # the cells of one row are consecutive in the sorted order
+                runs.append(
+                    self.order[self.bounds[gy * self.nx + lo] : self.bounds[gy * self.nx + hi]]
+                )
+        if not runs:
+            return np.empty(0, np.int64)
+        idx = np.concatenate(runs)
+        inside = (self.x[idx] - x0) ** 2 + (self.y[idx] - y0) ** 2 <= radius**2
+        return np.sort(idx[inside])
 
 
 def tile_bboxes(

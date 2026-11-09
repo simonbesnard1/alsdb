@@ -464,12 +464,12 @@ def test_density_cell_removes_overlap_double_counting():
 def test_point_grid_disc_matches_kdtree():
     from scipy.spatial import cKDTree
 
-    from alsdb.products.waveform import _PointGrid
+    from alsdb.products._tiling import PointGrid
 
     rng = np.random.default_rng(3)
     x, y = rng.uniform(0, 100, 20000), rng.uniform(0, 60, 20000)
     radius = 7.0
-    grid = _PointGrid(x, y, np.array([-radius, -radius]), radius)
+    grid = PointGrid(x, y, np.array([-radius, -radius]), radius)
     tree = cKDTree(np.column_stack((x, y)))
     for x0, y0 in rng.uniform([-5, -5], [105, 65], (200, 2)):
         expected = np.sort(tree.query_ball_point((x0, y0), radius))

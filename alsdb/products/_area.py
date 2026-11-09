@@ -60,7 +60,7 @@ def compute_area_products(
     clumping_index=1.0,
     ground_outlier_removal=True,
     max_ground_distance=None,
-    ground_extrapolation=False,
+    ground_extrapolation=True,
     quality=True,
     overwrite=False,
     tile_size=500.0,
@@ -142,6 +142,8 @@ def compute_area_products(
     }
     metric_config = dict(
         base,
+        # 2: cover from classified first returns only; Næsset AGB 0 without cover
+        metrics_version=2,
         cc_threshold=cc_threshold,
         baba_radius=baba_radius,
         min_density=min_density,
@@ -157,7 +159,7 @@ def compute_area_products(
         configurations["lai"] = dict(configurations["gap"], k=k, clumping_index=clumping_index)
     identified = model_id or getattr(model, "model_id", None)
     if biomass:
-        identified = identified or ("naesset-placeholder-v1" if model is naesset_model else None)
+        identified = identified or ("naesset-placeholder-v2" if model is naesset_model else None)
         configurations["biomass"] = dict(
             metric_config, features=list(features), model_id=identified or str(uuid.uuid4())
         )

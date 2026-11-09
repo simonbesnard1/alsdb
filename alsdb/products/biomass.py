@@ -9,12 +9,22 @@ computed (height percentiles, canopy cover, density, foliage height
 diversity, height-stratum proportions) and an allometric model turns them
 into AGB (Mg/ha), written to an :class:`~alsdb.storage.ALSZarrStore`.
 
-Height metrics use all vegetation returns; canopy cover (``cc``) uses first
-returns of any class.
+Height metrics use all vegetation returns above ground; canopy cover
+(``cc``) is the share of classified (ground and vegetation) first returns
+that are vegetation above ``cc_threshold``, so buildings, wires and
+unclassified points neither add cover nor dilute it (as the gap fraction
+of :mod:`alsdb.products.gap`).
 
 The default model is a Næsset-style power law, ``AGB = a * h95^b * cc^c``
-with generic coefficients ``a=0.8, b=1.8, c=0.5``: calibrate it against
-field plots (:func:`calibrate_naesset`) before using the results.
+(Næsset 2002) with generic coefficients ``a=0.8, b=1.8, c=0.5``: calibrate
+it against field plots (:func:`calibrate_naesset`) before using the
+results. Cells with returns but no canopy get 0, cells without returns NaN.
+
+References
+----------
+Næsset, E. (2002). Predicting forest stand characteristics with airborne
+    scanning laser using a practical two-stage procedure and field data.
+    Remote Sensing of Environment, 80(1), 88-99.
 
 Example::
 
@@ -30,9 +40,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from alsdb.methods._grid import flip_to_north_up
 from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
-from alsdb.products._tiling import baba_neighbourhoods
+from alsdb.products._tiling import PointGrid
 
 if TYPE_CHECKING:
     from alsdb.providers.tiledb_provider import TileDBProvider
@@ -158,9 +167,12 @@ def _extract_metrics(
     if "density" in requested:
         out["density"] = density
     if "cc" in requested:
-        first = valid & (points["ReturnNumber"][inside] == 1)
+        cls = points["Classification"][inside]
+        canopy_class = np.isin(cls, veg_classes)
+        first = valid & (points["ReturnNumber"][inside] == 1) & (canopy_class | (cls == 2))
         denominator = np.bincount(cells[first], minlength=n)
-        numerator = np.bincount(cells[first], weights=hag[first] > cc_threshold, minlength=n)
+        canopy = canopy_class[first] & (hag[first] > cc_threshold)
+        numerator = np.bincount(cells[first], weights=canopy, minlength=n)
         out["cc"] = np.divide(numerator, denominator, out=np.full(n, np.nan), where=denominator > 0)
     if {"hmean", "crr"} & set(requested):
         mean = np.divide(
@@ -221,6 +233,22 @@ def _extract_metrics(
 _NAESSET_DEFAULTS = (0.8, 1.8, 0.5)
 
 
+def _naesset(h95, cc, a, b, c):
+    """Return ``a * h95^b * cc^c``, 0 without cover (h95 is then ignored)."""
+    h95, cc = np.asarray(h95, dtype=np.float64), np.asarray(cc, dtype=np.float64)
+    covered = cc > 0
+    with np.errstate(invalid="ignore"):
+        return np.where(
+            covered, a * np.power(np.where(covered, h95, 1.0), b) * np.power(cc, c), 0.0
+        )
+
+
+def _naesset_inputs(h95, cc):
+    """Return the cells or plots the model applies to: cover in [0, 1], positive h95 if covered."""
+    h95, cc = np.asarray(h95, dtype=np.float64), np.asarray(cc, dtype=np.float64)
+    return np.isfinite(cc) & (cc >= 0) & (cc <= 1) & ((cc == 0) | (np.isfinite(h95) & (h95 > 0)))
+
+
 def naesset_model(
     metrics: dict[str, np.ndarray],
     a: float = 0.8,
@@ -228,6 +256,10 @@ def naesset_model(
     c: float = 0.5,
 ) -> np.ndarray:
     """Næsset-style power-law AGB model (Mg/ha): ``AGB = a * h95^b * cc^c``.
+
+    Cells with returns but no canopy cover (``cc == 0``, including cells
+    without vegetation returns, whose h95 is NaN) get 0; cells without
+    first returns (``cc`` NaN) get NaN.
 
     Parameters
     ----------
@@ -249,14 +281,9 @@ def naesset_model(
             stacklevel=2,
         )
 
-    h95 = metrics["h95"]
-    cc = metrics["cc"]
-    with np.errstate(invalid="ignore"):
-        agb = np.where(
-            ~np.isfinite(h95) | ~np.isfinite(cc) | (h95 <= 0) | (cc <= 0) | (cc > 1),
-            np.nan,
-            a * np.power(h95, b) * np.power(cc, c),
-        )
+    h95 = np.asarray(metrics["h95"], dtype=np.float64)
+    cc = np.asarray(metrics["cc"], dtype=np.float64)
+    agb = np.where(_naesset_inputs(h95, cc), _naesset(h95, cc, a, b, c), np.nan)
     return agb.astype(np.float32)
 
 
@@ -279,9 +306,10 @@ def calibrate_naesset(
     h95:
         95th height percentile per plot (m).
     cc:
-        Canopy cover per plot (0-1).
+        Canopy cover per plot (0-1); plots without cover (0) are kept, with
+        any h95, as the model predicts 0 there.
     agb_field:
-        Field AGB per plot (Mg/ha).
+        Field AGB per plot (Mg/ha); plots with 0 are kept.
     p0:
         Initial ``(a, b, c)``.
     return_cov:
@@ -305,15 +333,7 @@ def calibrate_naesset(
     cc = np.asarray(cc, dtype=np.float64)
     agb_field = np.asarray(agb_field, dtype=np.float64)
 
-    valid = (
-        np.isfinite(h95)
-        & np.isfinite(cc)
-        & np.isfinite(agb_field)
-        & (cc > 0)
-        & (cc <= 1)
-        & (h95 > 0)
-        & (agb_field > 0)
-    )
+    valid = _naesset_inputs(h95, cc) & np.isfinite(agb_field) & (agb_field >= 0)
     n_valid = int(valid.sum())
 
     if n_valid < 20:
@@ -333,8 +353,9 @@ def calibrate_naesset(
 
     def _model(X, a, b, c):
         h, cv = X
-        return a * np.power(h, b) * np.power(cv, c)
+        return _naesset(h, cv, a, b, c)
 
+    h95 = np.where(cc == 0, 1.0, h95)  # ignored without cover; curve_fit rejects NaN
     popt, pcov = curve_fit(
         _model,
         (h95[valid], cc[valid]),
@@ -357,37 +378,104 @@ def calibrate_naesset(
 def wrap_sklearn_model(
     estimator,
     features: list[str] | None = None,
+    zero_without_cover: bool = True,
 ) -> Callable:
-    """Wrap a fitted scikit-learn estimator as a ``model_fn`` for :func:`compute_biomass`.
+    """Wrap a fitted model with ``predict(X)`` as a ``model_fn`` for :func:`compute_biomass`.
+
+    Works for scikit-learn estimators and anything with the same ``predict``
+    interface (XGBoost, LightGBM, a Keras model or a small PyTorch wrapper):
+    ``X`` is (cells, features) in *features* order, predictions of shape
+    (cells,) or (cells, 1). Models trained on a DataFrame receive one with
+    the same column names. Tiles run in threads, so ``predict`` may be called
+    concurrently when ``n_workers > 1``.
 
     Parameters
     ----------
     estimator:
-        Fitted estimator with ``predict(X)``.
+        Fitted model with ``predict(X)``.
     features:
-        Metric names in training order; default all metrics.
+        Metric names in training order. Default: the estimator's
+        ``feature_names_in_`` (fitted on a DataFrame), otherwise all metrics
+        in :data:`_METRIC_NAMES` order. Given together with
+        ``feature_names_in_``, they must match it.
+    zero_without_cover:
+        Give 0 to cells without canopy cover (``cc == 0``, needs ``cc`` among
+        the features) whose other features are missing, e.g. height metrics
+        of cells without vegetation returns, as :func:`naesset_model`. Cells
+        with all features are always predicted.
 
     Returns
     -------
     Callable
-        ``model_fn(metrics) -> np.ndarray``; NaN cells are not predicted.
+        ``model_fn(metrics) -> np.ndarray``; cells with missing features are
+        NaN (see *zero_without_cover*). Its ``model_id`` is a hash of the
+        model and features, or None if the model cannot be pickled: pass
+        ``model_id`` to :func:`compute_biomass` then, or it is recomputed.
+
+    Raises
+    ------
+    ValueError
+        If *features* are unknown or disagree with the estimator's feature
+        names or feature count.
     """
-    feat = list(features) if features is not None else _METRIC_NAMES
+    import warnings
+
+    names = getattr(estimator, "feature_names_in_", None)
+    names = None if names is None else [str(n) for n in names]
+    if features is None:
+        feat = list(names) if names is not None else list(_METRIC_NAMES)
+    else:
+        feat = list(features)
+        if names is not None and feat != names:
+            raise ValueError(
+                f"features {feat} differ from the names the estimator was fitted with {names}"
+            )
+    unknown = set(feat) - set(_METRIC_NAMES)
+    if unknown:
+        raise ValueError(f"Unknown metrics: {sorted(unknown)}")
+    expected = getattr(estimator, "n_features_in_", None)
+    if expected is not None and expected != len(feat):
+        raise ValueError(
+            f"The estimator expects {expected} features, got {len(feat)}: pass features="
+        )
+    zero = zero_without_cover and "cc" in feat
 
     def _model(metrics: dict[str, np.ndarray]) -> np.ndarray:
         shape = metrics[feat[0]].shape
         # Stack into (n_pixels, n_features); ravel preserves north-up order
-        X = np.column_stack([metrics[k].ravel() for k in feat])
+        X = np.column_stack([np.asarray(metrics[k], dtype=np.float64).ravel() for k in feat])
         valid = np.isfinite(X).all(axis=1)
         result = np.full(X.shape[0], np.nan, dtype=np.float32)
         if valid.any():
-            result[valid] = estimator.predict(X[valid]).astype(np.float32)
+            inputs = X[valid]
+            if names is not None:
+                import pandas as pd
+
+                inputs = pd.DataFrame(inputs, columns=names)
+            predicted = np.asarray(estimator.predict(inputs), dtype=np.float32)
+            if predicted.size != int(valid.sum()):
+                raise ValueError(
+                    f"predict returned {predicted.shape} for {int(valid.sum())} cells; "
+                    "expected one value per cell"
+                )
+            result[valid] = predicted.reshape(-1)
+        if zero:
+            cover = np.asarray(metrics["cc"], dtype=np.float64).ravel()
+            result[~valid & (cover == 0)] = 0.0
         return result.reshape(shape)
 
     _model.required_metrics = tuple(feat)
     import joblib
 
-    _model.model_id = joblib.hash((estimator, feat))
+    try:
+        _model.model_id = joblib.hash((estimator, feat, zero))
+    except Exception as exc:  # noqa: BLE001 - pickling failures vary by framework
+        warnings.warn(
+            f"Cannot hash the model ({exc}); pass model_id to compute_biomass to reuse results",
+            UserWarning,
+            stacklevel=2,
+        )
+        _model.model_id = None
     return _model
 
 
@@ -409,21 +497,31 @@ def _extract_metrics_baba(
     """Compute per-cell metrics from all points within *baba_radius* of each cell centre.
 
     Buffered area-based approach: robust at fine resolutions. The points must
-    extend at least *baba_radius* beyond *bbox*.
+    extend at least *baba_radius* beyond *bbox*. Metrics match
+    :func:`_extract_metrics` applied to each disc.
 
     Parameters
     ----------
     min_density:
         Neighbourhoods with fewer points per m2 get NaN.
     """
+    from alsdb.methods._grid import GridSpec
+
     requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
     if set(requested) - set(_METRIC_NAMES):
         raise ValueError("Unknown structural metric")
-    nx, ny, neighborhoods, area = baba_neighbourhoods(points, resolution, bbox, baba_radius)
-    out = {name: np.full(nx * ny, np.nan, np.float32) for name in requested}
     requested_set = set(requested)
+    grid = GridSpec.from_bbox(bbox, resolution)
+    centre_x, centre_y = (c.ravel() for c in grid.centers())  # north-up order
+    area = np.pi * baba_radius**2
+    n = len(centre_x)
+    out = {name: np.full(n, np.nan, np.float32) for name in requested}
+    if not len(points):
+        return {name: values.reshape(grid.shape) for name, values in out.items()}
     quantiles = tuple(
-        (name, q) for name, q in (("h50", 50), ("h75", 75), ("h95", 95)) if name in requested_set
+        (name, q)
+        for name, q in (("h50", 0.5), ("h75", 0.75), ("h95", 0.95))
+        if name in requested_set
     )
     strata = tuple(
         (name, bounds)
@@ -431,10 +529,18 @@ def _extract_metrics_baba(
         if name in requested_set
     )
     needs_entropy = bool({"fhd", "vci"} & requested_set)
-    hag = points["HeightAboveGround"]
-    veg = np.isfinite(hag) & (hag > 0) & np.isin(points["Classification"], veg_classes)
-    first = np.isfinite(hag) & (points["ReturnNumber"] == 1)
-    for cell, idx in enumerate(neighborhoods):
+    needs_heights = bool(requested_set - {"density", "cc"})
+    hag = points["HeightAboveGround"].astype(np.float64)
+    finite = np.isfinite(hag)
+    cls = points["Classification"]
+    canopy_class = np.isin(cls, veg_classes)
+    veg = finite & (hag > 0) & canopy_class
+    first = finite & (points["ReturnNumber"] == 1) & (canopy_class | (cls == 2))
+    canopy = first & canopy_class & (hag > cc_threshold)
+    x, y = points["X"].astype(np.float64), points["Y"].astype(np.float64)
+    search = PointGrid(x, y, (x.min(), y.min()), baba_radius)
+    for cell in range(n):
+        idx = search.disc(centre_x[cell], centre_y[cell], baba_radius)
         density = len(idx) / area
         if density < min_density:
             continue
@@ -442,34 +548,49 @@ def _extract_metrics_baba(
             out["density"][cell] = density
         if not len(idx):
             continue
-        h = hag[idx]
-        if "cc" in out and first[idx].any():
-            out["cc"][cell] = np.mean(h[first[idx]] > cc_threshold)
-        hv = h[veg[idx]]
-        if not len(hv):
+        if "cc" in out:
+            n_first = np.count_nonzero(first[idx])
+            if n_first:
+                out["cc"][cell] = np.count_nonzero(canopy[idx]) / n_first
+        if not needs_heights:
             continue
-        if quantiles:
-            for (name, _), value in zip(quantiles, np.percentile(hv, [q for _, q in quantiles])):
-                out[name][cell] = value
-        height_mean = hv.mean() if {"hmean", "crr"} & requested_set else None
-        height_max = hv.max() if {"hmax", "crr"} & requested_set else None
-        if "hmean" in requested_set:
-            out["hmean"][cell] = height_mean
-        if "hmax" in requested_set:
-            out["hmax"][cell] = height_max
-        if "crr" in requested_set:
-            height_min = hv.min()
-            if height_max > height_min:
-                out["crr"][cell] = (height_mean - height_min) / (height_max - height_min)
+        hv = hag[idx[veg[idx]]]
+        m = len(hv)
+        if not m:
+            continue
+        # One sort serves percentiles, extremes, strata and the height histogram.
+        hs = np.sort(hv)
+        for name, q in quantiles:
+            rank = q * (m - 1)
+            low = int(np.floor(rank))
+            t = rank - low
+            a, b = hs[low], hs[min(low + 1, m - 1)]
+            # numpy's linear interpolation, so values equal np.percentile's
+            out[name][cell] = b - (b - a) * (1 - t) if t >= 0.5 else a + (b - a) * t
+        if {"hmean", "crr"} & requested_set:
+            height_mean = hv.mean()
+            if "hmean" in out:
+                out["hmean"][cell] = height_mean
+        if "hmax" in out:
+            out["hmax"][cell] = hs[-1]
+        if "crr" in out and hs[-1] > hs[0]:
+            out["crr"][cell] = (height_mean - hs[0]) / (hs[-1] - hs[0])
         if needs_entropy:
-            entropy = _fhd_from_hag(hv)
-            if "fhd" in requested_set:
+            # np.histogram's bins: half-open, the last one closed
+            edges = np.searchsorted(hs, _FHD_BINS, side="left")
+            edges[-1] = np.searchsorted(hs, _FHD_BINS[-1], side="right")
+            counts = np.diff(edges)
+            c = counts[counts > 0].astype(np.float64)
+            share = c / c.sum()
+            entropy = float(-np.sum(share * np.log(share))) if c.size else np.nan
+            if "fhd" in out:
                 out["fhd"][cell] = entropy
-            if "vci" in requested_set:
+            if "vci" in out:
                 out["vci"][cell] = entropy / _VCI_MAX_ENTROPY
         for name, (lo, hi) in strata:
-            out[name][cell] = np.mean((hv > lo) & (hv <= hi))
-    return {name: flip_to_north_up(values.reshape(ny, nx)) for name, values in out.items()}
+            count = np.searchsorted(hs, hi, side="right") - np.searchsorted(hs, lo, side="right")
+            out[name][cell] = count / m
+    return {name: values.reshape(grid.shape) for name, values in out.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +616,7 @@ def compute_metrics(
     metrics: tuple[str, ...] | None = None,
     ground_outlier_removal: bool = True,
     max_ground_distance: float | None = None,
-    ground_extrapolation: bool = False,
+    ground_extrapolation: bool = True,
 ) -> None:
     """Compute structural metrics and write them to *store*.
 
@@ -527,6 +648,10 @@ def compute_metrics(
         Buffer for terrain interpolation (m).
     n_workers:
         Parallel workers.
+    ground_extrapolation:
+        Give returns outside the ground TIN the height above the nearest
+        ground (default, as :mod:`alsdb.products.profiles`); off, they get
+        no height and are left out of every metric.
     """
     from alsdb.products._area import compute_area_products
 
@@ -571,7 +696,7 @@ def compute_biomass(
     model_id: str | None = None,
     ground_outlier_removal: bool = True,
     max_ground_distance: float | None = None,
-    ground_extrapolation: bool = False,
+    ground_extrapolation: bool = True,
 ) -> None:
     """Estimate above-ground biomass and write it to *store*.
 
@@ -604,6 +729,8 @@ def compute_biomass(
         Buffer for terrain interpolation (m).
     n_workers:
         Parallel workers.
+    ground_extrapolation:
+        As :func:`compute_metrics`.
     """
     from alsdb.products._area import compute_area_products
 
@@ -636,22 +763,15 @@ def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
     """Spatially grouped cross-validation of :func:`naesset_model`.
 
     Whole spatial groups are held out together. Returns out-of-fold
-    predictions, residual RMSE and bias, and residual quantiles (prediction
-    error on the plots, not pixel confidence intervals).
+    predictions, residual RMSE, bias (mean prediction minus field AGB) and
+    residual quantiles (prediction error on the plots, not pixel confidence
+    intervals). Plots are selected as in :func:`calibrate_naesset`.
     """
     h95, cc, agb = (np.asarray(a, dtype=float) for a in (h95, cc, agb_field))
     groups = np.asarray(spatial_groups)
     if not (h95.shape == cc.shape == agb.shape == groups.shape) or h95.ndim != 1:
         raise ValueError("Plot inputs must have matching one-dimensional shapes")
-    valid = (
-        np.isfinite(h95)
-        & np.isfinite(cc)
-        & np.isfinite(agb)
-        & (h95 > 0)
-        & (cc > 0)
-        & (cc <= 1)
-        & (agb > 0)
-    )
+    valid = _naesset_inputs(h95, cc) & np.isfinite(agb) & (agb >= 0)
     unique = np.unique(groups[valid])
     if not isinstance(n_splits, int) or n_splits < 2 or len(unique) < n_splits:
         raise ValueError("Need at least n_splits distinct spatial groups and n_splits >= 2")
@@ -661,7 +781,7 @@ def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
         test = valid & np.isin(groups, held_out)
         train = valid & ~test
         a, b, c = calibrate_naesset(h95[train], cc[train], agb[train])
-        prediction[test] = a * h95[test] ** b * cc[test] ** c
+        prediction[test] = _naesset(h95[test], cc[test], a, b, c)
         folds[test] = fold
     residual = agb[valid] - prediction[valid]
     return {

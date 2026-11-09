@@ -10,6 +10,7 @@ import pytest
 
 from alsdb.products.biomass import (
     _extract_metrics,
+    _extract_metrics_baba,
     _fhd_from_hag,
     _vci_from_hag,
     calibrate_naesset,
@@ -118,10 +119,14 @@ def test_naesset_model_nan_for_nan_h95():
     assert not np.isnan(agb[0, 1])
 
 
-def test_naesset_model_nan_for_zero_cc():
+def test_naesset_model_zero_without_cover_nan_without_returns():
     m = _flat_metrics(cc_val=0.0)
-    agb = naesset_model(m)
-    assert np.all(np.isnan(agb))
+    m["h95"][0, :] = np.nan  # no vegetation returns at all
+    m["cc"][1, 0] = np.nan  # no first returns
+    agb = naesset_model(m, a=1.0, b=2.0, c=0.5)
+    assert np.isnan(agb[1, 0])
+    agb[1, 0] = 0.0
+    assert np.all(agb == 0.0)
 
 
 def test_naesset_model_positive_for_valid_inputs():
@@ -451,3 +456,114 @@ def test_compute_metrics_writes_new_variables(provider, store):
     compute_metrics(provider, store, resolution=RES, bbox=BBOX, year=YEAR)
     for var in ("hmax", "crr", "pv_0_2", "pv_5_10", "pv_above40"):
         assert store.has_data(var, RES, YEAR), f"Missing new variable: {var}"
+
+
+# ---------------------------------------------------------------------------
+# Canopy cover from classified first returns; zero-biomass plots
+# ---------------------------------------------------------------------------
+
+
+def _with_buildings(arr, n=60, seed=3):
+    """Turn *n* ground returns into building roofs 8 m above ground."""
+    out = arr.copy()
+    idx = np.random.default_rng(seed).choice(np.flatnonzero(out["Classification"] == 2), n, False)
+    out["Classification"][idx] = 6
+    out["HeightAboveGround"][idx] = 8.0
+    return out
+
+
+@pytest.mark.parametrize("baba", [False, True])
+def test_cover_ignores_buildings_and_unclassified(baba):
+    arr = _make_hag_points(n_gnd=400, n_veg=400, seed=4)
+    bbox = (0.0, 0.0, 100.0, 100.0)
+
+    def cover(points):
+        if baba:
+            return _extract_metrics_baba(points, 50.0, bbox, 40.0, metrics=("cc",))["cc"]
+        return _extract_metrics(points, 50.0, bbox, metrics=("cc",))["cc"]
+
+    base = cover(arr)
+    with_roofs = _with_buildings(arr)
+    # roofs replace ground returns: the classified denominator shrinks, the canopy count stays
+    expected = cover(with_roofs[with_roofs["Classification"] != 6])
+    np.testing.assert_allclose(cover(with_roofs), expected)
+    assert np.all(cover(with_roofs) >= base - 1e-6)
+    unclassified = with_roofs.copy()
+    unclassified["Classification"][unclassified["Classification"] == 6] = 1
+    np.testing.assert_allclose(cover(unclassified), expected)
+
+
+def test_baba_matches_grid_metrics_when_the_disc_holds_all_points():
+    arr = _make_hag_points(n_gnd=300, n_veg=700, bbox=(0.0, 0.0, 10.0, 10.0), seed=5)
+    grid = _extract_metrics(arr, 10.0, (0.0, 0.0, 10.0, 10.0))
+    baba = _extract_metrics_baba(arr, 10.0, (0.0, 0.0, 10.0, 10.0), 50.0)
+    for name in grid:
+        if name == "density":  # per cell area vs per disc area
+            continue
+        np.testing.assert_allclose(baba[name], grid[name], rtol=1e-6, err_msg=name)
+
+
+def test_calibrate_naesset_keeps_plots_without_biomass():
+    rng = np.random.default_rng(6)
+    h95 = rng.uniform(5, 30, 80)
+    cc = rng.uniform(0.2, 1.0, 80)
+    agb = 1.2 * h95**1.5 * cc**0.7
+    h95[:20], cc[:20], agb[:20] = np.nan, 0.0, 0.0  # open plots
+    a, b, c = calibrate_naesset(h95, cc, agb)
+    assert (a, b, c) == pytest.approx((1.2, 1.5, 0.7), rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Machine-learning models through wrap_sklearn_model
+# ---------------------------------------------------------------------------
+
+
+def _fitted_forest():
+    import pandas as pd
+
+    ensemble = pytest.importorskip("sklearn.ensemble")
+    RandomForestRegressor = ensemble.RandomForestRegressor
+
+    rng = np.random.default_rng(7)
+    X = pd.DataFrame({"cc": rng.uniform(0, 1, 300), "h95": rng.uniform(2, 30, 300)})
+    return RandomForestRegressor(30, random_state=0).fit(X, 2 * X.h95 * X.cc)
+
+
+def test_wrapper_uses_the_fitted_feature_names_and_rejects_another_order():
+    forest = _fitted_forest()
+    model = wrap_sklearn_model(forest)
+    assert model.required_metrics == ("cc", "h95")
+    m = _flat_metrics(h95_val=20.0, cc_val=0.5)
+    assert float(model(m)[0, 0]) == pytest.approx(20.0, rel=0.15)
+    with pytest.raises(ValueError, match="differ"):
+        wrap_sklearn_model(forest, ["h95", "cc"])
+
+
+def test_wrapper_rejects_a_feature_count_mismatch():
+    class Fitted:
+        n_features_in_ = 2
+
+        def predict(self, X):
+            return X[:, 0]
+
+    with pytest.raises(ValueError, match="expects 2 features"):
+        wrap_sklearn_model(Fitted())
+
+
+def test_wrapper_accepts_column_predictions_and_unpicklable_models():
+    import threading
+
+    class Network:  # Keras/PyTorch style: (n, 1) output, holds an unpicklable handle
+        lock = threading.Lock()
+
+        def predict(self, X):
+            return (X[:, 0] * X[:, 1])[:, None]
+
+    with pytest.warns(UserWarning, match="model_id"):
+        model = wrap_sklearn_model(Network(), ["cc", "h95"])
+    assert model.model_id is None
+    m = _flat_metrics(h95_val=10.0, cc_val=0.5)
+    m["h95"][0, 0] = np.nan  # covered but missing height: NaN
+    m["h95"][0, 1], m["cc"][0, 1] = np.nan, 0.0  # no vegetation returns: 0
+    agb = model(m)
+    assert np.isnan(agb[0, 0]) and agb[0, 1] == 0.0 and agb[1, 1] == pytest.approx(5.0)

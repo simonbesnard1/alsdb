@@ -630,45 +630,9 @@ def _init_worker(provider, options, radius, year, threads):
     _WORKER.update(provider=provider, options=options, radius=radius, year=year)
 
 
-class _PointGrid:
-    """Points sorted into square cells of the search radius, for disc queries.
-
-    A disc of that radius touches at most the 3 x 3 cells around its centre,
-    each a contiguous run of the sorted points, so a query returns an index
-    array without building per-point Python lists (as cKDTree's
-    ``query_ball_point`` does: millions of ints for dense footprints).
-    """
-
-    def __init__(self, x, y, origin, cell):
-        self.x, self.y, self.origin, self.cell = x, y, origin, cell
-        cx = np.floor((x - origin[0]) / cell).astype(np.int64)
-        cy = np.floor((y - origin[1]) / cell).astype(np.int64)
-        self.nx, self.ny = int(cx.max()) + 1, int(cy.max()) + 1
-        key = cy * self.nx + cx
-        self.order = np.argsort(key, kind="stable")
-        self.bounds = np.searchsorted(key[self.order], np.arange(self.nx * self.ny + 1))
-
-    def disc(self, x0, y0, radius):
-        """Return the indices of the points within *radius* of (x0, y0), ascending."""
-        fx = int(np.floor((x0 - self.origin[0]) / self.cell))
-        fy = int(np.floor((y0 - self.origin[1]) / self.cell))
-        runs = []
-        for gy in range(max(fy - 1, 0), min(fy + 2, self.ny)):
-            lo, hi = max(fx - 1, 0), min(fx + 2, self.nx)
-            if lo < hi:  # the cells of one row are consecutive in the sorted order
-                runs.append(
-                    self.order[self.bounds[gy * self.nx + lo] : self.bounds[gy * self.nx + hi]]
-                )
-        if not runs:
-            return np.empty(0, np.int64)
-        idx = np.concatenate(runs)
-        inside = (self.x[idx] - x0) ** 2 + (self.y[idx] - y0) ** 2 <= radius**2
-        return np.sort(idx[inside])
-
-
 def _simulate_chunk(task):
     """Waveform metrics of one chunk of nearby shots, read with one query."""
-    from alsdb.products._tiling import query_to_array
+    from alsdb.products._tiling import PointGrid, query_to_array
 
     indices, xy, seeds, beams = task
     w = _WORKER
@@ -676,7 +640,7 @@ def _simulate_chunk(task):
     low, high = xy.min(axis=0) - radius, xy.max(axis=0) + radius
     points = query_to_array(w["provider"], (low[0], low[1], high[0], high[1]), year=w["year"],
                             attributes=_ATTRIBUTES)  # fmt: skip
-    grid = _PointGrid(points["X"], points["Y"], low, radius) if len(points) else None
+    grid = PointGrid(points["X"], points["Y"], low, radius) if len(points) else None
     output = []
     for k in range(len(indices)):
         neighborhood = grid.disc(xy[k, 0], xy[k, 1], radius) if grid is not None else ()

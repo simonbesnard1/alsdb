@@ -14,7 +14,17 @@ compute_gap_fraction(provider, store, resolution=10, year=2014, lai=True)
 
 `metrics=None` computes all structural metrics; `metrics=()` none. Selecting
 metrics avoids computing unused entropy, strata and height metrics. Circular
-BABA neighbourhoods (`baba_radius`) also support selection. Raster writes are
+BABA neighbourhoods (`baba_radius`) also support selection; each neighbourhood
+is found with a cell grid and its heights sorted once (on 2.1 M points at 2 m
+resolution and 12.5 m radius, 21 s instead of 94 s, identical values).
+
+Height metrics use vegetation returns above ground. Canopy cover (`cc`) is the
+share of classified (ground and vegetation) first returns that are vegetation
+above `cc_threshold`: buildings, wires and unclassified points neither add
+cover nor dilute it, as for the gap fraction. `compute_metrics` and
+`compute_biomass` give returns outside the ground TIN the height above the
+nearest ground (`ground_extrapolation=True`, as the vertical profiles); off,
+those returns are left out. Raster writes are
 locked per resolution, so more workers do not raise write throughput
 indefinitely: choose the worker count with point density and buffer size in
 mind.
@@ -32,6 +42,23 @@ compute_biomass(
     model_features=("h95", "cc"), model_id="local-inventory-fit-v2",
 )
 ```
+
+The Næsset-style model (`naesset_model`, Næsset 2002) gives 0 where a cell has
+returns but no canopy cover, including cells without vegetation returns, and
+NaN only where it has no first returns, so area means count open land.
+`calibrate_naesset` and `validate_naesset` keep plots without cover or biomass.
+
+Any model with `predict(X)` (scikit-learn, XGBoost, LightGBM, Keras, or a
+small wrapper around a PyTorch network) goes through `wrap_sklearn_model`.
+Features default to the estimator's `feature_names_in_` and must match them if
+given; a feature count that disagrees with `n_features_in_` raises; models
+fitted on a DataFrame receive one with the same columns; predictions of shape
+(cells, 1) are accepted. Cells without cover whose height metrics are missing
+get 0 (`zero_without_cover`), as with the Næsset model. Models that cannot be
+pickled get no automatic `model_id`: pass one to `compute_biomass` to reuse
+results. Tiles run in threads, so `predict` may run concurrently. Any other
+callable taking the metric dict and returning the grid also works as
+`model_fn`, with `model_features` and `model_id`.
 
 Matching completed metric slices are read from Zarr in tile-sized windows, so
 changing the biomass model does not require rereading and normalizing the point
