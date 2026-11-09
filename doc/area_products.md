@@ -76,20 +76,38 @@ returns, 0 otherwise, and NaN for unsupported cells. Zero observed gap does not
 identify a finite LAI: LAI remains NaN there. Positive-gap LAI retains the existing
 15 ceiling. These are support diagnostics, not statistical confidence intervals.
 
-## PAVD and waveforms
+## Vertical profiles and waveforms
 
-`compute_als_pavd_profile` now interpolates ground height at each first return
+`alsdb.products.profiles` holds every vertical canopy profile. They share one
+chain: a gap probability over height above ground, from ALS returns
+(MacArthur & Horn 1969, `gap_from_returns`) or from a waveform split into
+canopy and ground (GEDI L2B, `gap_from_waveform`), then the plant area
+traversed `PAI = -ln(gap) / k` (`pai_from_gap`) and the plant area volume
+density `PAVD = -dPAI/dh` (`pavd_from_pai`).
+
+`compute_als_pavd_profile` interpolates ground height at each first return
 using **all** classified ground returns in a buffered footprint. The default
 `terrain_buffer=30` metres prevents relying solely on sparse ground first
-returns. Ground first returns contribute at height zero; unsupported canopy
-heights are excluded and counted in `n_unsupported`. Optional extrapolation is
-recorded in `n_extrapolated`. The profile is a return-count estimate affected by
+returns. Ground first returns contribute at height zero. First returns outside
+the ground TIN take the height above the nearest ground (`ground_extrapolation`,
+default on, counted in `n_extrapolated`); switched off, they are excluded and
+counted in `n_unsupported`, which raises the gap and lowers the PAI because the
+ground returns stay. The profile is a return-count estimate affected by
 sampling, classification and extinction assumptions, not an independent truth
 measurement.
 
+`compute_als_pavd_batch` reads nearby shots together, with one ground TIN and one
+normalisation per chunk, in worker processes when `n_workers > 1` (as
+`simulate_batch`). On 1,600 footprints of 30 pulses/m2 ALS on a 30 degree slope
+it took 9 ms per footprint on one worker and 4 ms on four, against about 100 ms
+for single profiles, with identical results. `fit_transmittance_model` accepts
+the cumulative PAI per bin or at the bin edges (`PAVDProfile.pai_cumulative`)
+and, with `free_amplitude=True`, fits `T = a exp(-beta C)` instead of forcing
+`T = 1` at the canopy top.
+
 ```python
 import numpy as np
-from alsdb.products.pavd import compute_als_pavd_batch
+from alsdb.products.profiles import compute_als_pavd_batch
 from alsdb.products.waveform import simulate_batch
 
 profiles = compute_als_pavd_batch(provider, shots, year=2014, n_workers=4)
@@ -140,7 +158,7 @@ help dense footprint grids; sparse tracks keep the 100 m default.
 
 ## Simulated GEDI canopy profiles (attenuation)
 
-`alsdb.products.gedi_profiles.simulate_profiles(provider, shots, out_dir)`
+`alsdb.products.profiles.simulate_gedi_profiles(provider, shots, out_dir)`
 simulates, for every shot, the canopy and ground parts of the waveform (split
 by ALS class, as the GEDI simulator's `-ground` option) and three gap
 probability profiles on one height-above-ground grid (default -10 to 80 m in
@@ -157,7 +175,7 @@ It writes `profiles.zarr` (arrays of shape shots x heights, plus `height`) and
 `footprints.parquet` (shot columns, `shot_index`, waveform metrics,
 `signal_top`, `z_ground_true`, `canopy_energy`, `ground_energy`, `rv_rg`).
 The gap profiles are NaN above `signal_top`, as GEDI's `pgap_theta_z` covers
-only the signal. `gap_probability(canopy, ground, rv_rg, totals=...)` recomputes
+only the signal. `gap_from_waveform(canopy, ground, rv_rg, totals=...)` recomputes
 `pgap_waveform` for another ratio from the stored arrays, without simulating
 again.
 

@@ -135,12 +135,12 @@ def main():
 def database_bench(raw, center, bbox, report):
     from alsdb.core.alsdatabase import ALSDatabase
     from alsdb.core.alsprovider import ALSProvider
+    from alsdb.products._area import compute_area_products
     from alsdb.products._tiling import query_to_array
     from alsdb.products.biomass import compute_metrics
     from alsdb.products.chm import compute_chm
-    from alsdb.products._area import compute_area_products
     from alsdb.products.gap import compute_gap_fraction
-    from alsdb.products.pavd import compute_als_pavd_batch, compute_als_pavd_profile
+    from alsdb.products.profiles import compute_als_pavd_batch, compute_als_pavd_profile
     from alsdb.products.waveform import simulate_batch, simulate_waveform
     from alsdb.storage.zarr_store import ALSZarrStore
     from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig

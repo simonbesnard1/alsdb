@@ -12,7 +12,7 @@ from alsdb.products.biomass import (
     compute_metrics,
 )
 from alsdb.products.gap import compute_gap_fraction, gap_statistics
-from alsdb.products.pavd import (
+from alsdb.products.profiles import (
     _pavd_profile_from_hag,
     compute_als_pavd_batch,
     compute_als_pavd_profile,

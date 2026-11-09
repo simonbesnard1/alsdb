@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Tests for pavd.py — pure-function unit tests (no TileDB required).
+"""Tests for the ALS PAVD profiles of profiles.py — pure-function unit tests (no TileDB required).
 
 Synthetic canopies are built directly as (hag, classification) arrays, the
 same inputs _pavd_profile_from_hag consumes once a footprint has been
@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from alsdb.products.gap import _LAI_K_DEFAULT, _gap_to_lai
-from alsdb.products.pavd import (
+from alsdb.products.profiles import (
     _MIN_GROUND_POINTS_DEFAULT,
     _pavd_profile_from_hag,
     fit_transmittance_model,
@@ -206,3 +206,43 @@ def test_transmittance_too_few_points_gives_nan_beta():
     out = fit_transmittance_model(c, als, observed)
     assert np.isnan(out["beta"])
     assert np.all(np.isnan(out["fitted"]))
+
+
+def test_transmittance_accepts_edge_values_of_a_profile():
+    """PAVDProfile.pai_cumulative has one value per edge: the midpoints are used."""
+    edges = np.linspace(0.0, 5.0, 31)
+    als = np.full(30, 0.3)
+    out = fit_transmittance_model(edges, als, als * np.exp(-0.2 * (edges[:-1] + edges[1:]) / 2))
+    assert out["beta"] == pytest.approx(0.2, rel=1e-3)
+    assert out["amplitude"] == 1.0
+    with pytest.raises(ValueError):
+        fit_transmittance_model(edges[:10], als, als)
+
+
+def test_transmittance_free_amplitude_recovers_both_parameters():
+    """A waveform spread by its pulse can exceed the ALS at the top: a != 1."""
+    c = np.linspace(0.0, 6.0, 40)
+    als = np.full_like(c, 0.3)
+    observed = als * 2.5 * np.exp(-0.4 * c)
+    out = fit_transmittance_model(c, als, observed, free_amplitude=True)
+    assert out["amplitude"] == pytest.approx(2.5, rel=1e-3)
+    assert out["beta"] == pytest.approx(0.4, rel=1e-3)
+    fixed = fit_transmittance_model(c, als, observed)  # forced through 1: biased
+    assert abs(fixed["beta"] - 0.4) > 0.05
+
+
+def test_canopy_outside_the_ground_tin_is_kept_by_default():
+    from alsdb.products.profiles import pavd_from_points
+
+    rng = np.random.default_rng(1)
+    n = 2000
+    x, y = rng.uniform(-10, 10, (2, n))
+    ground = (rng.random(n) < 0.3) & (x < 0)  # ground returns on the western half only
+    pts = {"X": x, "Y": y, "Z": np.where(ground, 0.0, rng.uniform(10, 25, n)),
+           "ReturnNumber": np.ones(n, int), "Classification": np.where(ground, 2, 5),
+           "Withheld": np.zeros(n, bool)}  # fmt: skip
+    kept = pavd_from_points(pts, 0, 0, 10, terrain_buffer=0)
+    dropped = pavd_from_points(pts, 0, 0, 10, terrain_buffer=0, ground_extrapolation=False)
+    assert kept.n_unsupported == 0 and kept.n_extrapolated > 0
+    assert dropped.n_unsupported > 0
+    assert kept.total_pai > dropped.total_pai  # dropping canopy alone lowers the PAI
