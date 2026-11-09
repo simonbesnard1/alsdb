@@ -223,7 +223,6 @@ class ALSZarrStore:
             Chunk size in CRS units.  Should match the ``tile_size`` used
             during processing so chunk boundaries align with tile boundaries.
         """
-
         store = cls(path, mode="w", storage_options=storage_options)
         store._root.attrs.update({"bbox": list(bbox), "crs_wkt": crs_wkt})
 
@@ -523,6 +522,7 @@ class ALSZarrStore:
         return {int(k.rsplit("/", 1)[1]) for k in self._list_prefix(prefix)}
 
     def finish_run(self, variable, resolution, year, *, failed=False):
+        """Mark a processing run as complete or failed."""
         key = _res_str(resolution)
         with self._group_lock(key):
             arr = self._root[key][variable]
@@ -798,5 +798,6 @@ class ALSZarrStore:
         return [n for n in grp.array_keys() if n not in _COORD_ARRAYS]
 
     def __repr__(self) -> str:
+        """Return the store path and variables grouped by resolution."""
         parts = [f"  {_res_str(r)}: {self.variables(r)}" for r in self.resolutions]
         return f"ALSZarrStore({self.path})\n" + "\n".join(parts)

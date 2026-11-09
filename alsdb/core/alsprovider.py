@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Query interface for ALS point data stored in TileDB."""
+
 import logging
 
 import numpy as np

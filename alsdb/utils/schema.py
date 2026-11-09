@@ -2,16 +2,14 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""TileDB schema definitions and compression filters for ALS points."""
+
 from dataclasses import dataclass
 
 import numpy as np
 import tiledb
 
-# ---------------------------------------------------------------------------
-# LAS dimension registry
-# X, Y, and Year are the TileDB *dimensions* (spatial + temporal index);
-# all others are *attributes* stored alongside each point.
-# ---------------------------------------------------------------------------
+# X, Y, and Year are dimensions; these fields are stored as attributes.
 LAS_ATTRIBUTES: dict[str, type] = {
     "Z": np.float64,
     "Intensity": np.uint16,
@@ -33,21 +31,9 @@ LAS_ATTRIBUTES: dict[str, type] = {
     "Overlap": np.uint8,
 }
 
-# ---------------------------------------------------------------------------
-# Filter lists — tuned per data type to maximise compression ratio.
-#
-# The strategy mirrors what LASzip does internally:
-#   1. A decorrelating filter exploits spatial coherence between adjacent points
-#      (delta encoding, byte shuffle) so ZSTD sees smaller residuals.
-#   2. ZSTD-9 for the final entropy coding pass.
-#
-# Benchmarks on typical ALS tiles show 15–35 % size reduction vs plain ZSTD-9.
-# ---------------------------------------------------------------------------
+# Type-specific decorrelation before ZSTD-9 saves 15--35% over plain ZSTD-9.
 
-# Floating-point coordinates (X, Y) — byte-shuffle exploits the regular stride
-# between adjacent sorted coordinate values before ZSTD entropy coding.
-# (DoubleDeltaFilter only accepts integer types in TileDB, so it cannot be used
-# on float64 dimensions.)
+# Double-delta does not accept float64, so coordinates use byte shuffle.
 _FILTERS_COORD = tiledb.FilterList(
     [
         tiledb.ByteShuffleFilter(),
@@ -85,11 +71,7 @@ _FILTERS_INT = tiledb.FilterList(
 # Fallback for any attribute type not covered above.
 _FILTERS_DEFAULT = tiledb.FilterList([tiledb.ZstdFilter(level=9)])
 
-# ---------------------------------------------------------------------------
-# Per-CRS domain defaults
-# Each entry covers the valid extent of that CRS in metres with a small margin.
-# The generic UTM fallback is intentionally generous to cover any UTM zone.
-# ---------------------------------------------------------------------------
+# Projected-coordinate domains, including a generous global fallback.
 _CRS_DOMAINS: dict[str, dict] = {
     # ETRS89 / UTM Zone 30N — Iberian Peninsula (PNOA)
     "EPSG:25830": {

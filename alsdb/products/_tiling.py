@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Tiling, querying and parallel execution shared by the products"""
+"""Tiling, querying and parallel execution shared by the products."""
 
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def check_bbox_overlap(
     requested: tuple[float, float, float, float],
     provider,
 ) -> bool:
-    """Return True if *requested* overlaps the stored data extent
+    """Return True if *requested* overlaps the stored data extent.
 
     Logs a warning and returns False otherwise.
 
@@ -234,7 +234,7 @@ _HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
 
 
 def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
-    """Reclassify low ground outliers as class 7 with PDAL ``filters.elm``
+    """Reclassify low ground outliers as class 7 with PDAL ``filters.elm``.
 
     Only ground (class 2) is checked: ELM (10 m cells, 1 m threshold) flags the
     lowest returns of a cell lying at least 1 m below the next ones, such as
@@ -280,7 +280,7 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
 
 
 def _hag_stage(arr: np.ndarray) -> dict:
-    """Return a PDAL height-above-ground stage for *arr*
+    """Return a PDAL height-above-ground stage for *arr*.
 
     ``filters.hag_delaunay`` with at least ``_HAG_DELAUNAY_MIN_GND`` ground
     points, else ``filters.hag_nn``.
@@ -324,7 +324,7 @@ def run_tiled(
     skip: set[int] | frozenset[int] = frozenset(),
     **kwargs,
 ) -> None:
-    """Run *worker_fn* over all *tiles*, sequentially or in a thread pool
+    """Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
 
     The worker signature is
     ``worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)``.
@@ -419,9 +419,7 @@ def baba_neighbourhoods(
     bbox: tuple[float, float, float, float],
     baba_radius: float,
 ) -> tuple[int, int, list, float]:
-    """
-    Build per-cell circular-neighbourhood point indices for the Buffered
-    Area-Based Approach (BABA).
+    """Build per-cell circular-neighbourhood point indices for BABA.
 
     Returns ``(nx, ny, indices_list, neighbourhood_area)`` where
     ``indices_list[row * nx + col]`` holds the indices into *points* that

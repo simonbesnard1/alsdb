@@ -57,7 +57,6 @@ def _bin_counts(
     resolution: float,
 ) -> tuple[int, int, np.ndarray, np.ndarray]:
     """Return (nx, ny, x_edges, y_edges) for a given resolution."""
-
     x_min, x_max, y_min, y_max = _extent(df)
     nx = max(1, int(np.ceil((x_max - x_min) / resolution)))
     ny = max(1, int(np.ceil((y_max - y_min) / resolution)))
@@ -434,9 +433,7 @@ def plot_waveform(
         100: "#9C27B0",
     }
 
-    # ------------------------------------------------------------------
-    # Left panel — waveform profile
-    # ------------------------------------------------------------------
+    # Left panel: waveform profile.
     # Filled waveform
     ax_wave.fill_betweenx(z, 0, wave, alpha=0.25, color="#78909C", label="Waveform")
     ax_wave.plot(wave, z, color="#37474F", linewidth=1.2)

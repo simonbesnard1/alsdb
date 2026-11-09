@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Vertical plant area volume density (PAVD) profiles from ALS
+"""Vertical plant area volume density (PAVD) profiles from ALS.
 
 Extends the MacArthur-Horn gap-fraction estimator of :mod:`gap` to height:
 the gap probability at height z is the share of first returns that reach z,
@@ -46,10 +46,7 @@ class PAVDProfile:
     pavd_z: np.ndarray  # layer-centre heights matching pavd, ascending (m)
     pavd_z_rel: np.ndarray  # pavd_z / canopy_height
     pai_cumulative: np.ndarray  # cumulative PAI traversed from the canopy top
-    # down to each edge in z (same length/order as z) -- maximal at the
-    # ground edge (= total_pai), ~0 at the canopy-top edge. This is the
-    # "cumulative canopy traversed" quantity fit_transmittance_model() fits
-    # transmittance against.
+    # down to each edge in z; this is the predictor in fit_transmittance_model().
     total_pai: float
     canopy_height: float
     n_points: int
@@ -66,7 +63,7 @@ def _pavd_profile_from_hag(
     min_ground_points: int = _MIN_GROUND_POINTS_DEFAULT,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> PAVDProfile | None:
-    """Compute the PAVD profile of one footprint from heights above ground
+    """Compute the PAVD profile of one footprint from heights above ground.
 
     Returns None with too few ground returns or no vegetation above ground.
 
@@ -122,10 +119,7 @@ def _pavd_profile_from_hag(
     n_above = (n_tot - n_le).astype(np.float64)
 
     gap = 1.0 - n_above / n_tot
-    # Floor at "one unseen return" rather than 0, to avoid -inf when a footprint's
-    # ground is barely sampled (dense overstory) -- same boundary-blow-up risk
-    # figure5_sitestack.py's load_als() docstring already flagged for a from-scratch
-    # MacArthur-Horn attempt on a single small footprint.
+    # One unseen return is a finite lower bound for poorly sampled ground.
     gap_safe = np.clip(gap, 1.0 / n_tot, 1.0)
     pai_traversed = np.clip(-np.log(gap_safe) / k, 0.0, _LAI_MAX)
 
@@ -165,7 +159,7 @@ def compute_als_pavd_profile(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> PAVDProfile | None:
-    """Return-count PAVD profile in a circular footprint
+    """Return-count PAVD profile in a circular footprint.
 
     Parameters
     ----------
@@ -217,7 +211,7 @@ def pavd_from_points(
     max_ground_distance=None,
     ground_extrapolation=False,
 ):
-    """Compute a footprint profile from points covering the footprint and terrain buffer
+    """Compute a footprint profile from points covering the footprint and terrain buffer.
 
     First returns without terrain support are counted in ``n_unsupported``.
     """
@@ -319,7 +313,7 @@ def fit_transmittance_model(
     als_pavd: np.ndarray,
     observed_pavd: np.ndarray,
 ) -> dict:
-    """Transmittance of an observed PAVD profile relative to the ALS profile
+    """Transmittance of an observed PAVD profile relative to the ALS profile.
 
     ``T = observed_pavd / als_pavd`` per bin, fitted as
     ``T(C) = exp(-beta * C)`` with C the cumulative PAI from the canopy top (a

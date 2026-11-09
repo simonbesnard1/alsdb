@@ -1,4 +1,4 @@
-"""Area-based products (metrics, gap/LAI, biomass) from one query and normalisation per tile
+"""Area-based products (metrics, gap/LAI, biomass) from one query and normalisation per tile.
 
 The engine behind :func:`~alsdb.products.biomass.compute_metrics`,
 :func:`~alsdb.products.biomass.compute_biomass` and

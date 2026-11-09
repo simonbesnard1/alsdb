@@ -153,9 +153,10 @@ def gap_statistics(
 
 
 def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.ndarray:
-    """
-    Convert gap fraction to effective LAI via Beer-Lambert with optional
-    clumping correction (Jonckheere et al. 2004 / Chen & Black 1992).
+    """Convert gap fraction to effective LAI with Beer-Lambert extinction.
+
+    The optional clumping correction follows Jonckheere et al. (2004) and
+    Chen and Black (1992).
 
     ``L_true = -ln(P_gap) / (k × Ω)``
 
@@ -184,9 +185,7 @@ def _compute_gap_grid_baba(
     min_density: float = 0.0,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
 ) -> np.ndarray:
-    """
-    Compute per-cell gap fraction using a circular neighbourhood of radius
-    *baba_radius* around each cell centre (Buffered Area-Based Approach).
+    """Compute gap fraction with a circular neighbourhood around each cell.
 
     The denominator is ``N_gnd + N_veg`` (classified first returns only),
     consistent with the standard grid estimator.  Unclassified, noise, and

@@ -26,7 +26,8 @@ def _add_ptd_arguments(p):
     """PTD (Axelsson 2000) settings; several values run every combination.
 
     Defaults: alsdb's (tilt ensemble); ``--ptd-tilt-runs 1 --ptd-votes 1
-    --ptd-angle 30 --ptd-distance 2`` is lasR's single run."""
+    --ptd-angle 30 --ptd-distance 2`` is lasR's single run.
+    """
     from alsdb.methods.ptd import DEFAULTS as d
 
     for flag, key, kind, unit in (
@@ -63,6 +64,7 @@ def _ptd_sets(args):
 
 
 def main(argv=None):
+    """Run the selected validation benchmark command."""
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "points":
         from alsdb.benchmark.points import main as points_main

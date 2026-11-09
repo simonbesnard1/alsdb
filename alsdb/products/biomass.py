@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Above-ground biomass (AGB) from ALS point clouds
+"""Above-ground biomass (AGB) from ALS point clouds.
 
 Points are normalised with a buffered terrain TIN, per-cell metrics are
 computed (height percentiles, canopy cover, density, foliage height
@@ -127,7 +127,7 @@ def _extract_metrics(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Compute per-cell structural metrics over *bbox*
+    """Compute per-cell structural metrics over *bbox*.
 
     Parameters
     ----------
@@ -227,7 +227,7 @@ def naesset_model(
     b: float = 1.8,
     c: float = 0.5,
 ) -> np.ndarray:
-    """Næsset-style power-law AGB model (Mg/ha): ``AGB = a * h95^b * cc^c``
+    """Næsset-style power-law AGB model (Mg/ha): ``AGB = a * h95^b * cc^c``.
 
     Parameters
     ----------
@@ -272,7 +272,7 @@ def calibrate_naesset(
     p0: tuple[float, float, float] = (0.8, 1.8, 0.5),
     return_cov: bool = False,
 ) -> tuple[float, float, float] | tuple[tuple[float, float, float], np.ndarray]:
-    """Fit the coefficients of :func:`naesset_model` to field plots
+    """Fit the coefficients of :func:`naesset_model` to field plots.
 
     Parameters
     ----------
@@ -358,7 +358,7 @@ def wrap_sklearn_model(
     estimator,
     features: list[str] | None = None,
 ) -> Callable:
-    """Wrap a fitted scikit-learn estimator as a ``model_fn`` for :func:`compute_biomass`
+    """Wrap a fitted scikit-learn estimator as a ``model_fn`` for :func:`compute_biomass`.
 
     Parameters
     ----------
@@ -406,7 +406,7 @@ def _extract_metrics_baba(
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     metrics: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Compute per-cell metrics from all points within *baba_radius* of each cell centre
+    """Compute per-cell metrics from all points within *baba_radius* of each cell centre.
 
     Buffered area-based approach: robust at fine resolutions. The points must
     extend at least *baba_radius* beyond *bbox*.
@@ -497,7 +497,7 @@ def compute_metrics(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> None:
-    """Compute structural metrics and write them to *store*
+    """Compute structural metrics and write them to *store*.
 
     Writes h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr and the
     height-stratum proportions pv_0_2 ... pv_above40.
@@ -573,7 +573,7 @@ def compute_biomass(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
 ) -> None:
-    """Estimate above-ground biomass and write it to *store*
+    """Estimate above-ground biomass and write it to *store*.
 
     Parameters
     ----------
@@ -633,7 +633,7 @@ def compute_biomass(
 
 
 def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
-    """Spatially grouped cross-validation of :func:`naesset_model`
+    """Spatially grouped cross-validation of :func:`naesset_model`.
 
     Whole spatial groups are held out together. Returns out-of-fold
     predictions, residual RMSE and bias, and residual quantiles (prediction

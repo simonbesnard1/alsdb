@@ -1,4 +1,4 @@
-"""Compute time of alsdb, lasR and LAStools on the same work
+"""Compute time of alsdb, lasR and LAStools on the same work.
 
 Every tool turns the same LAS/LAZ tiles into the same 1 m CHMs. One-off
 preparation (alsdb ingest, LAStools ``lasheight``) and per-run work are
@@ -338,6 +338,7 @@ def _subsets(blocks, storage, args):
 
 
 def run(args):
+    """Execute and record the requested timing matrix."""
     files = sorted(p for p in Path(args.laz_dir).iterdir() if p.suffix.lower() in (".las", ".laz"))
     blocks, size = select_blocks(files, args.areas)
     cpus_available = sorted(os.sched_getaffinity(0))
@@ -454,6 +455,7 @@ def report(csv_path):
 
 
 def main(argv=None):
+    """Parse arguments and run the timing benchmark."""
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "worker":
         return _worker(argv[1:])

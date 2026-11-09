@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Read, classify, reproject, and stream one LAS or LAZ tile."""
+
 import json
 import logging
 from collections.abc import Generator
@@ -45,8 +47,9 @@ def _crs_is_feet(crs_str: str) -> bool:
 
 
 def _find_utm_crs(native_crs_str: str, bbox: tuple) -> str:
-    """
-    Return the WGS 84 UTM CRS that best covers the centre of *bbox*
+    """Return the WGS 84 UTM CRS that best covers the centre of *bbox*.
+
+    The bounding box is expressed in *native_crs_str* coordinates.
     (expressed in *native_crs_str* coordinates).
 
     Uses a one-point PDAL reprojection to WGS84, then derives the UTM zone
@@ -118,10 +121,12 @@ class ALSTile:
 
     @property
     def tile(self) -> Tile:
+        """Return the underlying tile reader."""
         return self._tile
 
     @property
     def name(self) -> TileNameBase:
+        """Return metadata parsed from the tile filename."""
         return self._tile.name
 
     @property
@@ -197,9 +202,10 @@ class ALSTile:
         return data[mask]
 
     def _apply_denoise(self, data: np.ndarray) -> np.ndarray:
-        """
-        Flag noise points using ELM (below-ground outliers) and radius-based
-        outlier detection (isolated points).  Flagged points receive class 7
+        """Flag noise using ELM and radius-based outlier detection.
+
+        ELM detects below-ground outliers; the radius filter detects isolated
+        points. Flagged points receive class 7
         and are excluded from subsequent ground classification and HAG.
         """
         stages = denoise_stages(self._classification)

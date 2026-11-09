@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""CHM, DTM and DSM processing
+"""CHM, DTM and DSM processing.
 
 Query buffered tiles from the database, normalise heights with a ground TIN,
 build surfaces and write products and provenance to Zarr.
@@ -132,7 +132,7 @@ def compute_chm(
     ground_extrapolation: bool = False,
     fill_max_cells: int = 4,
 ) -> None:
-    """Compute a canopy height model and write it to Zarr
+    """Compute a canopy height model and write it to Zarr.
 
     ``method``: "max", "pitfree", "tin" (first-return TIN), "spikefree" or
     "lastools". ``freeze_distance`` for spike-free: a
@@ -171,7 +171,7 @@ def compute_dtm(
     ground_extrapolation: bool = False,
     ground_classes: tuple[int, ...] = GROUND_CLASSES,
 ) -> None:
-    """Compute a digital terrain model and write it to Zarr
+    """Compute a digital terrain model and write it to Zarr.
 
     Terrain is missing outside the ground hull unless
     ``ground_extrapolation=True``; ``max_ground_distance`` limits support.
@@ -202,7 +202,7 @@ def compute_dsm(
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
 ) -> None:
-    """Compute a digital surface model and write it to Zarr
+    """Compute a digital surface model and write it to Zarr.
 
     ``exclude_classes`` are left out of the surface.
 
@@ -256,7 +256,7 @@ def compute_all(
     ground_extrapolation: bool = False,
     fill_max_cells: int = 4,
 ) -> None:
-    """Compute DTM, DSM and CHM on one grid and write them to Zarr
+    """Compute DTM, DSM and CHM on one grid and write them to Zarr.
 
     Accepts the options of :func:`compute_chm`, :func:`compute_dtm` and
     :func:`compute_dsm`.

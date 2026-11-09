@@ -33,6 +33,7 @@ class Moments:
         self.sx = self.sy = self.sxx = self.syy = self.sxy = self.sad = 0.0
 
     def update(self, x, y):
+        """Accumulate paired reference and candidate values."""
         x = np.asarray(x, np.float64)
         y = np.asarray(y, np.float64)
         self.n += x.size
@@ -76,6 +77,7 @@ class Reservoir:
         self.keys = np.empty(0, np.float64)
 
     def add(self, values):
+        """Add values to the bounded random sample."""
         if not values.size:
             return
         self.values = np.concatenate((self.values, values.astype(np.float32)))
@@ -211,6 +213,8 @@ def read_reference(index, bounds, resolution):
 
 @dataclass
 class Comparison:
+    """Accumulate comparisons between candidate and reference rasters."""
+
     candidates: list
     references: list
     height_bins: tuple
@@ -236,6 +240,7 @@ class Comparison:
         return out
 
     def summary(self):
+        """Return a human-readable summary of all comparisons."""
         lines = [
             f"Tiles compared: {self.tiles_compared} (finished in every candidate, with valid pixels)"
         ]

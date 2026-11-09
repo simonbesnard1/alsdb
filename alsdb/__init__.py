@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Public interface for ALS ingestion, storage, and product generation."""
+
 import logging
 
 from alsdb.core.alsdatabase import ALSDatabase

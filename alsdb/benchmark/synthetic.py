@@ -1,4 +1,4 @@
-"""Simulated ALS over generated forests, scored against exact truth
+"""Simulated ALS over generated forests, scored against exact truth.
 
 Each :class:`Scenario` (terrain, forest type, pulse density, ...) becomes a
 scene with analytic terrain and voxel crowns. HELIOS++ (Winiwarter et al.
@@ -59,6 +59,8 @@ SPEED = 60.0  # m/s
 
 @dataclass(frozen=True)
 class Scenario:
+    """Configuration for one synthetic terrain and forest scene."""
+
     terrain: str = "rolling"
     forest: str = "conifer"
     density: float = 2.0  # pulses per m2
@@ -74,6 +76,7 @@ class Scenario:
     trees: str | None = None  # tree list (read_tree_list) instead of a generated forest type
 
     def __post_init__(self):
+        """Validate scene geometry and simulation settings."""
         if self.terrain not in TERRAINS:
             raise ValueError(f"terrain in {TERRAINS}")
         if self.trees is None and self.forest not in FORESTS:
@@ -91,6 +94,7 @@ class Scenario:
 
     @property
     def name(self):
+        """Return the stable directory name for this scenario."""
         # Suffixes only for the newer options, so earlier scenes keep their names.
         extra = ("_u" if self.understorey else "") + ("_c" if self.placement == "clumped" else "")
         if self.beam_divergence != BEAM_DIVERGENCE:
@@ -102,6 +106,7 @@ class Scenario:
 
     @property
     def size(self):
+        """Return the simulated side length, including margins."""
         return self.core + 2 * self.margin
 
 
@@ -123,10 +128,7 @@ def terrain_height(kind, x, y):
         return (rolling + 0.6 * np.sin(x / 3.1 + 1.0) * np.cos(y / 2.7)
                 + 0.4 * np.sin((x + y) / 1.9))  # fmt: skip
     if kind == "cliff":
-        # A 20 degree slope rising along x, broken every 45 m by a scarp of 6, 10 or
-        # 14 m whose face is ~70-80 degrees (rise over 3 m), with a gently curving
-        # crest line: the sharp convex / concave breaks ground filters cut off or fill.
-        # (+10 m keeps the pattern positive: no scarp is cut at the scene edge)
+        # Repeated 70--80 degree scarps create convex and concave terrain breaks.
         x = np.asarray(x, dtype=float) + 10.0 - 2.0 * np.sin(np.asarray(y, dtype=float) / 25.0)
         period, width = 45.0, 3.0
         step = np.floor(x / period)
@@ -148,13 +150,8 @@ def terrain_height(kind, x, y):
     raise ValueError(f"unknown terrain {kind!r}")
 
 
-# Forest types: list of layers (stems per ha, height mean/sd, height bounds,
-# crown radius / height, crown base / height, shape, placement), and the
-# stand plant area index (m2 plant area per m2 ground, gaps included; leaf
-# area index values after Asner, Scurlock & Hicke 2003, Global Ecol.
-# Biogeogr. 12, 191-205, https://doi.org/10.1046/j.1466-822X.2003.00026.x,
-# plus wood). The plant area density inside crowns follows from the crown volume
-# (see crown_pad): fixing it directly made deep, filled crowns far too opaque.
+# Forest layers define stem density, crown geometry, placement, and stand PAI.
+# PAI values follow Asner et al. (2003), doi:10.1046/j.1466-822X.2003.00026.x.
 FOREST_TYPES = {
     "open": {"pai": 1.0, "layers": [
         {"per_ha": 60, "h": (10.0, 3.0), "hb": (4.0, 20.0), "r": 0.35, "base": 0.3, "shape": "ellipsoid", "place": "random"}]},
@@ -578,7 +575,7 @@ def make_scene(scenario, out_dir):
 
 
 def survey_settings(density):
-    """Pulse rate and mirror frequency giving *density* pulses/m2
+    """Pulse rate and mirror frequency giving *density* pulses/m2.
 
     density = rate / (speed * swath), with swath = 2 * height * tan(half
     angle); the mirror frequency makes the line spacing equal the point spacing.

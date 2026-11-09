@@ -1,4 +1,4 @@
-"""Spike-free freeze-distance sensitivity on finished benchmark scenes
+"""Spike-free freeze-distance sensitivity on finished benchmark scenes.
 
 Every scene's LAZ is ingested once and alsdb spike-free is run with each
 freeze setting below (``spacing``: mean spacing of first surface returns);
@@ -43,6 +43,7 @@ def freeze_settings(spacing):
 
 
 def first_return_spacing(laz):
+    """Estimate pulse spacing from first returns in a LAS or LAZ file."""
     import pdal
 
     from alsdb.methods.rasterise import _pulse_spacing

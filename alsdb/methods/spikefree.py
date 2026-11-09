@@ -1,4 +1,4 @@
-"""Spike-free canopy reconstruction (Khosravipour et al. 2016)
+"""Spike-free canopy reconstruction (Khosravipour et al. 2016).
 
 Points are inserted from highest to lowest into a constrained Delaunay
 triangulation (CGAL); a point is skipped where the triangle above it is
@@ -30,10 +30,7 @@ import numpy as np
 from alsdb.methods._grid import GridSpec
 
 LOCAL_FREEZE_CELL = 5.0  # m, cells for the local pulse density (as PULSE_DENSITY_CELL)
-# Fischer et al. (2024): freeze = m / ln(s * pd + o) + 1, pd in pulses/m2,
-# m = 3.1, s = 1.75, o = 2.1. The paper prints m / (ln(s * pd + o) + 1); the
-# authors' R workflow computes the form above, which lidR's lspikefree()
-# approximates as 1.42 + 1.96 / sqrt(pd).
+# Parameters reproduce Fischer et al.'s (2024) published R workflow.
 LOCAL_FREEZE_PARAMETERS = (3.1, 1.75, 2.1)
 # Densities are clamped to this range, as in the authors' workflow.
 LOCAL_DENSITY_RANGE = (0.5, 100.0)
@@ -69,6 +66,7 @@ def local_freeze_grid(pulses, bbox, cell=LOCAL_FREEZE_CELL):
 
 
 def require_backend():
+    """Return the native spike-free backend or raise an installation error."""
     try:
         from alsdb.methods import _spikefree_native
     except ImportError as exc:

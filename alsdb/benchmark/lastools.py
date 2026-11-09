@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def executable_version(executable="las2dem64", env=None):
+    """Return the version reported by a LAStools executable."""
     resolved = shutil.which(executable)
     if resolved is None:
         raise FileNotFoundError(f"LAStools executable not found: {executable}")
@@ -226,7 +227,7 @@ def run(
     tiles=None,
     timeout=3600,
 ):
-    """Reference CHM tiles from classified LAS/LAZ with LAStools, one file per tile
+    """Generate reference CHM tiles from classified LAS/LAZ with LAStools.
 
     ``lasheight -replace_z`` normalises points on LAStools' own ground TIN;
     ``spikefree`` runs ``las2dem -spike_free`` on the surface classes and

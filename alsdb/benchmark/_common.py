@@ -26,7 +26,7 @@ def surface_classes(veg_classes, ground_classes=GROUND_CLASSES):
 
 
 def auto_parameters(path, veg_classes, ground_classes=GROUND_CLASSES, resolution=1.0):
-    """alsdb's ``"auto"`` freeze distance and pitfree edge for one LAS/LAZ tile.
+    """Alsdb's ``"auto"`` freeze distance and pitfree edge for one LAS/LAZ tile.
 
     Same rule as :func:`alsdb.methods._surface.auto_freeze_distance` and the
     pitfree ``"auto"`` edge, on the tile's surface-class first returns. PNOA

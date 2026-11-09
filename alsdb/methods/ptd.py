@@ -1,4 +1,4 @@
-"""Progressive TIN densification (PTD) ground classification
+"""Progressive TIN densification (PTD) ground classification.
 
 PTD (Axelsson 2000) as implemented in r-lidar/PTD by Jean-Romain Roussel
 (MIT), vendored in ``alsdb/methods/native/ptd`` and compiled with
@@ -44,7 +44,7 @@ def require_native():
 
 
 def ptd_ground(points: np.ndarray, *, workers: int = 1, **parameters) -> np.ndarray:
-    """Classify ground points with the PTD tilt ensemble
+    """Classify ground points with the PTD tilt ensemble.
 
     Noise (classes 7 and 18) is never ground and is left out of the search.
 

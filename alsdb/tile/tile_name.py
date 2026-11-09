@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Parse spatial and acquisition metadata from ALS tile filenames."""
+
 import logging
 import re
 from dataclasses import dataclass
@@ -84,6 +86,7 @@ class PNOATileName:
 
     @property
     def crs(self) -> str:
+        """Return the fixed CRS used by PNOA tiles."""
         return _PNOA_CRS
 
 
@@ -134,13 +137,16 @@ class GenericTileName:
 
     @property
     def bbox_native(self) -> tuple[float, float, float, float]:
+        """Return the tile bounds in its native CRS."""
         return self._bbox
 
     @property
     def crs(self) -> str:
+        """Return the tile CRS."""
         return self._crs
 
     def __repr__(self) -> str:
+        """Return a diagnostic representation of the parsed metadata."""
         return (
             f"GenericTileName(filename={self.filename!r}, year={self.year}, "
             f"crs={self._crs!r}, bbox={self._bbox})"
@@ -174,10 +180,7 @@ class GenericTileName:
         )
         reader_meta: dict = meta.get(reader_key, {}) if reader_key else {}
 
-        # --- Year ---
-        # Filename year (e.g. "PNOA_2021_...", "AHN_2020_...") is the survey
-        # year and takes priority.  The LAZ header creation_year is often the
-        # file processing/delivery year, which can differ by 1–2 years.
+        # Prefer the survey year in the filename to the header's delivery year.
         m = _YEAR_RE.search(Path(path).name)
         if m:
             year = int(m.group())

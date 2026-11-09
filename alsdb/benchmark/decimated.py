@@ -1,4 +1,4 @@
-"""Decimated copies of a dense ALS survey, scored against its full density
+"""Decimated copies of a dense ALS survey, scored against its full density.
 
 Each decimated copy (``pd_*`` folders beside ``original/``) of an
 :class:`~alsdb.benchmark.uls.Area` becomes one benchmark scene. The
@@ -42,7 +42,7 @@ STRIPS = (100.0, 30.0, 35.0)  # period, width, offset from the scene's west edge
 
 
 def in_strips(x, xmin, strips=STRIPS):
-    """True where *x* lies in a dense strip of a scene starting at *xmin*."""
+    """Return where *x* lies in a dense strip of a scene starting at *xmin*."""
     period, width, offset = strips
     return ((np.asarray(x) - xmin - offset) % period) < width
 
@@ -92,7 +92,7 @@ def crop(laz_dir, box):
 
 
 def crop_mixed(sparse_dir, dense_dir, box, strips=STRIPS):
-    """The sparse copy outside the strips and the dense copy inside them."""
+    """Combine sparse points outside strips with dense points inside them."""
     sparse, dense = crop(sparse_dir, box), crop(dense_dir, box)
     names = [n for n in sparse.dtype.names if n in dense.dtype.names]
     return np.concatenate((sparse[names][~in_strips(sparse["X"], box[0], strips)],

@@ -92,6 +92,7 @@ class ClassificationScore:
     total_error: float  # misclassified / all
 
     def to_dict(self) -> dict:
+        """Return all score fields as a dictionary."""
         return asdict(self)
 
 
@@ -126,6 +127,7 @@ class PTDParameters:
     votes: int = 3
 
     def __post_init__(self) -> None:
+        """Validate the PTD and ensemble settings."""
         from alsdb.methods.ptd import check_ensemble
 
         check_ensemble(self.tilt_runs, self.tilt, self.votes)
@@ -144,6 +146,7 @@ class SyntheticClassificationScenario:
     seed: int = 0
 
     def __post_init__(self) -> None:
+        """Validate the synthetic-scene settings."""
         if self.terrain not in ("flat", "rolling", "steep", "rough"):
             raise ValueError("terrain must be flat, rolling, steep, or rough")
         if self.size <= 0 or self.density <= 0:
@@ -444,7 +447,7 @@ class ReferenceContext:
 def reference_context(
     points: np.ndarray, bbox, boundary_width: float, reference: np.ndarray | None = None
 ) -> ReferenceContext:
-    """Reference labels, terrain and slope / cover strata of one classified file.
+    """Build reference labels, terrain, and slope and cover strata.
 
     Slope comes from the reference terrain TIN sampled every
     :data:`STRATUM_CELL` m; cover is the share of first returns more than
@@ -535,7 +538,7 @@ def run_id(method: str, parameters: str) -> str:
 
 
 def load_dtm_references(scene) -> DTMReferences | None:
-    """The scene's ``dtm_references.npz`` from :func:`build_dtm_references`, if any."""
+    """Load a scene's ``dtm_references.npz`` file when present."""
     path = Path(scene) / "dtm_references.npz"
     if not path.exists():
         return None
@@ -642,7 +645,7 @@ LASGROUND_OPTIONS = ("-ignore_class", "7", "18")
 
 
 def method_parameters(method: str, ptd: PTDParameters | None = None) -> dict:
-    """Settings a method runs with, recorded next to its scores."""
+    """Return the method settings recorded with benchmark scores."""
     if method in ("csf", "pmf", "smrf"):
         stage = ground_stage(ClassificationConfig(ground_method=method))
         return {k: v for k, v in stage.items() if k not in ("type", "ignore")}
@@ -694,7 +697,7 @@ def _file_classifier(
 
 
 def _runs(methods, ptd):
-    """(method, PTD settings or None, parameters JSON) for every run requested."""
+    """Yield the method, optional PTD settings, and parameter JSON for each run."""
     valid = {"csf", "pmf", "smrf", "ptd", "lastools"}
     unknown = set(methods) - valid
     if unknown:
@@ -717,7 +720,7 @@ def run_file_benchmark(
     ptd: tuple[PTDParameters, ...] = (PTDParameters(),),
     reference_dir: str | Path | None = None,
 ) -> Path:
-    """Compare ground classifiers with the class-2 labels of LAS/LAZ files
+    """Compare ground classifiers with the class-2 labels of LAS/LAZ files.
 
     Writes one row per file, method and parameter set to ``results.csv``
     (type I / II errors, DTM error) and one per slope and cover class to
@@ -834,7 +837,7 @@ SCENE_STRATA_FIELDS = (*STRATA_FIELDS, *REFERENCE_FIELDS, "scenario")
 
 
 def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) -> ReferenceContext:
-    """Reference of a benchmark scene: its 1 m truth DTM and its point labels
+    """Build a reference from a scene's 1 m truth DTM and point labels.
 
     Slope and cover strata come from the truth averaged over *cell* m blocks,
     inside the scored core only.
@@ -898,7 +901,7 @@ def reference_from_truth(points: np.ndarray, truth, cell: float = STRATUM_CELL) 
 
 
 def classify_scene(scene, runs, work_dir, lastools_executable="lasground64"):
-    """Run every classifier on one benchmark scene
+    """Run every classifier on one benchmark scene.
 
     Returns a list of (results row, strata rows); ground masks are kept in
     ``<work_dir>/ground_masks/<scene>.npz``.
@@ -967,7 +970,7 @@ def run_scene_benchmark(
     workers: int = 1,
     lastools_executable: str = "lasground64",
 ) -> Path:
-    """Classify benchmark scenes and score their DTMs against the scene truth
+    """Classify benchmark scenes and score their DTMs against the scene truth.
 
     Works on the scene folders of :mod:`~alsdb.benchmark.synthetic`,
     :mod:`~alsdb.benchmark.uls` and :mod:`~alsdb.benchmark.decimated`. Writes
@@ -1053,7 +1056,7 @@ def build_dtm_references(
     out_csv: str | Path | None = None,
     max_density: float | None = None,
 ) -> list[dict]:
-    """Classify the full-density survey of every real scene area with each method
+    """Classify the full-density survey of every real scene area with each method.
 
     Each run's 1 m DTM goes to ``dtm_references.npz`` in the area's scenes. The
     median of each method's default (first) run, where the runs agree within
@@ -1227,7 +1230,7 @@ def _scene_chm_rows(scene, masks_path, done):
 
 
 def run_scene_chm(scenes_dirs, out_dir, *, workers: int = 1) -> Path:
-    """Spike-free CHMs on each classifier's ground, for the scenes in *out_dir*
+    """Spike-free CHMs on each classifier's ground, for the scenes in *out_dir*.
 
     Uses the ground masks of :func:`run_scene_benchmark` and writes
     ``<out_dir>/chm.csv`` (one row per scene and run, plus the provider's

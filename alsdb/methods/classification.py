@@ -1,4 +1,4 @@
-"""Configuration and PDAL stages for point classification
+"""Configuration and PDAL stages for point classification.
 
 Ground filters: CSF (Zhang et al. 2016, the default), PMF (Zhang et al.
 2003) and SMRF (Pingel et al. 2013) as implemented in PDAL (Butler et al.
@@ -84,6 +84,7 @@ class ClassificationConfig:
     buffer: float = 0.0
 
     def __post_init__(self) -> None:
+        """Validate classification methods and numerical settings."""
         if self.ground_method not in ("csf", "pmf", "smrf", "ptd"):
             raise ValueError("ground_method must be 'csf', 'pmf', 'smrf', or 'ptd'")
         positive = {

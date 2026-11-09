@@ -137,7 +137,7 @@ def clean_points(arr, *, drop_noise=True):
 
 
 def surface_mask(arr, config):
-    """Select the returns that build the CHM surface: vegetation and ground
+    """Select the returns that build the CHM surface: vegetation and ground.
 
     Ground returns pin the CHM to zero in crown gaps, as in lidR and LAStools.
     ``spikefree_first_returns`` restricts spike-free to first returns, as
@@ -172,7 +172,7 @@ def pulse_density_grid(pulses, bbox, cell=PULSE_DENSITY_CELL):
 
 
 def auto_freeze_distance(points):
-    """Spike-free freeze distance: three first-return pulse spacings
+    """Spike-free freeze distance: three first-return pulse spacings.
 
     As lidR's ``spikefree()`` recommends (Roussel et al. 2020). See
     :func:`alsdb.methods.spikefree.local_freeze_distance` for the per-cell

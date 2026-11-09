@@ -1,4 +1,4 @@
-"""Stratified random sample of forest blocks from IGN Lidar HD
+"""Stratified random sample of forest blocks from IGN Lidar HD.
 
 Lidar HD tiles whose classification was corrected by hand
 (``ST_AUTO_MANUEL``) give a trustworthy ground reference; using them
@@ -322,7 +322,7 @@ def leaf_shares(features, x0, y0, size=BLOCK, cell=10.0):
 
 
 def leaf_type(shares):
-    """broadleaf / conifer when one holds LEAF_SHARE of the typed forest, else mixed."""
+    """Broadleaf / conifer when one holds LEAF_SHARE of the typed forest, else mixed."""
     typed = shares["broadleaf"] + shares["conifer"] + shares["mixed"]
     if typed <= 0:
         return None
@@ -370,7 +370,7 @@ def lidarhd_tiles(x0, y0, size=BLOCK):
 
 
 def block_tiles_ok(tiles, x0, y0, size=BLOCK, hand_corrected=True):
-    """True when every 1 km tile of the block is published (and corrected by hand)."""
+    """Return whether every 1 km tile in a block is available."""
     n = round(size / TILE)
     needed = {(round(x0 + i * TILE), round(y0 + j * TILE)) for i in range(n) for j in range(n)}
     if set(tiles) != needed:
@@ -381,8 +381,11 @@ def block_tiles_ok(tiles, x0, y0, size=BLOCK, hand_corrected=True):
 
 
 def published_blocks(index_csv, hand_corrected=True):
-    """{(x0, y0): first acquisition date} of the blocks whose four tiles are all
-    published (and corrected by hand), from :func:`tile_index`."""
+    """Return the first acquisition date for each complete block.
+
+    Complete blocks contain all four published tiles and, when requested, only
+    hand-corrected tiles from :func:`tile_index`.
+    """
     per_block = {}
     with open(index_csv) as handle:
         for r in csv.DictReader(handle):

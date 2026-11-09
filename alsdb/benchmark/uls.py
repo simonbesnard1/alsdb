@@ -1,4 +1,4 @@
-"""Real canopies from UAV laser scanning (ULS), at ALS pulse densities
+"""Real canopies from UAV laser scanning (ULS), at ALS pulse densities.
 
 Each :class:`Area` (a square of a ULS survey) is read once and turned into
 scenes scored like the synthetic ones:
@@ -73,12 +73,14 @@ class Area:
     tree_height_field: str = "tls_treeheight"
 
     def __post_init__(self):
+        """Validate that the scene aligns to whole metres."""
         for v in (self.x0, self.y0, self.core, self.margin):
             if v != round(v):
                 raise ValueError("x0, y0, core and margin must be whole metres")
 
     @property
     def name(self):
+        """Return the stable scene name."""
         return f"{self.site}_{self.x0:.0f}_{self.y0:.0f}_{self.core:g}"
 
     @property
@@ -359,6 +361,7 @@ def thin_pulses(candidates, box, density, seed=0):
 
 
 def write_laz(points, path, crs):
+    """Write structured points to a compressed LAZ file."""
     import pdal
 
     pts = points.copy()

@@ -1,4 +1,4 @@
-"""Benchmarks and reference products for validating alsdb
+"""Benchmarks and reference products for validating alsdb.
 
 - :mod:`~alsdb.benchmark.lastools`, :mod:`~alsdb.benchmark.lasr`: reference
   CHMs from LAStools and lasR.

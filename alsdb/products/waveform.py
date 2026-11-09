@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Large-footprint waveform simulation from ALS point clouds
+"""Large-footprint waveform simulation from ALS point clouds.
 
 Defaults follow GEDI (25 m footprint, 0.15 m bins, GEDI TX pulse kernels);
 other instruments are simulated by changing ``footprint_radius``, ``sigma``
@@ -50,10 +50,7 @@ _RH_LEVELS: tuple[int, ...] = tuple(range(101))  # RH0–RH100, matches GEDI L2A
 _COVER_THRESHOLD: float = 2.0  # m  above ground
 _BEAM_EXTENT_SIGMA: float = 3.0  # query out to this many sigma_beam (see _effective_query_radius)
 
-# Empirical TX pulse kernels derived from GEDI L1B data (Hancock et al. gediSimulator).
-# Used when beam_id is supplied; other sensors fall back to a Gaussian kernel (sigma=).
-# Full-power beams: 0000, 0001, 0010, 0011, 1000, 1011
-# Coverage beams:  0101, 0110
+# Empirical GEDI L1B transmit kernels; other sensors use a Gaussian kernel.
 _BEAM_IDS: frozenset[str] = frozenset(
     {
         "BEAM0000",
@@ -94,7 +91,7 @@ def _load_pulse(beam_id: str, z_step: float = _Z_STEP) -> np.ndarray:
 
 @dataclass
 class WaveformResult:
-    """Simulated waveform and metrics of one footprint
+    """Simulated waveform and metrics of one footprint.
 
     Attributes
     ----------
@@ -215,7 +212,7 @@ def _build_histogram(
     weights: np.ndarray,
     z_step: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Bin Z values into a vertical histogram
+    """Bin Z values into a vertical histogram.
 
     Returns
     -------
@@ -270,7 +267,7 @@ def _rh_metrics(
     z_ground: float,
     levels: tuple[int, ...] = _RH_LEVELS,
 ) -> dict[int, float]:
-    """Relative heights above the ground peak
+    """Relative heights above the ground peak.
 
     RH(x) is the height at which x% of the total waveform energy is reached,
     counted from the lowest bin. Low percentiles can be slightly negative where
@@ -304,7 +301,7 @@ def _canopy_cover(
     threshold: float = _COVER_THRESHOLD,
     rv_rg: float = 1.0,
 ) -> float:
-    """Canopy cover from the gap probability
+    """Canopy cover from the gap probability.
 
     ``cover = veg_energy / (veg_energy + rv_rg * ground_energy)``, with
     ``rv_rg`` the vegetation-to-ground reflectance ratio. ``rv_rg=1`` gives the
@@ -384,7 +381,7 @@ def waveform_from_points(
     return_weighting: str = "count",
     density_radius: float | None = None,
 ) -> WaveformResult | None:
-    """Simulate a large-footprint waveform from points
+    """Simulate a large-footprint waveform from points.
 
     Parameters
     ----------
@@ -588,7 +585,7 @@ def simulate_batch(
     batch_tile_size: float = 100.0,
     **kwargs,
 ) -> pd.DataFrame:
-    """Simulate waveforms for many shots in parallel
+    """Simulate waveforms for many shots in parallel.
 
     Parameters
     ----------

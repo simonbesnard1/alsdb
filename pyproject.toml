@@ -101,6 +101,12 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+extend-select = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]
 cgal-cpp = ">=6,<7"

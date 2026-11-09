@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Package-wide product, grid, and CRS constants."""
+
 from enum import Enum
 
 
@@ -9,7 +11,8 @@ class ALSProduct(Enum):
     """
     Enum representing PNOA ALS data product types.
 
-    Attributes:
+    Attributes
+    ----------
         ORT_CLA_RGB: Orthometric, classified, RGB-colourised point cloud.
         ORT_CLA:     Orthometric, classified point cloud (no colour).
     """
@@ -19,6 +22,7 @@ class ALSProduct(Enum):
 
     @classmethod
     def list_products(cls) -> list[str]:
+        """Return the supported product codes."""
         return [p.value for p in cls]
 
 

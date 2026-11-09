@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Read point data and metadata from one LAS or LAZ file."""
+
 import json
 import logging
 from collections.abc import Generator
@@ -35,6 +37,7 @@ class Tile:
 
     @property
     def path(self) -> Path:
+        """Return the LAS or LAZ path."""
         return self._path
 
     @cached_property
@@ -44,7 +47,7 @@ class Tile:
 
     @property
     def metadata(self) -> dict:
-        """PDAL metadata of the LAS header (year, CRS, bounds, count), cached
+        """PDAL metadata of the LAS header (year, CRS, bounds, count), cached.
 
         Only the header is read; :meth:`read` adds point statistics once the tile
         has been read.
@@ -68,10 +71,10 @@ class Tile:
 
     @property
     def native_bbox(self) -> tuple[float, float, float, float]:
-        """
-        Return ``(min_x, min_y, max_x, max_y)`` in the file's native CRS:
-        the points' extent from ``filters.stats`` once :meth:`read` has run,
-        otherwise the header bounds.
+        """Return ``(min_x, min_y, max_x, max_y)`` in the native CRS.
+
+        The result is the point extent after :meth:`read` has run and the
+        header bounds otherwise.
         """
         blocks = self.metadata.get("metadata", {})
         for key, val in blocks.items():

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""High-level management of an ALS TileDB database."""
+
 import json
 import logging
 import os
@@ -275,10 +277,7 @@ class ALSDatabase(TileDBProvider):
             tiledb.vacuum(self.array_uri, config=vac_cfg, ctx=self.ctx)
             return
 
-        # sm.memory_budget governs the tile-offset read budget inside the
-        # SparseGlobalOrderReader used during consolidation.  With many thousands
-        # of fragments the default (512 MB) is divided too thinly; set it to the
-        # available RAM so tile-offset loads always succeed.
+        # Large fragment sets require the available RAM for tile-offset reads.
         cfg = tiledb.Config(
             {
                 "sm.consolidation.mode": "fragments",

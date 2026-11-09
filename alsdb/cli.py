@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
+"""Command-line interface for ingesting and inspecting ALS tiles."""
+
 from __future__ import annotations
 
 import logging
@@ -18,7 +20,7 @@ from alsdb.utils.schema import TileDBSchemaConfig
 @click.group()
 @click.option("--verbose", "-v", is_flag=True)
 def main(verbose: bool) -> None:
-    """alsdb — ALS point cloud ingestion and query tool."""
+    """Alsdb — ALS point cloud ingestion and query tool."""
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.DEBUG if verbose else logging.INFO,

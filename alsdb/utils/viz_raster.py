@@ -2,9 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""
-Visualisation helpers for gridded ALS products stored in an
-:class:`~alsdb.storage.ALSZarrStore`.
+"""Visualise gridded products in :class:`~alsdb.storage.ALSZarrStore`.
 
 Typical usage::
 

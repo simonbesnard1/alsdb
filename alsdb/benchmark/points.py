@@ -127,6 +127,7 @@ def _render(points, bbox, resolution, method, args):
 
 
 def main(argv=None):
+    """Compare CHM methods on one preprocessed point set."""
     parser = argparse.ArgumentParser(prog="python -m alsdb.benchmark points", description=__doc__)
     parser.add_argument(
         "--input",

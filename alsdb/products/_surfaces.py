@@ -175,7 +175,7 @@ def _worker(
 
 
 def compute_products(provider, store, products, options):
-    """Common orchestration used by compute_chm/dtm/dsm/all."""
+    """Run the shared orchestration for CHM, DTM, and DSM products."""
     from alsdb.products.chm import _validate_grid_alignment
 
     resolution, year = options["resolution"], options["year"]

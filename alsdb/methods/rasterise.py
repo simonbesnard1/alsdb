@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
-"""Rasterisation of point clouds: binning, TINs, pit-free CHM, gap filling
+"""Rasterisation of point clouds: binning, TINs, pit-free CHM, gap filling.
 
 References
 ----------
@@ -33,7 +33,7 @@ _NOISE_CLASSES = (7, 18)  # ASPRS LAS: 7 = low noise, 18 = high noise
 
 
 def _classification_ranges(classes: tuple[int, ...]) -> str:
-    """Build a PDAL ``filters.range`` string for a set of classification codes
+    """Build a PDAL ``filters.range`` string for a set of classification codes.
 
     Codes are grouped into contiguous runs, e.g. ``(1, 3, 4, 5)`` ->
     ``"Classification[1:1],Classification[3:5]"``.
@@ -50,7 +50,7 @@ def _classification_ranges(classes: tuple[int, ...]) -> str:
 
 
 def _exclude_classes_stages(classes: tuple[int, ...]) -> list[dict]:
-    """Build one ``filters.range`` stage per class to exclude
+    """Build one ``filters.range`` stage per class to exclude.
 
     Conditions within one stage are OR'd, so exclusion needs one stage per code.
     """
@@ -78,7 +78,7 @@ def _rasterise(
     resolution: float,
     statistic: str = "max",
 ) -> np.ndarray:
-    """Bin values into a north-up grid over *crop_bbox*
+    """Bin values into a north-up grid over *crop_bbox*.
 
     *statistic* is a scipy statistic name or a percentile such as ``"p95"``.
     Empty cells are NaN.
@@ -170,7 +170,7 @@ def _delaunay_raster(
     value_field: str = "Z",
     max_edge: float | None = None,
 ) -> np.ndarray:
-    """Rasterise a TIN of *value_field* over *crop_bbox*
+    """Rasterise a TIN of *value_field* over *crop_bbox*.
 
     Points outside *crop_bbox* still contribute to edge triangles. Triangles
     with a horizontal edge longer than *max_edge* are dropped. The raster is
@@ -268,7 +268,7 @@ def _dtm_idw(
     k: int = 8,
     max_distance: float | None = None,
 ) -> np.ndarray:
-    """Inverse-distance-weighted DTM from ground points
+    """Inverse-distance-weighted DTM from ground points.
 
     Parameters
     ----------
@@ -316,7 +316,7 @@ def _gate_by_ground_distance(
     ground: np.ndarray,
     max_distance: float | None,
 ) -> np.ndarray:
-    """Drop points farther than *max_distance* from the nearest ground point
+    """Drop points farther than *max_distance* from the nearest ground point.
 
     Parameters
     ----------
@@ -348,7 +348,7 @@ def _pitfree_rasterise(
     max_edge: float | str = "auto",
     base_max_edge: float | None = None,
 ) -> np.ndarray:
-    """Pit-free CHM (Khosravipour et al. 2014), following lidR's ``pitfree()``
+    """Pit-free CHM (Khosravipour et al. 2014), following lidR's ``pitfree()``.
 
     Points (ground and vegetation, with buffer) are thinned to the highest
     return per cell; each height threshold layer is triangulated and the
@@ -398,7 +398,7 @@ def _cap_height(grid: np.ndarray, max_height: float | None) -> np.ndarray:
 def _fill_pits(
     grid: np.ndarray, window: int = 3, *, eligible=None, max_cells: int = 4
 ) -> np.ndarray:
-    """Fill small enclosed holes from neighbouring observations
+    """Fill small enclosed holes from neighbouring observations.
 
     Holes touching the raster edge, larger than *max_cells* or containing an
     ineligible cell stay missing.

@@ -1,4 +1,4 @@
-"""lasR reference pitfree and spike-free CHM tiles from classified LAS/LAZ
+"""lasR reference pitfree and spike-free CHM tiles from classified LAS/LAZ.
 
 lasR (Roussel, r-lidar, GPL-3, https://github.com/r-lidar/lasR; successor of
 lidR, Roussel et al. 2020, https://doi.org/10.1016/j.rse.2020.112061)
@@ -52,7 +52,7 @@ def run(
     normalized=False,
     rscript="Rscript",
 ):
-    """Write ``<out_dir>/pitfree/<tile>.tif`` and ``<out_dir>/spikefree/<tile>.tif``
+    """Write ``<out_dir>/pitfree/<tile>.tif`` and ``<out_dir>/spikefree/<tile>.tif``.
 
     Each tile is read with a 50 m buffer from its neighbours; finished tiles
     are skipped. ``tiles`` limits a run to the first N tiles; ``normalized=True``
