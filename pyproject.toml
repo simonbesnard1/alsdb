@@ -41,6 +41,7 @@ dependencies = [
 crs = ["rioxarray>=0.15"]
 s3  = ["boto3>=1.34", "s3fs>=2024.2"]
 ml  = ["scikit-learn>=1.3", "joblib>=1.3"]
+torch = ["torch>=2.0", "joblib>=1.3"]
 
 [project.urls]
 Homepage = "https://github.com/simonbesnard1/alsdb"

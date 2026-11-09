@@ -379,11 +379,13 @@ def wrap_sklearn_model(
     estimator,
     features: list[str] | None = None,
     zero_without_cover: bool = True,
+    model_id: str | None = None,
 ) -> Callable:
     """Wrap a fitted model with ``predict(X)`` as a ``model_fn`` for :func:`compute_biomass`.
 
     Works for scikit-learn estimators and anything with the same ``predict``
-    interface (XGBoost, LightGBM, a Keras model or a small PyTorch wrapper):
+    interface (XGBoost, LightGBM, a Keras model; PyTorch networks go through
+    :func:`wrap_torch_model`):
     ``X`` is (cells, features) in *features* order, predictions of shape
     (cells,) or (cells, 1). Models trained on a DataFrame receive one with
     the same column names. Tiles run in threads, so ``predict`` may be called
@@ -403,6 +405,9 @@ def wrap_sklearn_model(
         the features) whose other features are missing, e.g. height metrics
         of cells without vegetation returns, as :func:`naesset_model`. Cells
         with all features are always predicted.
+    model_id:
+        Identifier of the fitted model for safe resume; default a hash of
+        the model and features.
 
     Returns
     -------
@@ -467,16 +472,126 @@ def wrap_sklearn_model(
     _model.required_metrics = tuple(feat)
     import joblib
 
+    if model_id is not None:
+        _model.model_id = model_id
+        return _model
     try:
         _model.model_id = joblib.hash((estimator, feat, zero))
     except Exception as exc:  # noqa: BLE001 - pickling failures vary by framework
         warnings.warn(
-            f"Cannot hash the model ({exc}); pass model_id to compute_biomass to reuse results",
+            f"Cannot hash the model ({type(exc).__name__}); pass model_id to reuse results",
             UserWarning,
             stacklevel=2,
         )
         _model.model_id = None
     return _model
+
+
+class _TorchPredictor:
+    """``predict(X)`` for a PyTorch network: scaled float32 batches in evaluation mode."""
+
+    def __init__(self, net, device, transform, batch_size):
+        import threading
+
+        self.net = net.to(device).eval()
+        self.device, self.transform, self.batch_size = device, transform, batch_size
+        # one forward pass at a time: tiles run in threads and share the network
+        self.lock = threading.Lock()
+
+    def predict(self, X):
+        import torch
+
+        X = np.asarray(self.transform(X) if self.transform is not None else X, np.float32)
+        outputs = []
+        with self.lock, torch.inference_mode():
+            for start in range(0, len(X), self.batch_size):
+                batch = torch.from_numpy(X[start : start + self.batch_size]).to(self.device)
+                outputs.append(self.net(batch).float().cpu().numpy().reshape(-1))
+        return np.concatenate(outputs) if outputs else np.empty(0, np.float32)
+
+
+def wrap_torch_model(
+    net,
+    features: list[str],
+    *,
+    transform: Callable | None = None,
+    device: str = "cpu",
+    batch_size: int = 65_536,
+    model_id: str | None = None,
+    zero_without_cover: bool = True,
+) -> Callable:
+    """Wrap a trained PyTorch network as a ``model_fn`` for :func:`compute_biomass`.
+
+    The network gets a float32 tensor of shape (cells, features), in
+    *features* order, and returns one value per cell, (cells,) or (cells, 1).
+    It runs in evaluation mode without gradients, in batches, one forward
+    pass at a time (tiles run in threads and share it). Requires ``torch``.
+
+    Preferably the network normalises its inputs itself, with the training
+    mean and standard deviation as buffers (``register_buffer``): they are
+    saved with the weights, follow the network to *device* and enter the
+    default ``model_id``. ``transform`` is for networks trained with an
+    external scaler. See doc/area_products.md for an example.
+
+    Parameters
+    ----------
+    net:
+        Trained ``torch.nn.Module`` (moved to *device*, set to eval mode).
+    features:
+        Metric names in training order; a network does not record them, so
+        a wrong order is not detected.
+    transform:
+        External input scaling used in training, applied to the (cells,
+        features) array before the network, e.g. a fitted scikit-learn
+        ``StandardScaler().transform``; None (default) when the network
+        normalises its inputs. Predictions are returned as the network gives
+        them: undo any target scaling inside the network.
+    device:
+        Torch device, e.g. ``"cpu"`` or ``"cuda"``.
+    batch_size:
+        Cells per forward pass.
+    model_id:
+        Identifier of the trained model for safe resume. Default: a hash of
+        the network class, its weights, *features* and *transform*; None
+        (recomputed each run, with a warning) if the transform cannot be
+        pickled, e.g. a lambda: pass one then.
+    zero_without_cover:
+        As :func:`wrap_sklearn_model`.
+
+    Returns
+    -------
+    Callable
+        ``model_fn(metrics) -> np.ndarray``, as :func:`wrap_sklearn_model`.
+    """
+    import warnings
+
+    import joblib
+
+    if not features:
+        raise ValueError("features must name the network's inputs in training order")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    model = wrap_sklearn_model(
+        _TorchPredictor(net, device, transform, int(batch_size)),
+        list(features),
+        zero_without_cover=zero_without_cover,
+        model_id="pending",
+    )
+    if model_id is None:
+        try:
+            weights = {k: v.detach().cpu().numpy() for k, v in net.state_dict().items()}
+            model_id = joblib.hash(
+                (type(net).__qualname__, weights, list(features), transform, zero_without_cover)
+            )
+        except Exception as exc:  # noqa: BLE001 - e.g. a lambda transform cannot be pickled
+            warnings.warn(
+                f"Cannot hash the network or transform ({type(exc).__name__}, e.g. a lambda); "
+                "pass model_id to reuse results",
+                UserWarning,
+                stacklevel=2,
+            )
+    model.model_id = model_id
+    return model
 
 
 # ---------------------------------------------------------------------------

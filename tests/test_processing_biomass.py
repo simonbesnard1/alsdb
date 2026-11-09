@@ -18,6 +18,7 @@ from alsdb.products.biomass import (
     compute_metrics,
     naesset_model,
     wrap_sklearn_model,
+    wrap_torch_model,
 )
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
@@ -567,3 +568,60 @@ def test_wrapper_accepts_column_predictions_and_unpicklable_models():
     m["h95"][0, 1], m["cc"][0, 1] = np.nan, 0.0  # no vegetation returns: 0
     agb = model(m)
     assert np.isnan(agb[0, 0]) and agb[0, 1] == 0.0 and agb[1, 1] == pytest.approx(5.0)
+
+
+def test_torch_network_predicts_in_batches_with_scaling_and_cover_rules():
+    torch = pytest.importorskip("torch")
+    torch.manual_seed(0)
+    net = torch.nn.Linear(2, 1)
+    with torch.no_grad():  # AGB = 2 * (h95 / 10) + 3 * cc
+        net.weight[:] = torch.tensor([[2.0, 3.0]])
+        net.bias.zero_()
+    scale = np.array([10.0, 1.0])
+    model = wrap_torch_model(net, ["h95", "cc"], batch_size=7)
+    m = _flat_metrics(ny=4, nx=5, h95_val=20.0, cc_val=0.5)
+    m["h95"] = m["h95"] * 0 + 2.0  # already scaled: 2 * 2 + 3 * 0.5
+    m["h95"][0, 0] = np.nan
+    m["h95"][0, 1], m["cc"][0, 1] = np.nan, 0.0
+    agb = model(m)
+    assert agb.dtype == np.float32 and agb.shape == (4, 5)
+    assert np.isnan(agb[0, 0]) and agb[0, 1] == 0.0
+    np.testing.assert_allclose(agb[1:], 5.5, rtol=1e-6)
+    assert model.required_metrics == ("h95", "cc")
+    assert model.model_id == wrap_torch_model(net, ["h95", "cc"]).model_id
+
+    def scaled(X):
+        return X / scale
+
+    m["h95"][1:] = 20.0
+    np.testing.assert_allclose(
+        wrap_torch_model(net, ["h95", "cc"], transform=scaled)(m)[1:], 5.5, rtol=1e-6
+    )
+    with pytest.warns(UserWarning, match="model_id"):
+        assert wrap_torch_model(net, ["h95", "cc"], transform=lambda X: X).model_id is None
+    assert wrap_torch_model(net, ["h95", "cc"], model_id="mlp-v1").model_id == "mlp-v1"
+
+
+def test_torch_network_with_its_own_normalisation():
+    torch = pytest.importorskip("torch")
+
+    class AGBNet(torch.nn.Module):  # the example of doc/area_products.md
+        def __init__(self, mean, std):
+            super().__init__()
+            self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
+            self.register_buffer("std", torch.as_tensor(std, dtype=torch.float32))
+            self.body = torch.nn.Linear(len(mean), 1)
+            with torch.no_grad():
+                self.body.weight[:] = torch.tensor([[2.0, 3.0]])
+                self.body.bias.zero_()
+
+        def forward(self, x):
+            return self.body((x - self.mean) / self.std)
+
+    net = AGBNet([10.0, 0.0], [5.0, 1.0])
+    model = wrap_torch_model(net, ["h95", "cc"])
+    m = _flat_metrics(ny=2, nx=2, h95_val=20.0, cc_val=0.5)  # raw metrics in
+    np.testing.assert_allclose(model(m), 2 * (20 - 10) / 5 + 3 * 0.5, rtol=1e-6)
+    # the normalisation is part of the weights, so of the model identity
+    other = wrap_torch_model(AGBNet([12.0, 0.0], [5.0, 1.0]), ["h95", "cc"])
+    assert other.model_id != model.model_id

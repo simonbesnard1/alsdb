@@ -48,17 +48,49 @@ returns but no canopy cover, including cells without vegetation returns, and
 NaN only where it has no first returns, so area means count open land.
 `calibrate_naesset` and `validate_naesset` keep plots without cover or biomass.
 
-Any model with `predict(X)` (scikit-learn, XGBoost, LightGBM, Keras, or a
-small wrapper around a PyTorch network) goes through `wrap_sklearn_model`.
-Features default to the estimator's `feature_names_in_` and must match them if
-given; a feature count that disagrees with `n_features_in_` raises; models
-fitted on a DataFrame receive one with the same columns; predictions of shape
-(cells, 1) are accepted. Cells without cover whose height metrics are missing
-get 0 (`zero_without_cover`), as with the Næsset model. Models that cannot be
-pickled get no automatic `model_id`: pass one to `compute_biomass` to reuse
-results. Tiles run in threads, so `predict` may run concurrently. Any other
-callable taking the metric dict and returning the grid also works as
-`model_fn`, with `model_features` and `model_id`.
+Any model with `predict(X)` (scikit-learn, XGBoost, LightGBM, Keras) goes
+through `wrap_sklearn_model`. Features default to the estimator's
+`feature_names_in_` and must match them if given; a feature count that
+disagrees with `n_features_in_` raises; models fitted on a DataFrame receive
+one with the same columns; predictions of shape (cells, 1) are accepted.
+Models that cannot be pickled get no automatic `model_id`: pass one to reuse
+results.
+
+A trained PyTorch network goes through `wrap_torch_model(net, features)`
+(install PyTorch with the `torch` extra). Inputs arrive as raw metrics in
+`features` order, which the network does not record, so a wrong order is not
+detected. Preferably the network holds its own normalisation, as buffers
+saved with its weights, so the trained model is self-contained and its
+`model_id` (a hash of the weights, features and transform) covers it:
+
+```python
+class AGBNet(torch.nn.Module):
+    def __init__(self, mean, std):
+        super().__init__()
+        self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
+        self.register_buffer("std", torch.as_tensor(std, dtype=torch.float32))
+        self.body = torch.nn.Sequential(
+            torch.nn.Linear(len(mean), 64), torch.nn.ReLU(), torch.nn.Linear(64, 1)
+        )
+
+    def forward(self, x):  # raw metrics in, Mg/ha out
+        return self.body((x - self.mean) / self.std)
+
+
+model = wrap_torch_model(net, ["h95", "cc", "fhd", "pv_10_20"])
+compute_biomass(provider, store, resolution=10, year=2023, model_fn=model)
+```
+
+For a network trained with an external scaler, `transform` applies it before
+prediction (e.g. a fitted `StandardScaler().transform`); pass `model_id` when
+the transform cannot be pickled, such as a lambda. Prediction runs on `device`
+in batches, without gradients and one forward pass at a time.
+
+With either wrapper, cells without cover whose height metrics are missing get
+0 (`zero_without_cover`), as with the Næsset model. Tiles run in threads, so a
+model may be called concurrently. Any other callable taking the metric dict and
+returning the grid also works as `model_fn`, with `model_features` and
+`model_id`.
 
 Matching completed metric slices are read from Zarr in tile-sized windows, so
 changing the biomass model does not require rereading and normalizing the point
