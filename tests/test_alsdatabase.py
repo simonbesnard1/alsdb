@@ -109,3 +109,31 @@ def test_write_stores_crs_in_metadata(db):
     x, y, attrs = _make_points(10)
     db.write(x, y, 2021, attrs, crs="EPSG:25830")
     assert db.stored_crs() == "EPSG:25830"
+
+
+# ---------------------------------------------------------------------------
+# Manifest: one metadata key per file
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_entries_are_separate_keys_and_merge_with_a_legacy_manifest(db):
+    import json
+
+    from alsdb.core.alsdatabase import _MANIFEST_KEY, _MANIFEST_PREFIX
+
+    db.create(crs="EPSG:25830")
+    # an array ingested before per-file entries holds one JSON manifest
+    db._write_metadata(_MANIFEST_KEY, json.dumps({"old.laz": {"status": "ok", "n_points": 1}}))
+    db._save_manifest_entry("a.laz", {"status": "ok", "n_points": 2})
+    db._save_manifest_entry("b.laz", {"status": "failed", "error": "x"})
+    db._save_manifest_entry("a.laz", {"status": "ok", "n_points": 3})  # re-ingested
+    with db.open("r") as arr:
+        keys = sorted(k for k in arr.meta if k.startswith(_MANIFEST_PREFIX))
+    assert keys == [_MANIFEST_PREFIX + "a.laz", _MANIFEST_PREFIX + "b.laz"]
+    assert db.load_manifest() == {
+        "old.laz": {"status": "ok", "n_points": 1},
+        "a.laz": {"status": "ok", "n_points": 3},
+        "b.laz": {"status": "failed", "error": "x"},
+    }
+    db.consolidate(mode="array_meta")
+    assert len(db.load_manifest()) == 3

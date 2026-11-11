@@ -467,7 +467,11 @@ def pavd_from_points(
         return None
     first = points[inside & (points["ReturnNumber"] == 1)]
     normalized, _ = normalize_points(
-        first, model=terrain, max_distance=max_ground_distance, extrapolate=ground_extrapolation
+        first,
+        model=terrain,
+        max_distance=max_ground_distance,
+        extrapolate=ground_extrapolation,
+        distances=False,
     )
     heights = normalized["HeightAboveGround"]
     canopy = first["Classification"] != 2
@@ -693,7 +697,7 @@ def _pavd_chunk(task):
     first = points["ReturnNumber"] == 1
     normalized, _ = normalize_points(
         points[first], model=TerrainModel(ground), max_distance=o["max_ground_distance"],
-        extrapolate=o["ground_extrapolation"],
+        extrapolate=o["ground_extrapolation"], distances=False,
     )  # fmt: skip
     hag = np.full(len(points), np.nan)
     hag[first] = normalized["HeightAboveGround"]

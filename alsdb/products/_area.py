@@ -262,7 +262,10 @@ def compute_area_products(
                 arr = clean_points(_filter_ground_outliers(arr))
             if calculate or "chm" in needed:
                 normalized, terrain = normalize_points(
-                    arr, max_distance=max_ground_distance, extrapolate=ground_extrapolation
+                    arr,
+                    max_distance=max_ground_distance,
+                    extrapolate=ground_extrapolation,
+                    distances=False,  # per-point ground distances are not used
                 )
             if calculate:
                 if baba_radius:

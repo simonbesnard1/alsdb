@@ -23,30 +23,11 @@ import pdal
 
 from alsdb.methods._grid import flip_to_north_up
 
-_GROUND_CLASS = 2
-
 _PITFREE_THRESHOLDS = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)
 
 _PITFREE_EDGE_SPACINGS = 3.0  # auto upper-layer edge limit, in pulse spacings
 
 _NOISE_CLASSES = (7, 18)  # ASPRS LAS: 7 = low noise, 18 = high noise
-
-
-def _classification_ranges(classes: tuple[int, ...]) -> str:
-    """Build a PDAL ``filters.range`` string for a set of classification codes.
-
-    Codes are grouped into contiguous runs, e.g. ``(1, 3, 4, 5)`` ->
-    ``"Classification[1:1],Classification[3:5]"``.
-    """
-    codes = sorted(set(classes))
-    groups: list[list[int]] = []
-    for c in codes:
-        if groups and c == groups[-1][-1] + 1:
-            groups[-1].append(c)
-        else:
-            groups.append([c])
-    parts = [f"Classification[{g[0]}:{g[-1]}]" for g in groups]
-    return ",".join(parts)
 
 
 def _exclude_classes_stages(classes: tuple[int, ...]) -> list[dict]:
@@ -135,34 +116,6 @@ def _thin_highest_per_subcell(
     return points[keep_idx]
 
 
-def _nn_fill(
-    grid: np.ndarray,
-    gnd: np.ndarray,
-    crop_bbox: tuple[float, float, float, float],
-    resolution: float,
-) -> np.ndarray:
-    """Fill NaN cells from the nearest ground point (outside the TIN hull)."""
-    from scipy.spatial import cKDTree
-
-    nan_mask = np.isnan(grid)
-    if not nan_mask.any() or len(gnd) == 0:
-        return grid
-
-    cx0, _, _, cy1 = crop_bbox
-    _ny, _nx = grid.shape
-    row_idx, col_idx = np.where(nan_mask)
-    # north-up: row 0 = top → actual Y = cy1 - (row + 0.5) * resolution
-    qx = cx0 + (col_idx + 0.5) * resolution
-    qy = cy1 - (row_idx + 0.5) * resolution
-
-    xy = np.column_stack([gnd["X"].astype(np.float64), gnd["Y"].astype(np.float64)])
-    _, idxs = cKDTree(xy).query(np.column_stack([qx, qy]), k=1)
-
-    out = grid.copy()
-    out[row_idx, col_idx] = gnd["Z"][idxs].astype(np.float32)
-    return out
-
-
 def _delaunay_raster(
     arr: np.ndarray,
     crop_bbox: tuple[float, float, float, float],
@@ -191,12 +144,12 @@ def _delaunay_raster(
     if len(arr) < 3:
         return empty
 
-    if value_field != "Z":
-        arr = arr.copy()
-        arr["Z"] = arr[value_field]
     # Triangulate in a fixed (X, Y, Z) order: on regular scan patterns PDAL's
-    # choice among equivalent triangulations depends on input order.
-    arr = arr[np.lexsort((arr["Z"], arr["Y"], arr["X"]))]
+    # choice among equivalent triangulations depends on input order. Only the
+    # coordinates go to PDAL; the other fields play no part.
+    xyz = np.empty(len(arr), dtype=[(name, arr.dtype[name]) for name in ("X", "Y", "Z")])
+    xyz["X"], xyz["Y"], xyz["Z"] = arr["X"], arr["Y"], arr[value_field]
+    arr = xyz[np.lexsort((xyz["Z"], xyz["Y"], xyz["X"]))]
 
     from rasterio.io import MemoryFile
 
@@ -237,107 +190,12 @@ def _delaunay_raster(
             raise
 
 
-def _dtm_tin(
-    arr: np.ndarray,
-    crop_bbox: tuple[float, float, float, float],
-    resolution: float,
-) -> np.ndarray:
-    """Ground TIN of class-2 points, filled by nearest neighbour outside the hull."""
-    gnd = arr[arr["Classification"] == _GROUND_CLASS]
-    grid = _delaunay_raster(gnd, crop_bbox, resolution, value_field="Z")
-
-    if len(gnd) > 0:
-        grid = _nn_fill(grid, gnd, crop_bbox, resolution)
-
-    return grid
-
-
 def _pulse_spacing(points: np.ndarray, cell: float = 5.0) -> float:
     """Mean point spacing, 1 / sqrt(density), over occupied *cell*-sized cells."""
     col = np.floor(points["X"] / cell).astype(np.int64)
     row = np.floor(points["Y"] / cell).astype(np.int64)
     occupied = len(np.unique(row * (col.max() - col.min() + 1) + col))
     return float(np.sqrt(occupied * cell * cell / len(points)))
-
-
-def _dtm_idw(
-    points: np.ndarray,
-    crop_bbox: tuple[float, float, float, float],
-    resolution: float,
-    power: float = 2.0,
-    k: int = 8,
-    max_distance: float | None = None,
-) -> np.ndarray:
-    """Inverse-distance-weighted DTM from ground points.
-
-    Parameters
-    ----------
-    max_distance:
-        Cells farther than this (m) from any ground point stay NaN; ``None``
-        fills every cell.
-
-    Returns a ``(ny, nx)`` float32 north-up array.
-    """
-    from scipy.spatial import cKDTree
-
-    cx0, cy0, cx1, cy1 = crop_bbox
-    nx = max(1, int(np.ceil((cx1 - cx0) / resolution)))
-    ny = max(1, int(np.ceil((cy1 - cy0) / resolution)))
-
-    gx = cx0 + (np.arange(nx) + 0.5) * resolution
-    gy = cy0 + (np.arange(ny) + 0.5) * resolution
-    GX, GY = np.meshgrid(gx, gy)
-    query = np.column_stack([GX.ravel(), GY.ravel()])
-
-    xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    z = points["Z"].astype(np.float64)
-
-    k_actual = min(k, len(xy))
-    tree = cKDTree(xy)
-    dists, idxs = tree.query(query, k=k_actual)
-
-    if k_actual == 1:
-        values = z[idxs].copy()
-        nearest_dist = dists
-    else:
-        weights = 1.0 / np.maximum(dists, 1e-10) ** power
-        weights /= weights.sum(axis=1, keepdims=True)
-        values = (weights * z[idxs]).sum(axis=1)
-        nearest_dist = dists[:, 0]
-
-    if max_distance is not None:
-        values[nearest_dist > max_distance] = np.nan
-
-    return flip_to_north_up(values.reshape(ny, nx))
-
-
-def _gate_by_ground_distance(
-    points: np.ndarray,
-    ground: np.ndarray,
-    max_distance: float | None,
-) -> np.ndarray:
-    """Drop points farther than *max_distance* from the nearest ground point.
-
-    Parameters
-    ----------
-    points:
-        Vegetation points with ``HeightAboveGround``.
-    ground:
-        Class-2 ground points of the same buffered query.
-    max_distance:
-        Maximum distance (m); ``None`` disables the gate.
-    """
-    if max_distance is None or len(points) == 0:
-        return points
-    if len(ground) == 0:
-        return points[:0]
-
-    from scipy.spatial import cKDTree
-
-    gnd_xy = np.column_stack([ground["X"].astype(np.float64), ground["Y"].astype(np.float64)])
-    pts_xy = np.column_stack([points["X"].astype(np.float64), points["Y"].astype(np.float64)])
-    dist, _ = cKDTree(gnd_xy).query(pts_xy, k=1)
-    return points[dist <= max_distance]
 
 
 def _pitfree_rasterise(
@@ -384,15 +242,6 @@ def _pitfree_rasterise(
         # touching process-wide warning filters (safe in threaded workers).
         grid = np.fmax(grid, layer)
     return grid
-
-
-def _cap_height(grid: np.ndarray, max_height: float | None) -> np.ndarray:
-    """Set cells above *max_height* to NaN, so pit filling can recover them from neighbours."""
-    if max_height is None:
-        return grid
-    out = grid.copy()
-    out[out > max_height] = np.nan
-    return out
 
 
 def _fill_pits(

@@ -113,9 +113,11 @@ class Tile:
         """
         # Stats before any reprojection: the native extent of the points,
         # computed in this single pass rather than in a separate full read.
+        # Only the coordinates: statistics of every dimension cost a second
+        # more per 10 M points and nothing reads them.
         stages: list = [
             {"type": "readers.las", "filename": str(self._path)},
-            {"type": "filters.stats"},
+            {"type": "filters.stats", "dimensions": "X,Y,Z"},
         ]
         if out_crs:
             stages.append({"type": "filters.reprojection", "out_srs": out_crs})

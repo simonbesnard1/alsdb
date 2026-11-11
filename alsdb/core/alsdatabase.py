@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -26,7 +25,8 @@ from alsdb.utils.schema import TileDBSchemaConfig, create_schema
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_KEY = "ingestion_manifest"
+_MANIFEST_KEY = "ingestion_manifest"  # arrays ingested before per-file entries: one JSON
+_MANIFEST_PREFIX = "ingestion_manifest/"  # one metadata key per ingested file
 _CRS_KEY = "crs"
 
 _EPSG_RE = re.compile(r'AUTHORITY\["EPSG","(\d+)"\]\s*\]?\s*$')
@@ -100,8 +100,9 @@ class ALSDatabase(TileDBProvider):
     so repeated surveys of the same tile in different years are stored and
     queryable independently.
 
-    An ingestion manifest is kept in the array's metadata (key
-    ``"ingestion_manifest"``).  Each entry records the filename, acquisition
+    An ingestion manifest is kept in the array's metadata, one key per file
+    (``"ingestion_manifest/<filename>"``), so recording a file costs the same
+    however many are already ingested.  Each entry records the acquisition
     year, point count, status (``"ok"`` / ``"failed"``), and UTC timestamp.
     Re-ingesting a file that is already marked ``"ok"`` is a no-op unless
     ``overwrite=True`` is passed.
@@ -213,13 +214,19 @@ class ALSDatabase(TileDBProvider):
         if not self.array_exists():
             return {}
         with self.open("r") as arr:
-            raw = arr.meta.get(_MANIFEST_KEY, "{}")
-        return json.loads(raw)
+            meta = dict(arr.meta.items())
+        # Arrays written before per-file entries hold the whole manifest in one key.
+        manifest = json.loads(meta.get(_MANIFEST_KEY, "{}"))
+        for key, raw in meta.items():
+            if key.startswith(_MANIFEST_PREFIX):
+                manifest[key[len(_MANIFEST_PREFIX) :]] = json.loads(raw)
+        return manifest
 
-    def _save_manifest(self, manifest: dict[str, dict]) -> None:
+    def _save_manifest_entry(self, filename: str, entry: dict) -> None:
+        """Record one file: a single small metadata write, whatever the manifest size."""
         if not self.array_exists():
             return
-        self._write_metadata(_MANIFEST_KEY, json.dumps(manifest))
+        self._write_metadata(_MANIFEST_PREFIX + filename, json.dumps(entry))
 
     def list_ingested(self) -> list[dict]:
         """
@@ -588,17 +595,14 @@ class ALSDatabase(TileDBProvider):
                 reproject_to=reproject_to,
                 classification_config=classification_config,
             )
-            manifest[filename] = entry
         except Exception as exc:
-            manifest[filename] = {
-                "status": "failed",
-                "error": str(exc),
-                "ts": datetime.now(UTC).isoformat(),
-            }
-            self._save_manifest(manifest)
+            self._save_manifest_entry(
+                filename,
+                {"status": "failed", "error": str(exc), "ts": datetime.now(UTC).isoformat()},
+            )
             raise
 
-        self._save_manifest(manifest)
+        self._save_manifest_entry(filename, entry)
         logger.info(
             "Ingested %s — %s pts  |  year=%d  |  crs=%s  |  bbox=(%.0f, %.0f, %.0f, %.0f)",
             filename,
@@ -636,7 +640,8 @@ class ALSDatabase(TileDBProvider):
         classification_filter:
             Optional LAS classification filter applied to every tile.
         consolidate_every:
-            Consolidate + vacuum after this many newly ingested tiles.
+            Consolidate and vacuum the array's metadata (commits, fragment
+            metadata, manifest entries) after this many files.
         n_workers:
             Number of parallel worker threads.  ``1`` (default) runs
             sequentially.  Values > 1 use a :class:`ThreadPoolExecutor` —
@@ -728,11 +733,9 @@ class ALSDatabase(TileDBProvider):
             consolidate_every,
         )
 
-        # Progress counters — updated under _progress_lock by the main thread
-        _progress_lock = threading.Lock()
+        # Progress counters, updated by the main thread only
         _completed = 0
         _total_pts = 0
-        _n_failed = 0
         _t0 = time.monotonic()
 
         def _worker(path: Path) -> tuple[str, int, dict]:
@@ -773,14 +776,9 @@ class ALSDatabase(TileDBProvider):
                             "ts": datetime.now(UTC).isoformat(),
                         }
                         results[filename] = 0
-                        n = 0
 
-                    # Update progress counters (main thread only — no race)
-                    nonlocal_n = results.get(path.name, 0)
                     _completed += 1
-                    _total_pts += nonlocal_n
-                    if results.get(path.name, -1) == 0 and path.name not in manifest:
-                        _n_failed += 1
+                    _total_pts += results[filename]
 
                     if _completed % progress_every == 0 or _completed == n_pending:
                         elapsed = time.monotonic() - _t0
@@ -798,14 +796,15 @@ class ALSDatabase(TileDBProvider):
                             eta / 60,
                         )
 
-                    # Save manifest after every tile so progress survives crashes
-                    self._save_manifest(manifest)
+                    # Record every tile as it finishes so progress survives crashes
+                    self._save_manifest_entry(filename, manifest[filename])
 
             # All workers in this batch are done.
-            # Consolidate only metadata — fast, near-zero memory.
-            # Fragment data consolidation is deferred to the end.
+            # Consolidate only metadata — fast, near-zero memory. "array_meta"
+            # merges the per-file manifest entries, so opening the array stays
+            # quick. Fragment data consolidation is deferred to the end.
             if newly_written > 0:
-                for meta_mode in ("commits", "fragment_meta"):
+                for meta_mode in ("commits", "fragment_meta", "array_meta"):
                     try:
                         self.consolidate(mode=meta_mode)
                     except Exception as exc:  # noqa: BLE001 - best-effort cleanup, never fatal

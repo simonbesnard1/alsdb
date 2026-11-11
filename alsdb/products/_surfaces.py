@@ -131,16 +131,17 @@ def _worker(
         return _rasterise(points["X"], y, points["Z"], crop_bbox, resolution, statistic)
 
     is_ground = np.isin(arr["Classification"], config.ground_classes)
-    prepared = None
+    prepared = cleaned = None
     if "chm" in products:
         cleaned = clean_points(arr)
-        # Only surface candidates get a height (the TIN lookup is costly).
+        # Only surface candidates get a height (the TIN lookup is costly), and
+        # no nearest-ground distance: nothing reads it per point.
         prepared = normalize_points(
             cleaned[surface_mask(cleaned, config)],
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
             model=TerrainModel(cleaned[np.isin(cleaned["Classification"], config.ground_classes)]),
-            distances=quality,
+            distances=False,
         )
     if "dtm" in products:
         terrain = prepared[1] if prepared is not None else TerrainModel(arr[is_ground])
@@ -153,6 +154,7 @@ def _worker(
                 method=dtm_method,
                 max_distance=config.max_ground_distance,
                 extrapolate=config.ground_extrapolation,
+                distances=False,
             )
             data = data.reshape(grid.shape).astype(np.float32)
         store.write_tile("dtm", resolution, year, data, crop_bbox)
@@ -163,7 +165,7 @@ def _worker(
         store.write_tile("dsm", resolution, year, binned(arr[mask], "max"), crop_bbox)
     if "chm" in products:
         result = surface_tile(
-            arr, crop_bbox, resolution, config, prepared=prepared, diagnostics=quality
+            cleaned, crop_bbox, resolution, config, prepared=prepared, diagnostics=quality
         )
         for name, data in result.items():
             if name == "chm" or quality:

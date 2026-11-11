@@ -127,13 +127,16 @@ class CHMConfig:
 
 
 def clean_points(arr, *, drop_noise=True):
-    """Remove nonfinite/withheld/noise returns before terrain or canopy fitting."""
+    """Remove nonfinite/withheld/noise returns before terrain or canopy fitting.
+
+    Returns *arr* itself (no copy) when there is nothing to remove.
+    """
     keep = np.isfinite(arr["X"]) & np.isfinite(arr["Y"]) & np.isfinite(arr["Z"])
     if drop_noise:
         keep &= ~np.isin(arr["Classification"], (7, 18))
     if "Withheld" in arr.dtype.names:
         keep &= arr["Withheld"] == 0
-    return arr[keep]
+    return arr if keep.all() else arr[keep]
 
 
 def surface_mask(arr, config):
@@ -217,19 +220,23 @@ def reconstruct_chm(
             max_distance=config.max_ground_distance,
             extrapolate=config.ground_extrapolation,
             ground_classes=config.ground_classes,
-            distances=diagnostics,
+            distances=False,  # per-point ground distances are not used here
         )
     )
     gx, gy = grid.centers()
+    centres = np.column_stack((gx.ravel(), gy.ravel()))
     ground_z, ground_distance, extrapolated = terrain.evaluate(
-        np.column_stack((gx.ravel(), gy.ravel())),
+        centres,
         max_distance=config.max_ground_distance,
         extrapolate=config.ground_extrapolation,
         distances=diagnostics,
     )
     supported = np.isfinite(ground_z).reshape(grid.shape)
-    candidates = normalized[surface_mask(normalized, config)]
-    points = candidates[np.isfinite(candidates["HeightAboveGround"])]
+    # Callers may pass points already restricted to the surface: no copy then.
+    is_surface = surface_mask(normalized, config)
+    candidates = normalized if is_surface.all() else normalized[is_surface]
+    candidate_is_valid = np.isfinite(candidates["HeightAboveGround"])
+    points = candidates if candidate_is_valid.all() else candidates[candidate_is_valid]
     if config.remove_outliers and len(points) > 2:
         points = _run(
             _outlier_removal_stages(
@@ -238,8 +245,9 @@ def reconstruct_chm(
             points,
         )
 
-    def bin_counts(source, selected=None):
-        inside, cells = grid.point_bins(source)
+    def bin_counts(source, selected=None, bins=None):
+        # *bins*: the (inside, cells) of *source*, computed once for several counts
+        inside, cells = grid.point_bins(source) if bins is None else bins
         if selected is not None:
             cells = cells[np.asarray(selected)[inside]]
         return (
@@ -273,15 +281,18 @@ def reconstruct_chm(
             points["X"][mask], y, np.asarray(values)[mask], bbox, resolution, statistic
         )
 
-    candidate_is_valid = np.isfinite(candidates["HeightAboveGround"])
-    candidate_is_canopy = np.isin(candidates["Classification"], config.veg_classes)
-    raw_count = bin_counts(candidates)
-    invalid = bin_counts(candidates, ~candidate_is_valid) > 0
-    raw_canopy_count = bin_counts(candidates, candidate_is_canopy)
+    candidate_bins = grid.point_bins(candidates)
+    raw_count = bin_counts(candidates, bins=candidate_bins)
+    invalid = bin_counts(candidates, ~candidate_is_valid, bins=candidate_bins) > 0
 
-    point_is_canopy = np.isin(points["Classification"], config.veg_classes)
-    count = bin_counts(points)
-    canopy_count = bin_counts(points, point_is_canopy) if diagnostics else None
+    point_bins = candidate_bins if points is candidates else grid.point_bins(points)
+    count = raw_count if points is candidates else bin_counts(points, bins=point_bins)
+    canopy_count = None
+    if diagnostics:
+        candidate_is_canopy = np.isin(candidates["Classification"], config.veg_classes)
+        raw_canopy_count = bin_counts(candidates, candidate_is_canopy, bins=candidate_bins)
+        point_is_canopy = np.isin(points["Classification"], config.veg_classes)
+        canopy_count = bin_counts(points, point_is_canopy, bins=point_bins)
     out = np.full(grid.shape, np.nan, np.float32)
     pulses = arr[arr["ReturnNumber"] == 1] if "ReturnNumber" in arr.dtype.names else arr
     freeze_distance = config.freeze_distance
@@ -369,7 +380,7 @@ def reconstruct_chm(
     flags[~supported | invalid] |= UNSUPPORTED
     flags[raw_canopy_count == 0] |= NO_OBSERVATIONS
     flags[extrapolated.reshape(grid.shape)] |= EXTRAPOLATED
-    negative = bin_counts(candidates, candidates["NegativeHAG"] > 0) > 0
+    negative = bin_counts(candidates, candidates["NegativeHAG"] > 0, bins=candidate_bins) > 0
     flags[negative] |= NEGATIVE_HAG
     flags[rejected] |= REJECTED
     # Pulse density per 5 m cell of the buffered tile, read at cell centres.
@@ -402,9 +413,7 @@ def reconstruct_chm(
         "chm_ground_distance": np.where(np.isfinite(ground_distance), ground_distance, np.nan)
         .reshape(grid.shape)
         .astype(np.float32),
-        "chm_terrain_slope": terrain.slope(np.column_stack((gx.ravel(), gy.ravel())))
-        .reshape(grid.shape)
-        .astype(np.float32),
+        "chm_terrain_slope": terrain.slope(centres).reshape(grid.shape).astype(np.float32),
         "chm_pulse_density": pulse_density,
         "chm_scan_angle": scan_angle,
     }

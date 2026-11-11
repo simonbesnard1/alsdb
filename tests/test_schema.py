@@ -124,3 +124,10 @@ def test_create_and_open_array(tmp_path):
     uri = str(tmp_path / "test_array")
     tiledb.Array.create(uri, schema)
     assert tiledb.array_exists(uri)
+
+
+def test_layout_defaults_to_hilbert_and_can_be_set():
+    schema = create_schema(TileDBSchemaConfig())
+    assert (schema.cell_order, schema.capacity) == ("hilbert", 100_000)
+    schema = create_schema(TileDBSchemaConfig(cell_order="row-major", capacity=10_000))
+    assert (schema.cell_order, schema.capacity) == ("row-major", 10_000)

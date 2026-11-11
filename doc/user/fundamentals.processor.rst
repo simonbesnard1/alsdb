@@ -19,7 +19,7 @@ Overview of the ingestion workflow
 
 5. **Update the manifest**: on success the manifest entry is marked ``"ingested"`` with point count, CRS, and bbox recorded.
 
-6. **Consolidate (optional)**: after every ``consolidate_every`` tiles ``ingest_many()`` triggers ``ALSDatabase.consolidate()`` to merge fragments.
+6. **Consolidate**: after every ``consolidate_every`` tiles ``ingest_many()`` consolidates the array metadata (commits, fragment metadata, manifest entries); the fragments are merged once at the end (``optimize=True``).
 
 Example usage
 -------------
@@ -67,7 +67,7 @@ Pass a list of LAS class codes to ``ingest()`` or ``ingest_many()`` to restrict 
 Inspecting the manifest
 ------------------------
 
-The manifest records the ingestion status of every file. It is stored as JSON alongside the TileDB array.
+The manifest records the ingestion status of every file. It is stored in the TileDB array metadata, one JSON entry per file, so recording a file costs the same however many are already ingested.
 
 .. code-block:: python
 

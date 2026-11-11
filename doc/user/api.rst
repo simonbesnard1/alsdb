@@ -112,7 +112,6 @@ Tiling utilities
    :toctree: generated/
    :recursive:
 
-   products._tiling.tile_bboxes
    products._tiling.run_tiled
    products._tiling.array_crs
    products._tiling.array_data_bbox

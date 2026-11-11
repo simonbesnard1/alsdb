@@ -8,14 +8,9 @@ import numpy as np
 import pytest
 
 from alsdb.methods.rasterise import (
-    _cap_height,
-    _classification_ranges,
     _delaunay_raster,
-    _dtm_idw,
     _exclude_classes_stages,
     _fill_pits,
-    _gate_by_ground_distance,
-    _nn_fill,
     _outlier_removal_stages,
     _pitfree_rasterise,
     _pulse_spacing,
@@ -568,30 +563,6 @@ def _ground_points(n: int = 50, z_mean: float = 500.0, seed: int = 0) -> np.ndar
     return arr
 
 
-def test_dtm_idw_output_shape():
-    pts = _ground_points()
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    assert grid.shape == (10, 10)
-
-
-def test_dtm_idw_dtype_float32():
-    pts = _ground_points()
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    assert grid.dtype == np.float32
-
-
-def test_dtm_idw_north_up_orientation():
-    """Top row of the grid should correspond to the highest y values."""
-    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64)]
-    pts = np.zeros(2, dtype=dtype)
-    pts["X"] = [5.0, 5.0]
-    pts["Y"] = [5.0, 95.0]
-    pts["Z"] = [1.0, 99.0]
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0, k=1)
-    assert float(grid[0, 0]) == pytest.approx(99.0)
-    assert float(grid[9, 0]) == pytest.approx(1.0)
-
-
 # ---------------------------------------------------------------------------
 # _delaunay_raster — unit tests (real PDAL filters.delaunay/faceraster)
 # ---------------------------------------------------------------------------
@@ -614,7 +585,7 @@ def _plane_corners() -> np.ndarray:
 
 
 def test_delaunay_raster_north_up_orientation():
-    """Same orientation contract as _rasterise/_dtm_idw: row 0 = north (max y)."""
+    """Same orientation contract as _rasterise: row 0 = north (max y)."""
     grid = _delaunay_raster(_plane_corners(), (0.0, 0.0, 100.0, 100.0), resolution=10.0)
     assert float(grid[0, 0]) == pytest.approx(95.0)
     assert float(grid[9, 0]) == pytest.approx(5.0)
@@ -646,29 +617,6 @@ def test_exclude_classes_stages_empty_tuple_keeps_everything():
     pts = _classified_points([1, 2, 7, 18])
     out = _run(_exclude_classes_stages(()), pts)
     assert len(out) == len(pts)
-
-
-# ---------------------------------------------------------------------------
-# _cap_height — unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_cap_height_none_disables_cap():
-    grid = np.array([[1.0, 999.0], [np.nan, 5.0]], dtype=np.float32)
-    out = _cap_height(grid, None)
-    assert out[0, 0] == pytest.approx(1.0)
-    assert out[0, 1] == pytest.approx(999.0)
-    assert np.isnan(out[1, 0])
-    assert out[1, 1] == pytest.approx(5.0)
-
-
-def test_cap_height_nulls_values_above_threshold():
-    grid = np.array([[1.0, 999.0], [np.nan, 61.0]], dtype=np.float32)
-    out = _cap_height(grid, max_height=60.0)
-    assert out[0, 0] == pytest.approx(1.0)
-    assert np.isnan(out[0, 1])
-    assert np.isnan(out[1, 0])
-    assert np.isnan(out[1, 1])
 
 
 # ---------------------------------------------------------------------------
@@ -741,56 +689,6 @@ def test_validate_grid_alignment_rejects_non_multiple():
         _validate_grid_alignment(tile_size=250.0, resolution=3.0)
 
 
-def test_dtm_idw_values_near_input_mean():
-    z_mean = 500.0
-    pts = _ground_points(z_mean=z_mean)
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    valid = grid[~np.isnan(grid)]
-    assert len(valid) > 0
-    assert np.abs(valid.mean() - z_mean) < 2.0
-
-
-def test_dtm_idw_no_nan_with_sufficient_points():
-    pts = _ground_points(n=100)
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    assert not np.any(np.isnan(grid))
-
-
-def test_dtm_idw_max_distance_creates_nans():
-    pts = _ground_points(n=10, seed=5)
-    # Force all points into a small corner; large max_distance should leave far cells NaN
-    pts["X"] = np.linspace(0.0, 5.0, 10)
-    pts["Y"] = np.linspace(0.0, 5.0, 10)
-    grid = _dtm_idw(pts, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0, max_distance=5.0)
-    # Far cells should be NaN
-    assert np.any(np.isnan(grid))
-
-
-# ---------------------------------------------------------------------------
-# _classification_ranges — unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_classification_ranges_contiguous():
-    assert _classification_ranges((3, 4, 5)) == "Classification[3:5]"
-
-
-def test_classification_ranges_single_class():
-    assert _classification_ranges((6,)) == "Classification[6:6]"
-
-
-def test_classification_ranges_noncontiguous():
-    assert _classification_ranges((1, 3, 4, 5)) == "Classification[1:1],Classification[3:5]"
-
-
-def test_classification_ranges_deduplicates_and_sorts():
-    assert _classification_ranges((5, 3, 3, 4)) == "Classification[3:5]"
-
-
-def test_classification_ranges_multiple_gaps():
-    assert _classification_ranges((1, 2, 3, 7)) == "Classification[1:3],Classification[7:7]"
-
-
 # ---------------------------------------------------------------------------
 # _gate_by_ground_distance — unit tests
 # ---------------------------------------------------------------------------
@@ -813,36 +711,6 @@ def _ground_at(xs, ys) -> np.ndarray:
     return arr
 
 
-def test_gate_by_ground_distance_none_disables_gating():
-    points = _veg_points([0.0, 100.0], [0.0, 100.0])
-    ground = _ground_at([0.0], [0.0])
-    result = _gate_by_ground_distance(points, ground, max_distance=None)
-    assert len(result) == len(points)
-
-
-def test_gate_by_ground_distance_drops_far_points():
-    # One point right next to the only ground point, one far away
-    points = _veg_points([0.0, 500.0], [0.0, 500.0])
-    ground = _ground_at([0.0], [0.0])
-    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
-    assert len(result) == 1
-    assert float(result["X"][0]) == pytest.approx(0.0)
-
-
-def test_gate_by_ground_distance_keeps_near_points():
-    points = _veg_points([1.0, 2.0], [1.0, 2.0])
-    ground = _ground_at([0.0], [0.0])
-    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
-    assert len(result) == 2
-
-
-def test_gate_by_ground_distance_empty_ground_rejects_unsupported_points():
-    points = _veg_points([0.0, 100.0], [0.0, 100.0])
-    ground = _ground_at([], [])
-    result = _gate_by_ground_distance(points, ground, max_distance=5.0)
-    assert len(result) == 0
-
-
 # ---------------------------------------------------------------------------
 # _nn_fill — unit tests
 # ---------------------------------------------------------------------------
@@ -856,25 +724,3 @@ def _ground_arr_nn(n: int = 30, z: float = 100.0, seed: int = 0) -> np.ndarray:
     arr["Y"] = rng.uniform(0.0, 100.0, n)
     arr["Z"] = z
     return arr
-
-
-def test_nn_fill_fills_nan_cells():
-    grid = np.full((10, 10), 100.0, dtype=np.float32)
-    grid[5, 5] = np.nan
-    gnd = _ground_arr_nn()
-    result = _nn_fill(grid, gnd, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    assert not np.isnan(result[5, 5])
-
-
-def test_nn_fill_no_nan_unchanged():
-    grid = np.full((10, 10), 100.0, dtype=np.float32)
-    gnd = _ground_arr_nn()
-    result = _nn_fill(grid, gnd, crop_bbox=(0.0, 0.0, 100.0, 100.0), resolution=10.0)
-    np.testing.assert_array_equal(result, grid)
-
-
-def test_nn_fill_empty_ground_unchanged():
-    grid = np.full((5, 5), np.nan, dtype=np.float32)
-    gnd = np.zeros(0, dtype=[("X", np.float64), ("Y", np.float64), ("Z", np.float64)])
-    result = _nn_fill(grid, gnd, crop_bbox=(0.0, 0.0, 50.0, 50.0), resolution=10.0)
-    assert np.all(np.isnan(result))

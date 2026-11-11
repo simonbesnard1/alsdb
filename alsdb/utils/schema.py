@@ -133,6 +133,15 @@ class TileDBSchemaConfig:
     year_min: int = 2000
     year_max: int = 2100
     chunk_size: int = 1_000_000
+    # Storage layout of new arrays. Writing a tile is dominated by ordering its
+    # coordinates: Hilbert order with 100,000 points per data tile halved the
+    # write time of an 11 M point tile against TileDB's defaults (row-major,
+    # capacity 10,000), with a 10 % smaller array and the same read time.
+    # Rasters, metrics and profiles are bit-identical from either layout;
+    # waveform energy sums (cover, canopy and ground energy) differ in the
+    # last bit (1e-15 relative), as they add the points in stored order.
+    cell_order: str = "hilbert"
+    capacity: int = 100_000
 
     @classmethod
     def for_crs(cls, crs: str, **kwargs) -> "TileDBSchemaConfig":
@@ -199,7 +208,8 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
         field.  The Year dimension separates repeated surveys of the same tile
         (e.g. 2019 vs 2021 flights).  All attributes and coordinates use
         ZSTD-9 compression.  ``allows_duplicates=True`` accommodates multiple
-        returns at the same XY within a single survey.
+        returns at the same XY within a single survey.  Points are stored in
+        ``cfg.cell_order`` with ``cfg.capacity`` points per data tile.
     """
     # Float attributes that benefit from byte-shuffle before ZSTD.
     _float_attrs = {"Z", "GpsTime"}
@@ -262,4 +272,6 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
         attrs=attrs,
         sparse=True,
         allows_duplicates=True,
+        cell_order=cfg.cell_order,
+        capacity=cfg.capacity,
     )

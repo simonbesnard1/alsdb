@@ -1,16 +1,43 @@
 """Terrain interpolation with explicit support and extrapolation diagnostics."""
 
+import hashlib
 import json
+from functools import cached_property
 
 import numpy as np
 from pdal import Pipeline as _PdalPipeline  # bound here: tests patch pdal.Pipeline
 from scipy.spatial import cKDTree
+
+try:  # counting sort in C; a private SciPy routine, so optional
+    from scipy.sparse._sparsetools import coo_tocsr as _coo_tocsr
+except ImportError:  # pragma: no cover - depends on the SciPy build
+    _coo_tocsr = None
 
 # ASPRS ground (2) and water (9): water returns are the terrain surface over
 # water bodies, as in lidR's normalize_height/rasterize_terrain defaults.
 GROUND_CLASSES = (2, 9)
 # LAS classification codes treated as "vegetation".
 VEG_CLASSES = (3, 4, 5)  # ASPRS low, medium and high vegetation
+
+
+def _group_by_cell(cell, values, n_cells):
+    """Return *values* grouped by ascending *cell*, input order kept within a cell.
+
+    A stable counting sort (SciPy's COO to CSR conversion, linear time), or a
+    stable argsort where that routine is unavailable: the same result.
+    """
+    if _coo_tocsr is not None:
+        n = len(cell)
+        cell = np.ascontiguousarray(cell, dtype=np.int64)
+        starts = np.empty(n_cells + 1, np.int64)
+        columns = np.empty(n, np.int64)
+        grouped = np.empty(n, np.int64)
+        _coo_tocsr(
+            n_cells, 1, n, cell, np.zeros(n, np.int64),
+            np.ascontiguousarray(values, dtype=np.int64), starts, columns, grouped,
+        )  # fmt: skip
+        return grouped
+    return np.asarray(values, dtype=np.int64)[np.argsort(cell, kind="stable")]
 
 
 class _Tin:
@@ -23,7 +50,7 @@ class _Tin:
     bounding box covers and tests a query only against triangles in its cell.
     """
 
-    _CHUNK = 262_144  # queries per vectorised batch, bounds memory
+    _CHUNK = 8_192  # queries per vectorised batch: its temporaries stay in the CPU cache
 
     def __init__(self, local):
         pts = np.zeros(len(local), dtype=[("X", "f8"), ("Y", "f8"), ("Z", "f8")])
@@ -48,8 +75,11 @@ class _Tin:
         self._g0 = local.min(axis=0)
         extent = np.maximum(local.max(axis=0) - self._g0, 1e-9)
         self._cell = max(float(np.sqrt(extent[0] * extent[1] / len(local))), 1e-6)
-        lo = np.floor((v.min(axis=1) - self._g0) / self._cell).astype(np.int64)
-        hi = np.floor((v.max(axis=1) - self._g0) / self._cell).astype(np.int64)
+        # elementwise over the three vertices: faster than a reduction over axis 1
+        v_min = np.minimum(np.minimum(v[:, 0], v[:, 1]), v[:, 2])
+        v_max = np.maximum(np.maximum(v[:, 0], v[:, 1]), v[:, 2])
+        lo = np.floor((v_min - self._g0) / self._cell).astype(np.int64)
+        hi = np.floor((v_max - self._g0) / self._cell).astype(np.int64)
         self._shape = (int(hi[:, 1].max()) + 1, int(hi[:, 0].max()) + 1)  # rows (y), cols (x)
         width = hi[:, 0] - lo[:, 0] + 1
         counts = width * (hi[:, 1] - lo[:, 1] + 1)
@@ -58,11 +88,9 @@ class _Tin:
         cols = np.repeat(lo[:, 0], counts) + k % np.repeat(width, counts)
         rows = np.repeat(lo[:, 1], counts) + k // np.repeat(width, counts)
         cell = rows * self._shape[1] + cols
-        order = np.argsort(cell, kind="stable")
-        self._cell_tris = tri[order]
-        self._starts = np.concatenate(
-            ([0], np.cumsum(np.bincount(cell, minlength=self._shape[0] * self._shape[1])))
-        )
+        n_cells = self._shape[0] * self._shape[1]
+        self._cell_tris = _group_by_cell(cell, tri, n_cells)
+        self._starts = np.concatenate(([0], np.cumsum(np.bincount(cell, minlength=n_cells))))
 
     def find_simplex(self, xy, eps=1e-10):
         """Index of the triangle containing each point, -1 outside the TIN."""
@@ -84,7 +112,11 @@ class _Tin:
             b0 = t[:, 0, 0] * d[:, 0] + t[:, 0, 1] * d[:, 1]
             b1 = t[:, 1, 0] * d[:, 0] + t[:, 1, 1] * d[:, 1]
             hit = np.flatnonzero((b0 >= -eps) & (b1 >= -eps) & (1 - b0 - b1 >= -eps))
-            first = hit[np.unique(pid[hit], return_index=True)[1]]
+            # pid ascends, so the first hit of each query is where it changes
+            hit_pid = pid[hit]
+            is_first = np.ones(len(hit), dtype=bool)
+            is_first[1:] = hit_pid[1:] != hit_pid[:-1]
+            first = hit[is_first]
             out[q[pid[first]]] = tri[first]
         return out
 
@@ -96,12 +128,21 @@ class TerrainModel:
         valid = np.isfinite(xy).all(axis=1) & np.isfinite(z)
         xy, z = xy[valid], z[valid]
         # Duplicate XY ground returns have no unique TIN elevation. Use mean Z.
-        self.xy, inverse = np.unique(xy, axis=0, return_inverse=True)
+        # Rows sorted by X then Y with their inverse index, as
+        # np.unique(xy, axis=0, return_inverse=True) but three times faster.
+        order = np.lexsort((xy[:, 1], xy[:, 0]))
+        ordered = xy[order]
+        is_new = np.ones(len(ordered), dtype=bool)
+        is_new[1:] = (ordered[1:] != ordered[:-1]).any(axis=1)
+        self.xy = ordered[is_new]
+        inverse = np.empty(len(ordered), dtype=np.intp)
+        inverse[order] = np.cumsum(is_new) - 1
         self.z = np.bincount(inverse, weights=z) / np.bincount(inverse) if len(z) else np.empty(0)
         # Centering avoids precision loss when triangulating large map coordinates.
         self._origin = self.xy.mean(axis=0) if len(self.xy) else np.zeros(2)
         local = self.xy - self._origin
-        self.tree = cKDTree(local) if len(local) else None
+        self._local = local
+        self._located = None  # last (query key, simplex) of _find_simplex
         self.tin = None
         if len(local) >= 3:
             try:
@@ -109,8 +150,22 @@ class TerrainModel:
             except (RuntimeError, ValueError):
                 pass  # Collinear/sparse support is explicitly marked extrapolated.
 
+    @cached_property
+    def tree(self):
+        """KD-tree of the ground points (model frame), built on first use; None without points."""
+        return cKDTree(self._local) if len(self._local) else None
+
     def _find_simplex(self, xy):
-        return self.tin.find_simplex(xy)
+        """Triangle of each query; the last query is remembered.
+
+        A tile asks for the same grid centres several times (DTM, CHM
+        support, slope), so a repeated query returns the stored result.
+        """
+        xy = np.ascontiguousarray(xy, dtype=float)
+        key = (xy.shape, hashlib.blake2b(xy.tobytes(), digest_size=16).digest())
+        if self._located is None or self._located[0] != key:
+            self._located = (key, self.tin.find_simplex(xy))
+        return self._located[1]
 
     def slope(self, xy):
         """Local TIN slope in degrees; undefined outside nondegenerate support."""
@@ -129,8 +184,9 @@ class TerrainModel:
     def evaluate(self, xy, *, max_distance=None, extrapolate=False, method="tin", distances=True):
         """Ground elevation at *xy*, nearest-ground distance and outside-TIN flags.
 
-        ``distances=False`` skips the nearest-ground query when nothing needs it
-        (no *max_distance*, no extrapolation, TIN method); distances are NaN.
+        ``distances=False`` skips the nearest-ground query where nothing needs
+        it: without *max_distance* the distances are then NaN, except for the
+        points outside the TIN when *extrapolate* looks up their nearest ground.
         """
         if max_distance is not None and (not np.isfinite(max_distance) or max_distance <= 0):
             raise ValueError("max_distance must be finite and positive")
@@ -140,23 +196,28 @@ class TerrainModel:
         z = np.full(len(xy), np.nan)
         distance = np.full(len(xy), np.inf)
         extrapolated = np.ones(len(xy), dtype=bool)
-        if self.tree is None or not len(xy):
+        if not len(self._local) or not len(xy):
             return z, distance, extrapolated
-        if distances or max_distance is not None or extrapolate or method != "tin":
-            distance, nearest = self.tree.query(xy)
-        else:
-            distance = np.full(len(xy), np.nan)
         simplex = self._find_simplex(xy) if self.tin is not None else np.full(len(xy), -1)
         inside = simplex >= 0
         extrapolated = ~inside
+        if distances or max_distance is not None:
+            distance, nearest = self.tree.query(xy)
+        else:
+            distance = np.full(len(xy), np.nan)
+            nearest = None
         if method == "tin":
             if inside.any():
                 transform = self.tin.transform[simplex[inside]]
                 bary = np.einsum("ijk,ik->ij", transform[:, :2], xy[inside] - transform[:, 2])
                 weights = np.column_stack((bary, 1 - bary.sum(axis=1)))
                 z[inside] = (weights * self.z[self.tin.simplices[simplex[inside]]]).sum(axis=1)
-            if extrapolate:
-                z[~inside] = self.z[nearest[~inside]]
+            if extrapolate and not inside.all():
+                if nearest is None:  # only the points outside the TIN need a neighbour
+                    distance[~inside], outside_nearest = self.tree.query(xy[~inside])
+                else:
+                    outside_nearest = nearest[~inside]
+                z[~inside] = self.z[outside_nearest]
         elif method == "idw":
             d, idx = self.tree.query(xy, k=min(8, len(self.xy)))
             if d.ndim == 1:

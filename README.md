@@ -248,9 +248,9 @@ TileDB array (local  /  s3://)
 | `Y` | float64 | UTM northing (m) |
 | `Year` | int16 | Survey year |
 
-18 LAS attributes (Z, Intensity, ReturnNumber, Classification, RGB, …) are stored as TileDB attributes with ZSTD-9 compression. Spatial tile size defaults to 500 × 500 m; domain bounds are selected automatically per CRS.
+18 LAS attributes (Z, Intensity, ReturnNumber, Classification, RGB, …) are stored as TileDB attributes with ZSTD-9 compression. Spatial tile size defaults to 500 × 500 m; domain bounds are selected automatically per CRS. Points are stored in Hilbert order with 100,000 points per data tile (`TileDBSchemaConfig.cell_order`, `capacity`), which halves the write time of a tile against TileDB's row-major default; products do not depend on the stored order, apart from last-bit rounding in waveform energy sums.
 
-Each ingested tile becomes a new TileDB **fragment**. Fragments are consolidated every `consolidate_every` tiles (default 50) to keep read performance healthy as the array grows.
+Each ingested tile becomes a new TileDB **fragment** and one entry of the ingestion manifest in the array metadata. Array metadata is consolidated every `consolidate_every` tiles (default 50); the fragments themselves are merged at the end (`optimize=True`, or `ALSDatabase.optimize()` later).
 
 ---
 

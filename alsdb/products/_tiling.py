@@ -9,7 +9,6 @@ from __future__ import annotations
 import gc
 import json
 import logging
-import math
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -85,30 +84,6 @@ def query_to_array(
     return out
 
 
-def array_domain_bbox(provider) -> tuple[float, float, float, float]:
-    """
-    Return the **declared** X/Y domain of the TileDB schema.
-
-    This is the full extent the array *could* cover, not the extent of the
-    data that has actually been written.  For processing use
-    :func:`array_data_bbox` instead so you don't tile over empty space.
-
-    Returns
-    -------
-    tuple[float, float, float, float]
-        ``(min_x, min_y, max_x, max_y)``
-    """
-    dom = provider.schema.domain
-    x_dim = dom.dim("X")
-    y_dim = dom.dim("Y")
-    return (
-        float(x_dim.domain[0]),
-        float(y_dim.domain[0]),
-        float(x_dim.domain[1]),
-        float(y_dim.domain[1]),
-    )
-
-
 def array_crs(provider) -> str:
     """
     Return the CRS string stored in the TileDB array metadata.
@@ -124,9 +99,9 @@ def array_data_bbox(provider) -> tuple[float, float, float, float]:
     """
     Return the bounding box of **actually stored** data via ``nonempty_domain``.
 
-    Unlike :func:`array_domain_bbox`, this reflects the real extent of points
-    in the array, not the declared schema domain.  Use this as the default
-    extent for processing so tiles are only generated where data exists.
+    This is the real extent of the points in the array, not the declared
+    schema domain.  Use it as the default extent for processing so tiles are
+    only generated where data exists.
 
     Returns
     -------
@@ -230,9 +205,6 @@ def check_bbox_overlap(
     return True
 
 
-_HAG_DELAUNAY_MIN_GND: int = 3  # minimum ground points to build a Delaunay TIN
-
-
 def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     """Reclassify low ground outliers as class 7 with PDAL ``filters.elm``.
 
@@ -247,7 +219,12 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     if n_gnd < 4:
         return arr
 
-    gnd_arr = arr[gnd_mask].copy()
+    # ELM reads coordinates and writes classes: the other fields stay behind.
+    gnd_arr = np.empty(
+        n_gnd, dtype=[(name, arr.dtype[name]) for name in ("X", "Y", "Z", "Classification")]
+    )
+    for name in gnd_arr.dtype.names:
+        gnd_arr[name] = arr[name][gnd_mask]
     stages = [{"type": "filters.elm"}]
 
     try:
@@ -277,40 +254,6 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
         n_gnd,
     )
     return out
-
-
-def _hag_stage(arr: np.ndarray) -> dict:
-    """Return a PDAL height-above-ground stage for *arr*.
-
-    ``filters.hag_delaunay`` with at least ``_HAG_DELAUNAY_MIN_GND`` ground
-    points, else ``filters.hag_nn``.
-
-    Parameters
-    ----------
-    arr:
-        Point array with a ``Classification`` field.
-
-    Returns
-    -------
-    dict
-        PDAL stage.
-    """
-    n_gnd = int((arr["Classification"] == 2).sum())
-    if n_gnd >= _HAG_DELAUNAY_MIN_GND:
-        return {"type": "filters.hag_delaunay"}
-    logger.debug("_hag_stage: only %d ground points — falling back to filters.hag_nn", n_gnd)
-    return {"type": "filters.hag_nn", "count": max(1, n_gnd), "allow_extrapolation": True}
-
-
-def attach_hag(arr: np.ndarray) -> np.ndarray:
-    """Normalize against a ground TIN; unsupported heights remain NaN.
-
-    Point-normalized CHM statistics do not in general equal DSM minus DTM.
-    Additional fields record ground distance, extrapolation and negative HAG.
-    """
-    from alsdb.methods._terrain import normalize_points
-
-    return normalize_points(_filter_ground_outliers(arr))[0]
 
 
 def run_tiled(
@@ -357,7 +300,7 @@ def run_tiled(
 
 
 def bounded_map_unordered(fn, items, n_workers=1):
-    """Like :func:`bounded_map` but yields results as soon as each finishes.
+    """Map *fn* over *items* in a thread pool, yielding results as each finishes.
 
     Keeps at most ``2 * n_workers`` items in flight and refills from whichever
     task completes first, so a slow item never blocks the rest of the pool.
@@ -386,31 +329,6 @@ def bounded_map_unordered(fn, items, n_workers=1):
                 if item is not sentinel:
                     pending.add(executor.submit(fn, item))
                 yield result
-
-
-def bounded_map(fn, items, n_workers=1):
-    """Ordered results with at most two pending items per worker."""
-    from collections import deque
-
-    if n_workers < 1:
-        raise ValueError("n_workers must be positive")
-    if n_workers == 1:
-        yield from map(fn, items)
-        return
-    items = iter(items)
-    sentinel = object()
-    with ThreadPoolExecutor(max_workers=n_workers) as executor:
-        pending = deque()
-        for _ in range(2 * n_workers):
-            item = next(items, sentinel)
-            if item is sentinel:
-                break
-            pending.append(executor.submit(fn, item))
-        while pending:
-            yield pending.popleft().result()
-            item = next(items, sentinel)
-            if item is not sentinel:
-                pending.append(executor.submit(fn, item))
 
 
 class PointGrid:
@@ -447,53 +365,3 @@ class PointGrid:
         idx = np.concatenate(runs)
         inside = (self.x[idx] - x0) ** 2 + (self.y[idx] - y0) ** 2 <= radius**2
         return np.sort(idx[inside])
-
-
-def tile_bboxes(
-    bbox: tuple[float, float, float, float],
-    tile_size: float,
-    buffer: float,
-) -> list[
-    tuple[
-        tuple[float, float, float, float],
-        tuple[float, float, float, float],
-    ]
-]:
-    """
-    Partition *bbox* into a grid of sub-tiles.
-
-    Returns a list of ``(query_bbox, crop_bbox)`` pairs:
-
-    * ``query_bbox`` — inflated by *buffer* on all sides; used for the
-      TileDB query so ``filters.hag_delaunay`` has enough ground points
-      at tile edges to form complete edge triangles.
-    * ``crop_bbox``  — the actual non-overlapping tile extent; used to
-      restrict output to avoid duplicate pixels in the mosaic.
-
-    Parameters
-    ----------
-    bbox:
-        Full area ``(min_x, min_y, max_x, max_y)``.
-    tile_size:
-        Sub-tile width and height in metres.
-    buffer:
-        Overlap buffer in metres added to the query bbox on each side.
-        Set to ``0.0`` when no TIN-based filter is used (DTM, DSM).
-    """
-    min_x, min_y, max_x, max_y = bbox
-    cols = math.ceil((max_x - min_x) / tile_size)
-    rows = math.ceil((max_y - min_y) / tile_size)
-
-    tiles = []
-    for row in range(rows):
-        for col in range(cols):
-            cx0 = min_x + col * tile_size
-            cy0 = min_y + row * tile_size
-            cx1 = min_x + (col + 1) * tile_size if col < cols - 1 else max_x
-            cy1 = min_y + (row + 1) * tile_size if row < rows - 1 else max_y
-
-            crop_bbox = (cx0, cy0, cx1, cy1)
-            query_bbox = (cx0 - buffer, cy0 - buffer, cx1 + buffer, cy1 + buffer)
-            tiles.append((query_bbox, crop_bbox))
-
-    return tiles
