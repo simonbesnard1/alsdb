@@ -728,6 +728,7 @@ def compute_metrics(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    parallel: str = "threads",
     metrics: tuple[str, ...] | None = None,
     ground_outlier_removal: bool = True,
     max_ground_distance: float | None = None,
@@ -763,6 +764,11 @@ def compute_metrics(
         Buffer for terrain interpolation (m).
     n_workers:
         Parallel workers.
+    parallel:
+        ``"threads"`` (default) or ``"processes"``: worker processes use one
+        core each (threads level off at two to three times one worker) and
+        hold one tile in memory each; scripts need an
+        ``if __name__ == "__main__":`` guard.
     ground_extrapolation:
         Give returns outside the ground TIN the height above the nearest
         ground (default, as :mod:`alsdb.products.profiles`); off, they get
@@ -784,6 +790,7 @@ def compute_metrics(
         tile_size=tile_size,
         tile_buffer=tile_buffer,
         n_workers=n_workers,
+        parallel=parallel,
         ground_outlier_removal=ground_outlier_removal,
         max_ground_distance=max_ground_distance,
         ground_extrapolation=ground_extrapolation,
@@ -805,6 +812,7 @@ def compute_biomass(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    parallel: str = "threads",
     min_density: float = 0.0,
     veg_classes: tuple[int, ...] = _VEG_CLASSES,
     model_features: tuple[str, ...] | None = None,
@@ -844,6 +852,11 @@ def compute_biomass(
         Buffer for terrain interpolation (m).
     n_workers:
         Parallel workers.
+    parallel:
+        ``"threads"`` (default) or ``"processes"``: worker processes use one
+        core each (threads level off at two to three times one worker) and
+        hold one tile in memory each; scripts need an
+        ``if __name__ == "__main__":`` guard.
     ground_extrapolation:
         As :func:`compute_metrics`.
     """
@@ -863,6 +876,7 @@ def compute_biomass(
         tile_size=tile_size,
         tile_buffer=tile_buffer,
         n_workers=n_workers,
+        parallel=parallel,
         ground_outlier_removal=ground_outlier_removal,
         max_ground_distance=max_ground_distance,
         ground_extrapolation=ground_extrapolation,

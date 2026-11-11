@@ -168,6 +168,50 @@ class ALSZarrStore:
         self._years_recorded: set[tuple[str, str, int]] = set()
         self._var_locks: dict[tuple[str, str], threading.Lock] = {}
         self._tile_group_ready = False
+        # In a worker process (see __setstate__) the store only writes chunks
+        # and tile markers: metadata updates are noted here for the parent.
+        self._in_worker = False
+        self._pending_years: set[tuple[str, str, int]] = set()
+
+    # ------------------------------------------------------------------
+    # Worker processes
+    # ------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        """Return the picklable state: where the store is, not its open handles."""
+        return {"path": self.path, "storage_options": self._storage_options}
+
+    def __setstate__(self, state: dict) -> None:
+        """Reopen the store in a worker process, in chunk-writing mode."""
+        self.__init__(state["path"], mode="r+", storage_options=state["storage_options"])
+        self._in_worker = True
+
+    def prepare_tile_writes(self, variables, resolution: float, year: int) -> None:
+        """Size *variables* for *year* and create the tile-marker group now.
+
+        After this, :meth:`write_tile` and :meth:`mark_tile_complete` only
+        write chunks and marker objects, which worker processes can do side
+        by side; the time axis and array shapes are no longer touched.
+        """
+        res_key = _res_str(resolution)
+        for variable in variables:
+            self._sized_array(res_key, variable, int(year))
+        self._ensure_tile_group()
+
+    def take_pending_years(self) -> set[tuple[str, str, int]]:
+        """Return and clear the (group, variable, year) written with data in this worker."""
+        pending, self._pending_years = self._pending_years, set()
+        return pending
+
+    def record_data_years(self, written) -> None:
+        """Add the years of *written* (from :meth:`take_pending_years`) to ``data_years``."""
+        for res_key, variable, year in sorted(set(written)):
+            with self._group_lock(res_key):
+                arr = self._root[res_key][variable]
+                years = list(arr.attrs.get("data_years", []))
+                if year not in years:
+                    arr.attrs["data_years"] = sorted(years + [year])
+                self._years_recorded.add((res_key, variable, year))
 
     # ------------------------------------------------------------------
     # Internal lock management
@@ -622,6 +666,10 @@ class ALSZarrStore:
             with self._var_lock(res_key, variable):
                 arr[t_idx, row0:row1, col0:col1] = window
         if (res_key, variable, year) not in self._years_recorded and np.isfinite(window).any():
+            if self._in_worker:  # the parent process records it (record_data_years)
+                self._pending_years.add((res_key, variable, year))
+                self._years_recorded.add((res_key, variable, year))
+                return
             with self._group_lock(res_key):
                 years = list(arr.attrs.get("data_years", []))
                 if year not in years:

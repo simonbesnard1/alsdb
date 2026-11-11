@@ -256,6 +256,74 @@ def _filter_ground_outliers(arr: np.ndarray) -> np.ndarray:
     return out
 
 
+_TILE_WORKER: dict = {}  # per-process state of run_tiled worker processes
+
+
+def _available_cpus() -> int:
+    """CPUs this process may use (its affinity, e.g. a Slurm allocation)."""
+    import os
+
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # not on Linux
+        return os.cpu_count() or 1
+
+
+def _init_tile_worker(worker_fn, provider, store, kwargs, threads):
+    """Set up one tile worker process: its own TileDB context and store handle."""
+    # Several processes share the machine: fewer TileDB threads and a small
+    # tile cache each, instead of every process claiming all cores and 1 GiB.
+    n = str(threads)
+    provider = provider.with_config(**{
+        "sm.num_reader_threads": n, "sm.num_tiledb_threads": n,
+        "sm.compute_concurrency_level": n, "sm.io_concurrency_level": n,
+        "sm.tile_cache_size": str(128 * 1024**2),
+    })  # fmt: skip
+    _TILE_WORKER.update(fn=worker_fn, provider=provider, store=store, kwargs=kwargs, done=0)
+
+
+def _run_tile(item):
+    """Process one tile in a worker process; return the data years it wrote."""
+    w = _TILE_WORKER
+    idx, (query_bbox, crop_bbox) = item
+    w["fn"](w["provider"], query_bbox, crop_bbox, w["store"], idx, **w["kwargs"])
+    w["done"] += 1
+    if w["done"] % 20 == 0:
+        gc.collect()  # reference cycles of PDAL/GDAL objects
+    return w["store"].take_pending_years()
+
+
+def _map_in_processes(items, n_workers, initargs):
+    """Yield ``_run_tile(item)`` from spawned worker processes as tiles finish.
+
+    Workers start with ``spawn`` (a forked child would inherit TileDB's
+    threads in whatever state they were); at most two tiles per worker are
+    in flight.
+    """
+    import multiprocessing
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+    items = iter(items)
+    sentinel = object()
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        n_workers, mp_context=context, initializer=_init_tile_worker, initargs=initargs
+    ) as pool:
+        pending = set()
+        for item in items:
+            pending.add(pool.submit(_run_tile, item))
+            if len(pending) >= 2 * n_workers:
+                break
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                result = future.result()  # re-raise worker exceptions
+                item = next(items, sentinel)
+                if item is not sentinel:
+                    pending.add(pool.submit(_run_tile, item))
+                yield result
+
+
 def run_tiled(
     worker_fn: Callable,
     provider,
@@ -265,9 +333,10 @@ def run_tiled(
     progress_every: int = 500,
     gc_every: int = 100,
     skip: set[int] | frozenset[int] = frozenset(),
+    parallel: str = "threads",
     **kwargs,
 ) -> None:
-    """Run *worker_fn* over all *tiles*, sequentially or in a thread pool.
+    """Run *worker_fn* over all *tiles*, sequentially, in threads or in processes.
 
     The worker signature is
     ``worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)``.
@@ -275,7 +344,19 @@ def run_tiled(
     every *gc_every* tiles to free reference cycles of PDAL/GDAL objects.
     Tiles in *skip* keep their index but are not processed. Results are
     consumed as tiles finish, so one slow tile does not idle the others.
+
+    ``parallel="processes"`` (with ``n_workers > 1``) runs the tiles in
+    worker processes instead of threads. Most of a tile's work holds Python's
+    global lock, so threads level off at two to three times one worker, while
+    processes use one core each. It needs a module-level *worker_fn*,
+    picklable *kwargs*, a store prepared with
+    :meth:`~alsdb.storage.ALSZarrStore.prepare_tile_writes`, and, in scripts,
+    an ``if __name__ == "__main__":`` guard (processes start with ``spawn``).
+    Each process holds its own tile in memory. Arguments that cannot be
+    pickled (e.g. a lambda model) fall back to threads, with a warning.
     """
+    if parallel not in ("threads", "processes"):
+        raise ValueError("parallel must be 'threads' or 'processes'")
     total = len(tiles)
     completed = 0
     if skip:
@@ -295,6 +376,28 @@ def run_tiled(
         return worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
 
     todo = (item for item in enumerate(tiles) if item[0] not in skip)
+    if parallel == "processes" and n_workers > 1:
+        import pickle
+
+        try:
+            pickle.dumps((worker_fn, kwargs))
+        except Exception as exc:  # noqa: BLE001 - pickling failures vary (lambdas, closures)
+            logger.warning(
+                "run_tiled: worker arguments cannot be sent to processes (%s); using threads",
+                type(exc).__name__,
+            )
+        else:
+            threads = max(1, _available_cpus() // n_workers)
+            written = set()
+            try:
+                for years in _map_in_processes(
+                    todo, n_workers, (worker_fn, provider, store, kwargs, threads)
+                ):
+                    written |= years
+                    _note_progress()
+            finally:
+                store.record_data_years(written)
+            return
     for _ in bounded_map_unordered(process, todo, n_workers):
         _note_progress()
 

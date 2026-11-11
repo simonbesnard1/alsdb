@@ -223,6 +223,7 @@ def compute_gap_fraction(
     tile_size: float = 500.0,
     tile_buffer: float = 50.0,
     n_workers: int = 1,
+    parallel: str = "threads",
     ground_outlier_removal: bool = False,
     quality: bool = True,
 ) -> None:
@@ -281,6 +282,11 @@ def compute_gap_fraction(
         Query overlap buffer (default 50 m), expanded to cover baba_radius.
     n_workers:
         Parallel workers (default 1 = sequential).
+    parallel:
+        ``"threads"`` (default) or ``"processes"``: worker processes use one
+        core each (threads level off at two to three times one worker) and
+        hold one tile in memory each; scripts need an
+        ``if __name__ == "__main__":`` guard.
     """
     from alsdb.products._area import compute_area_products
 
@@ -302,6 +308,7 @@ def compute_gap_fraction(
         tile_size=tile_size,
         tile_buffer=tile_buffer,
         n_workers=n_workers,
+        parallel=parallel,
         ground_outlier_removal=ground_outlier_removal,
         quality=quality,
     )

@@ -36,6 +36,134 @@ from alsdb.products._tiling import (
 )
 
 
+def _area_worker(
+    provider,
+    query_bbox,
+    crop_bbox,
+    store,
+    tile_index,
+    *,
+    grid,
+    resolution,
+    year,
+    needed,
+    calculate,
+    cached,
+    time_index,
+    chm,
+    config,
+    model,
+    quality,
+    gap_names,
+    ground_outlier_removal,
+    max_ground_distance,
+    ground_extrapolation,
+    baba_radius,
+    cc_threshold,
+    min_density,
+    veg_classes,
+    k,
+    clumping_index,
+):
+    """Compute and write the requested area products of one tile.
+
+    Module-level with explicit settings, so tiles can run in worker processes.
+    *cached* names completed metric slices read from the store (at
+    *time_index*) instead of being recomputed.
+    """
+    from alsdb.products.biomass import _METRIC_NAMES, _extract_metrics, _extract_metrics_baba
+    from alsdb.products.gap import _gap_to_lai, gap_statistics
+    from alsdb.storage.zarr_store import _res_str
+
+    requires_points = bool(calculate or set(needed) & {"gap", "lai", "chm"})
+    values = {}
+    if cached:
+        r = round((grid.y1 - crop_bbox[3]) / resolution)
+        c = round((crop_bbox[0] - grid.x0) / resolution)
+        ny, nx = GridSpec.from_bbox(crop_bbox, resolution).shape
+        group = store._root[_res_str(resolution)]
+        values.update(
+            {name: np.asarray(group[name][time_index, r : r + ny, c : c + nx]) for name in cached}
+        )
+    normalized = terrain = None
+    if requires_points:
+        attrs = ("Z", "Classification", "ReturnNumber", "Withheld")
+        if chm and config.method in ("spikefree", "lastools"):
+            attrs += ("NumberOfReturns", "GpsTime", "PointSourceId")
+        if chm:
+            attrs += ("ScanAngleRank",)
+        arr = clean_points(query_to_array(provider, query_bbox, year=year, attributes=attrs))
+        if ground_outlier_removal:
+            arr = clean_points(_filter_ground_outliers(arr))
+        if calculate or "chm" in needed:
+            normalized, terrain = normalize_points(
+                arr,
+                max_distance=max_ground_distance,
+                extrapolate=ground_extrapolation,
+                distances=False,  # per-point ground distances are not used
+            )
+        if calculate:
+            if baba_radius:
+                values.update(
+                    _extract_metrics_baba(
+                        normalized,
+                        resolution,
+                        crop_bbox,
+                        baba_radius,
+                        cc_threshold,
+                        min_density,
+                        veg_classes,
+                        metrics=calculate,
+                    )
+                )
+            else:
+                values.update(
+                    _extract_metrics(
+                        normalized,
+                        resolution,
+                        crop_bbox,
+                        cc_threshold,
+                        min_density,
+                        veg_classes,
+                        metrics=calculate,
+                    )
+                )
+        if set(needed) & {"gap", "lai"}:
+            stats = gap_statistics(
+                arr, resolution, crop_bbox, min_density, veg_classes, baba_radius
+            )
+            if "gap" in needed:
+                for name in gap_names if quality else ("gap",):
+                    store.write_tile(name, resolution, year, stats[name], crop_bbox)
+            if "lai" in needed:
+                store.write_tile(
+                    "lai",
+                    resolution,
+                    year,
+                    _gap_to_lai(stats["gap"], k, clumping_index),
+                    crop_bbox,
+                )
+        if "chm" in needed:
+            for name, data in surface_tile(
+                arr,
+                crop_bbox,
+                resolution,
+                config,
+                prepared=(normalized, terrain),
+                diagnostics=quality,
+            ).items():
+                if name == "chm" or quality:
+                    store.write_tile(name, resolution, year, data, crop_bbox)
+    for name in needed:
+        if name in _METRIC_NAMES:
+            store.write_tile(name, resolution, year, values[name], crop_bbox)
+    if "biomass" in needed:
+        data = np.asarray(model(values), dtype=np.float32)
+        if data.shape != GridSpec.from_bbox(crop_bbox, resolution).shape:
+            raise ValueError("Biomass model returned an incorrect grid shape")
+        store.write_tile("biomass", resolution, year, data, crop_bbox)
+
+
 def compute_area_products(
     provider,
     store,
@@ -66,6 +194,7 @@ def compute_area_products(
     tile_size=500.0,
     tile_buffer=50.0,
     n_workers=1,
+    parallel="threads",
 ):
     """Write selected metrics, gap/LAI, biomass and CHM on one shared grid.
 
@@ -76,14 +205,15 @@ def compute_area_products(
     identical provenance are reused for biomass without reading the point cloud.
     Ground cleaning is explicit and shared by every requested product; the gap
     wrapper defaults to disabling it. Quality includes gap support and saturation.
+    ``parallel="processes"`` runs the tiles in worker processes (see
+    :func:`~alsdb.products._tiling.run_tiled`); a biomass model that cannot be
+    pickled (a lambda, a wrapped estimator) keeps the run in threads.
     """
     from alsdb.products.biomass import (
         _METRIC_NAMES,
-        _extract_metrics,
-        _extract_metrics_baba,
         naesset_model,
     )
-    from alsdb.products.gap import _gap_to_lai, gap_statistics
+    from alsdb.products.gap import _gap_to_lai
 
     _require_year(year)
     requested = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
@@ -196,15 +326,15 @@ def compute_area_products(
                     cached.append(name)
             except ValueError:
                 pass
-    cached_arrays = {}
+    time_index = None
     if cached:
         from alsdb.storage.zarr_store import _res_str
 
         group = store._root[_res_str(resolution)]
         time_index = int(np.flatnonzero(np.asarray(group["time"][:]) == year)[0])
-        cached_arrays = {name: group[name] for name in cached}
     gap_names = ("gap", "gap_n_ground", "gap_n_classified", "gap_n_first", "gap_saturated")
     crs = array_crs(provider)
+    written = []
     for name in needed:
         names = (
             CHM_VARIABLES
@@ -226,6 +356,9 @@ def compute_area_products(
             configurations[name],
             CHM_VARIABLES if name == "chm" else gap_names if name == "gap" else names,
         )
+        written.extend(names)
+    # Size the arrays for this year now, so tile workers only write chunks.
+    store.prepare_tile_writes(written, resolution, year)
     calculate = (
         tuple(
             dict.fromkeys(
@@ -237,99 +370,36 @@ def compute_area_products(
         else tuple(name for name in needed if name in _METRIC_NAMES)
     )
 
-    def worker(provider, query_bbox, crop_bbox, store, tile_index):
-        requires_points = bool(calculate or set(needed) & {"gap", "lai", "chm"})
-        values = {}
-        if cached_arrays:
-            r = round((grid.y1 - crop_bbox[3]) / resolution)
-            c = round((crop_bbox[0] - grid.x0) / resolution)
-            ny, nx = GridSpec.from_bbox(crop_bbox, resolution).shape
-            values.update(
-                {
-                    name: np.asarray(array[time_index, r : r + ny, c : c + nx])
-                    for name, array in cached_arrays.items()
-                }
-            )
-        normalized = terrain = None
-        if requires_points:
-            attrs = ("Z", "Classification", "ReturnNumber", "Withheld")
-            if chm and config.method in ("spikefree", "lastools"):
-                attrs += ("NumberOfReturns", "GpsTime", "PointSourceId")
-            if chm:
-                attrs += ("ScanAngleRank",)
-            arr = clean_points(query_to_array(provider, query_bbox, year=year, attributes=attrs))
-            if ground_outlier_removal:
-                arr = clean_points(_filter_ground_outliers(arr))
-            if calculate or "chm" in needed:
-                normalized, terrain = normalize_points(
-                    arr,
-                    max_distance=max_ground_distance,
-                    extrapolate=ground_extrapolation,
-                    distances=False,  # per-point ground distances are not used
-                )
-            if calculate:
-                if baba_radius:
-                    values.update(
-                        _extract_metrics_baba(
-                            normalized,
-                            resolution,
-                            crop_bbox,
-                            baba_radius,
-                            cc_threshold,
-                            min_density,
-                            veg_classes,
-                            metrics=calculate,
-                        )
-                    )
-                else:
-                    values.update(
-                        _extract_metrics(
-                            normalized,
-                            resolution,
-                            crop_bbox,
-                            cc_threshold,
-                            min_density,
-                            veg_classes,
-                            metrics=calculate,
-                        )
-                    )
-            if set(needed) & {"gap", "lai"}:
-                stats = gap_statistics(
-                    arr, resolution, crop_bbox, min_density, veg_classes, baba_radius
-                )
-                if "gap" in needed:
-                    for name in gap_names if quality else ("gap",):
-                        store.write_tile(name, resolution, year, stats[name], crop_bbox)
-                if "lai" in needed:
-                    store.write_tile(
-                        "lai",
-                        resolution,
-                        year,
-                        _gap_to_lai(stats["gap"], k, clumping_index),
-                        crop_bbox,
-                    )
-            if "chm" in needed:
-                for name, data in surface_tile(
-                    arr,
-                    crop_bbox,
-                    resolution,
-                    config,
-                    prepared=(normalized, terrain),
-                    diagnostics=quality,
-                ).items():
-                    if name == "chm" or quality:
-                        store.write_tile(name, resolution, year, data, crop_bbox)
-        for name in needed:
-            if name in _METRIC_NAMES:
-                store.write_tile(name, resolution, year, values[name], crop_bbox)
-        if "biomass" in needed:
-            data = np.asarray(model(values), dtype=np.float32)
-            if data.shape != GridSpec.from_bbox(crop_bbox, resolution).shape:
-                raise ValueError("Biomass model returned an incorrect grid shape")
-            store.write_tile("biomass", resolution, year, data, crop_bbox)
-
     try:
-        run_tiled(worker, provider, tiles, store, n_workers)
+        run_tiled(
+            _area_worker,
+            provider,
+            tiles,
+            store,
+            n_workers,
+            parallel=parallel,
+            grid=grid,
+            resolution=resolution,
+            year=year,
+            needed=tuple(needed),
+            calculate=calculate,
+            cached=tuple(cached),
+            time_index=time_index,
+            chm=chm,
+            config=config,
+            model=model,
+            quality=quality,
+            gap_names=gap_names,
+            ground_outlier_removal=ground_outlier_removal,
+            max_ground_distance=max_ground_distance,
+            ground_extrapolation=ground_extrapolation,
+            baba_radius=baba_radius,
+            cc_threshold=cc_threshold,
+            min_density=min_density,
+            veg_classes=tuple(veg_classes),
+            k=k,
+            clumping_index=clumping_index,
+        )
         if input_revision(provider) != revision:
             raise RuntimeError("Input fragments changed during processing; rerun on stable input")
     except Exception:

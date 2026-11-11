@@ -131,6 +131,7 @@ def compute_chm(
     freeze_interval: float = 0.25,
     ground_extrapolation: bool = False,
     fill_max_cells: int = 4,
+    parallel: str = "threads",
 ) -> None:
     """Compute a canopy height model and write it to Zarr.
 
@@ -141,6 +142,11 @@ def compute_chm(
     ``min_pulse_density`` (pulses/m2) or above ``max_scan_angle`` (degrees);
     ``None`` disables a flag. Terrain is missing outside the ground hull
     unless ``ground_extrapolation=True``.
+
+    ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
+    processes instead of threads: faster on many cores (threads level off at
+    two to three times one worker), with one tile in memory per process;
+    scripts then need an ``if __name__ == "__main__":`` guard.
 
     Products share one north-up grid that keeps the requested upper-left
     origin. ``tile_size`` must be a multiple of ``resolution``. Changing
@@ -170,11 +176,17 @@ def compute_dtm(
     max_ground_distance: float | None = None,
     ground_extrapolation: bool = False,
     ground_classes: tuple[int, ...] = GROUND_CLASSES,
+    parallel: str = "threads",
 ) -> None:
     """Compute a digital terrain model and write it to Zarr.
 
     Terrain is missing outside the ground hull unless
     ``ground_extrapolation=True``; ``max_ground_distance`` limits support.
+
+    ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
+    processes instead of threads: faster on many cores (threads level off at
+    two to three times one worker), with one tile in memory per process;
+    scripts then need an ``if __name__ == "__main__":`` guard.
 
     Products share one north-up grid that keeps the requested upper-left
     origin. ``tile_size`` must be a multiple of ``resolution``. Changing
@@ -201,10 +213,16 @@ def compute_dsm(
     quality: bool = True,
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
+    parallel: str = "threads",
 ) -> None:
     """Compute a digital surface model and write it to Zarr.
 
     ``exclude_classes`` are left out of the surface.
+
+    ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
+    processes instead of threads: faster on many cores (threads level off at
+    two to three times one worker), with one tile in memory per process;
+    scripts then need an ``if __name__ == "__main__":`` guard.
 
     Products share one north-up grid that keeps the requested upper-left
     origin. ``tile_size`` must be a multiple of ``resolution``. Changing
@@ -255,11 +273,17 @@ def compute_all(
     freeze_interval: float = 0.25,
     ground_extrapolation: bool = False,
     fill_max_cells: int = 4,
+    parallel: str = "threads",
 ) -> None:
     """Compute DTM, DSM and CHM on one grid and write them to Zarr.
 
     Accepts the options of :func:`compute_chm`, :func:`compute_dtm` and
     :func:`compute_dsm`.
+
+    ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
+    processes instead of threads: faster on many cores (threads level off at
+    two to three times one worker), with one tile in memory per process;
+    scripts then need an ``if __name__ == "__main__":`` guard.
 
     Products share one north-up grid that keeps the requested upper-left
     origin. ``tile_size`` must be a multiple of ``resolution``. Changing

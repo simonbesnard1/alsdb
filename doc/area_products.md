@@ -29,6 +29,20 @@ locked per resolution, so more workers do not raise write throughput
 indefinitely: choose the worker count with point density and buffer size in
 mind.
 
+## Threads or worker processes
+
+Every tiled product (`compute_chm`, `compute_dtm`, `compute_dsm`, `compute_all`,
+`compute_metrics`, `compute_biomass`, `compute_gap_fraction`) takes
+`parallel="threads"` (default) or `parallel="processes"` for `n_workers > 1`.
+Outputs are bit-identical in both modes. Worker processes each open the array
+and the store themselves and hold one tile in memory (about 1.3 GB per worker
+on an 11 M point PNOA tile, against 6.5 GB for one process with 8 threads);
+scripts need an `if __name__ == "__main__":` guard, and a biomass model that
+cannot be pickled (a lambda, a wrapped estimator) keeps the run in threads.
+On a 14-core laptop both modes gave the same run times (8 workers: 3.5 times
+one worker); time both on the target machine with
+`doc/benchmarks/parallel_scaling.py` before choosing.
+
 ## Biomass and resuming
 
 Supply the inputs and identity of a fitted model:

@@ -333,3 +333,84 @@ def test_failed_biomass_run_restarts_and_clears_stale_data(provider, store):
     )
     assert np.isnan(store.to_dataset(10).biomass.values).all()
     assert store._root["10m"]["biomass"].attrs["processing_runs"]["2021"]["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Tiles in worker processes
+# ---------------------------------------------------------------------------
+
+
+def _all_arrays(path):
+    import zarr
+
+    root = zarr.open_group(str(path), mode="r")
+    return {
+        f"{group}/{name}": root[group][name][:]
+        for group in root.group_keys()
+        if not group.startswith("_")
+        for name in root[group].array_keys()
+    }
+
+
+def test_worker_processes_write_the_same_products_as_threads(provider, tmp_path):
+    from alsdb.products.chm import compute_all
+    from alsdb.storage.zarr_store import ALSZarrStore
+
+    bbox = (308000.0, 4688000.0, 309000.0, 4689000.0)
+    outputs = {}
+    for parallel in ("threads", "processes"):
+        path = tmp_path / f"{parallel}.zarr"
+        store = ALSZarrStore(str(path))
+        options = {"tile_size": 500, "n_workers": 2, "parallel": parallel}
+        compute_all(provider, store, 5.0, bbox, 2021, method="pitfree", **options)
+        compute_metrics(provider, store, 20.0, bbox, 2021, metrics=("h95", "cc"), **options)
+        compute_biomass(provider, store, 20.0, bbox=bbox, year=2021, **options)
+        compute_gap_fraction(provider, store, 20.0, bbox=bbox, year=2021, lai=True, **options)
+        outputs[parallel] = _all_arrays(path), store
+    threads, processes = outputs["threads"][0], outputs["processes"][0]
+    assert set(threads) == set(processes) and len(threads) > 20
+    for name in threads:
+        np.testing.assert_array_equal(threads[name], processes[name], err_msg=name)
+    # metadata recorded by the parent: data years, run status, tile markers
+    store = outputs["processes"][1]
+    assert store._root["5m"]["chm"].attrs["data_years"] == [2021]
+    assert store._root["5m"]["chm"].attrs["processing_runs"]["2021"]["status"] == "complete"
+    assert store.completed_tiles("chm", 5.0, 2021) == {0, 1, 2, 3}
+
+
+def test_unpicklable_model_keeps_the_run_in_threads(provider, store, caplog):
+    import logging
+
+    bbox = (308000.0, 4688000.0, 309000.0, 4689000.0)
+    with caplog.at_level(logging.WARNING, logger="alsdb.products._tiling"):
+        compute_biomass(
+            provider, store, 20.0, lambda m: m["h95"] * m["cc"], bbox, 2021, tile_size=500,
+            n_workers=2, parallel="processes", model_features=("h95", "cc"), model_id="lambda",
+        )  # fmt: skip
+    assert "using threads" in caplog.text
+    assert np.isfinite(store._root["20m"]["biomass"][0]).any()
+
+
+def test_store_reopens_in_a_worker_and_defers_metadata(tmp_path):
+    import pickle
+
+    from alsdb.storage.zarr_store import ALSZarrStore
+
+    store = ALSZarrStore(str(tmp_path / "s.zarr"))
+    store.ensure_group("chm", 1.0, (0.0, 0.0, 10.0, 10.0), "EPSG:25830", 10.0)
+    store.prepare_tile_writes(["chm"], 1.0, 2021)
+    worker = pickle.loads(pickle.dumps(store))
+    worker.write_tile("chm", 1.0, 2021, np.ones((10, 10), np.float32), (0.0, 0.0, 10.0, 10.0))
+    assert store._root["1m"]["chm"].attrs["data_years"] == []  # left to the parent
+    written = worker.take_pending_years()
+    assert written == {("1m", "chm", 2021)} and worker.take_pending_years() == set()
+    store.record_data_years(written)
+    assert store._root["1m"]["chm"].attrs["data_years"] == [2021]
+    np.testing.assert_array_equal(store._root["1m"]["chm"][0], 1.0)
+
+
+def test_run_tiled_rejects_an_unknown_parallel_mode():
+    from alsdb.products._tiling import run_tiled
+
+    with pytest.raises(ValueError, match="parallel"):
+        run_tiled(lambda *a, **k: None, None, [], None, 1, parallel="cluster")

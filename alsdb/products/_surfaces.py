@@ -253,6 +253,7 @@ def compute_products(provider, store, products, options):
     # or failed attempt of this exact run: resume it instead of redoing tiles.
     resume = not options.get("overwrite", False)
     skip = None
+    written = []
     for product in needed:
         names = CHM_VARIABLES if product == "chm" and quality else (product,)
         for name in names:
@@ -273,6 +274,9 @@ def compute_products(provider, store, products, options):
         # A tile is skippable only if every product being computed finished it.
         done = store.completed_tiles(product, resolution, year) if resumed else set()
         skip = done if skip is None else skip & done
+        written.extend(names)
+    # Size the arrays for this year now, so tile workers only write chunks.
+    store.prepare_tile_writes(written, resolution, year)
     try:
         run_tiled(
             _worker,
@@ -281,6 +285,7 @@ def compute_products(provider, store, products, options):
             store,
             options.get("n_workers", 1),
             skip=skip or frozenset(),
+            parallel=options.get("parallel", "threads"),
             resolution=resolution,
             year=year,
             products=needed,
