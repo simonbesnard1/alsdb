@@ -24,12 +24,13 @@ import threading
 import time
 from pathlib import Path
 
-TOOLS = ("alsdb", "lasr", "lastools")
+# alsdb_processes: the alsdb steps with the CHM tiles in worker processes
+TOOLS = ("alsdb", "alsdb_processes", "lasr", "lastools")
 FIELDS = [
     "host", "storage", "n_tiles", "area_km2", "cores", "repeat", "tool", "stage", "step",
     "wall_s", "user_s", "sys_s", "peak_rss_gb", "exit_code", "started",
 ]  # fmt: skip
-ENV = {"alsdb": "spikefree", "lasr": "lasr", "lastools": "default"}
+ENV = {"alsdb": "spikefree", "alsdb_processes": "spikefree", "lasr": "lasr", "lastools": "default"}
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +216,9 @@ def _python(tool, args):
 def steps_for(tool, subset, out, cores, args):
     """[(stage, step, command)] for one tool on one tile subset."""
     py = _python(tool, args)
-    if tool == "alsdb":
+    if tool in ("alsdb", "alsdb_processes"):
         tiledb, worker = out / "tiledb", [*py, "-m", "alsdb.benchmark.timing", "worker"]
+        parallel = "processes" if tool == "alsdb_processes" else "threads"
         return [
             ("setup", "ingest", [*worker, "ingest", str(subset), str(tiledb), "--crs", args.crs,
                                  "--workers", str(cores)]),
@@ -224,7 +226,7 @@ def steps_for(tool, subset, out, cores, args):
             ("setup", "optimize", [*worker, "optimize", str(tiledb)]),
             *[("run", method, [*worker, "chm", str(tiledb), str(out / f"{method}.zarr"),
                                "--method", method, "--year", str(args.year),
-                               "--workers", str(cores)])
+                               "--workers", str(cores), "--parallel", parallel])
               for method in ("pitfree", "spikefree")],
         ]  # fmt: skip
     if tool == "lasr":
@@ -259,6 +261,7 @@ def _worker(argv):
     p.add_argument("--method", required=True)
     p.add_argument("--year", type=int, required=True)
     p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--parallel", choices=["threads", "processes"], default="threads")
     args = ap.parse_args(argv)
 
     from alsdb.core.alsdatabase import ALSDatabase
@@ -281,7 +284,7 @@ def _worker(argv):
     compute_chm(
         db, ALSZarrStore(args.zarr), resolution=1.0, year=args.year, method=args.method,
         tile_size=1000.0, n_workers=args.workers, first_returns_only=True, pit_fill=False,
-        quality=False,
+        quality=False, parallel=args.parallel,
     )  # fmt: skip
 
 
@@ -352,6 +355,7 @@ def run(args):
         for c in cores
         for r in range(1, args.repeats + 1)
         for tool in args.tools
+        if not (tool == "alsdb_processes" and c == 1)  # one worker: same as threads
     ]
     print(f"tile size {size} m; blocks: " + ", ".join(
         f"{n} tiles ({n * size * size / 1e6:g} km2)" for n in sorted(blocks)))  # fmt: skip
@@ -442,7 +446,7 @@ def report(csv_path):
     lines += ["", "alsdb break-even: product runs after which alsdb (setup + N runs) is",
               "faster in total than the other tool (its own setup + N runs).", ""]  # fmt: skip
     for (storage, n, cores, tool), (setup, runs) in sorted(rows.items()):
-        if tool == "alsdb" or (storage, n, cores, "alsdb") not in rows:
+        if tool.startswith("alsdb") or (storage, n, cores, "alsdb") not in rows:
             continue
         a_setup, a_run = rows[(storage, n, cores, "alsdb")]
         if runs > a_run:

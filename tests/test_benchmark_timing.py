@@ -118,6 +118,18 @@ def test_full_alsdb_run_resumes_and_reports(tiles, tmp_path, capsys):
     assert "alsdb" in text and "km2/core-h" in text
 
 
+def test_alsdb_processes_runs_only_with_several_cores(tiles, tmp_path):
+    work, local = tmp_path / "work", tmp_path / "local"
+    timing.main([str(tiles), str(work), "--areas", "1", "--cores", "1", "2", "--repeats", "1",
+                 "--tools", "alsdb_processes", "--launcher", "direct",
+                 "--local-dir", str(local)])  # fmt: skip
+    rows = list(csv.DictReader((work / "timings.csv").open()))
+    assert {r["cores"] for r in rows} == {"2"}  # one core would repeat the threaded run
+    assert [r["step"] for r in rows] == ["ingest", "optimize", "pitfree", "spikefree"]
+    assert all(r["exit_code"] == "0" for r in rows), [r for r in rows if r["exit_code"] != "0"]
+    assert "alsdb_processes" in timing.report(work / "timings.csv")
+
+
 FAKE_TOOL = """#!/bin/sh
 if [ "$1" = "-version" ]; then echo "fake 260123"; exit 0; fi
 out=""; prev=""

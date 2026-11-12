@@ -84,6 +84,10 @@ One-off preparation and per-run work are kept apart:
 | LAStools | `lasheight` | `las2dem -spike_free` + `lascanopy -max` |
 | lasR | – | normalization + pitfree + spikefree |
 
+`alsdb_processes` repeats the alsdb steps with the CHM tiles in worker
+processes (`parallel="processes"`) instead of threads; it is skipped at one
+core, where both are the same. It is part of the default `--tools`.
+
 Factors are area (nested square blocks of tiles near the survey centre,
 `--areas 1 4 16`), cores (`--cores 1 4 8`), storage (`--storage local` copies
 the input to `--local-dir`; `network` reads it in place) and `--repeats`.
