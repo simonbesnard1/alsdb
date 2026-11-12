@@ -31,6 +31,20 @@ PDAL_DTYPES: dict[str, type] = {
 }
 
 
+def release_query_buffers() -> None:
+    """Free the result buffers of finished TileDB queries now.
+
+    Every TileDB-Py read leaves a few objects in a reference cycle that keep
+    its result buffers alive until Python's cyclic collector runs, which can
+    take hundreds of queries: reading 300 plots of the Barcelona array that
+    way held 7.7 GB. They are young, so collecting generation 0 after the
+    results are copied frees them for about 1 ms per query.
+    """
+    import gc
+
+    gc.collect(0)
+
+
 def query_to_array(
     provider: TileDBProvider,
     bbox: tuple[float, float, float, float] | None,
@@ -81,6 +95,8 @@ def query_to_array(
             out[name] = data[name]  # assignment casts to the field type; no astype copy
         else:
             out[name] = 0  # attribute absent from the array: zeros
+    del data
+    release_query_buffers()
     return out
 
 

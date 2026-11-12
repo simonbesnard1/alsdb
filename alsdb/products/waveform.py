@@ -218,7 +218,12 @@ def _query_footprint(
     if not mask.any():
         return None
 
-    return {k: v[mask] for k, v in data.items()}
+    points = {k: v[mask] for k, v in data.items()}  # boolean indexing copies
+    del data
+    from alsdb.products._tiling import release_query_buffers
+
+    release_query_buffers()
+    return points
 
 
 # ---------------------------------------------------------------------------
