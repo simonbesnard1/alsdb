@@ -241,12 +241,12 @@ Aboveground biomass
 
 **Calibrating the Næsset model:**
 
-Use :func:`alsdb.products.biomass.calibrate_naesset` with field inventory plots
+Use :func:`alsdb.products.allometry.calibrate_naesset` with field inventory plots
 co-located with ALS acquisitions (≥ 20 plots required; ≥ 50 recommended):
 
 .. code-block:: python
 
-    from alsdb.products.biomass import calibrate_naesset, naesset_model
+    from alsdb.products.allometry import calibrate_naesset, naesset_model
 
     (a, b, c), pcov = calibrate_naesset(
         h95_plots, cc_plots, agb_plots, return_cov=True
@@ -278,7 +278,8 @@ Default parameters: ``a=0.8``, ``b=1.8``, ``c=0.5``. Output in Mg ha⁻¹.
 .. code-block:: python
 
     from sklearn.ensemble import RandomForestRegressor
-    from alsdb.products.biomass import compute_biomass, wrap_sklearn_model
+    from alsdb.products.allometry import wrap_sklearn_model
+    from alsdb.products.biomass import compute_biomass
 
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
     # X_train columns must match _METRIC_NAMES order (16 features by default)

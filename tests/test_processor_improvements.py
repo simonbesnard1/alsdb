@@ -289,7 +289,7 @@ def test_fractional_returns_preserve_single_pulse_weight():
 
 
 def test_spatial_biomass_validation_holds_out_whole_groups():
-    from alsdb.products.biomass import validate_naesset
+    from alsdb.products.allometry import validate_naesset
 
     rng = np.random.default_rng(14)
     h = rng.uniform(5, 35, 100)

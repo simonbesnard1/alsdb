@@ -209,9 +209,11 @@ def compute_area_products(
     :func:`~alsdb.products._tiling.run_tiled`); a biomass model that cannot be
     pickled (a lambda, a wrapped estimator) keeps the run in threads.
     """
+    from alsdb.products.allometry import (
+        naesset_model,
+    )
     from alsdb.products.biomass import (
         _METRIC_NAMES,
-        naesset_model,
     )
     from alsdb.products.gap import _gap_to_lai
 

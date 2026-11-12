@@ -82,10 +82,10 @@ Structural metrics and biomass
 
    products.biomass.compute_metrics
    products.biomass.compute_biomass
-   products.biomass.naesset_model
-   products.biomass.calibrate_naesset
-   products.biomass.wrap_sklearn_model
-   products.biomass.wrap_torch_model
+   products.allometry.naesset_model
+   products.allometry.calibrate_naesset
+   products.allometry.wrap_sklearn_model
+   products.allometry.wrap_torch_model
    products.allometry.LinearAGBModel
    products.allometry.fit_linear_agb_model
    products.allometry.cross_validate

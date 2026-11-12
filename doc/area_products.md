@@ -48,7 +48,8 @@ one worker); time both on the target machine with
 Supply the inputs and identity of a fitted model:
 
 ```python
-from alsdb.products.biomass import compute_biomass, naesset_model
+from alsdb.products.allometry import naesset_model
+from alsdb.products.biomass import compute_biomass
 
 compute_biomass(
     provider,

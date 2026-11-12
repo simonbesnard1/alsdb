@@ -8,17 +8,19 @@ and compute_metrics / compute_biomass (integration)."""
 import numpy as np
 import pytest
 
+from alsdb.products.allometry import (
+    calibrate_naesset,
+    naesset_model,
+    wrap_sklearn_model,
+    wrap_torch_model,
+)
 from alsdb.products.biomass import (
     _extract_metrics,
     _extract_metrics_baba,
     _fhd_from_hag,
     _vci_from_hag,
-    calibrate_naesset,
     compute_biomass,
     compute_metrics,
-    naesset_model,
-    wrap_sklearn_model,
-    wrap_torch_model,
 )
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)

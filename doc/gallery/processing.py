@@ -111,7 +111,7 @@ compute_metrics(
 #
 # The Næsset (2002) power-law model ``AGB = a × h95^b × cc^c`` requires
 # region- and species-specific calibration against field inventory plots.
-# Use :py:func:`alsdb.products.biomass.calibrate_naesset` to fit coefficients;
+# Use :py:func:`alsdb.products.allometry.calibrate_naesset` to fit coefficients;
 # pass ``return_cov=True`` to also retrieve the parameter covariance matrix.
 
 from alsdb.products.biomass import (
@@ -144,14 +144,14 @@ compute_biomass(
 # Aboveground biomass — scikit-learn model
 # -----------------------------------------
 #
-# :py:func:`alsdb.products.biomass.wrap_sklearn_model` wraps any fitted
+# :py:func:`alsdb.products.allometry.wrap_sklearn_model` wraps any fitted
 # sklearn-compatible estimator as a ``model_fn``.  The default feature set is
 # all 16 metrics from ``compute_metrics()``; pass ``features=[...]`` to match
 # the column order used during training.
 
 # Example with a pre-trained Random Forest (not executed here):
 # from sklearn.ensemble import RandomForestRegressor
-# from alsdb.products.biomass import wrap_sklearn_model
+# from alsdb.products.allometry import wrap_sklearn_model
 #
 # rf = RandomForestRegressor(n_estimators=200)
 # rf.fit(X_train, y_agb)   # X columns must match _METRIC_NAMES order
