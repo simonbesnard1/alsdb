@@ -11,8 +11,6 @@ import pytest
 from alsdb.products.allometry import (
     calibrate_naesset,
     naesset_model,
-    wrap_sklearn_model,
-    wrap_torch_model,
 )
 from alsdb.products.biomass import (
     _extract_metrics,
@@ -21,6 +19,8 @@ from alsdb.products.biomass import (
     _vci_from_hag,
     compute_biomass,
     compute_metrics,
+    wrap_sklearn_model,
+    wrap_torch_model,
 )
 
 BBOX = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)

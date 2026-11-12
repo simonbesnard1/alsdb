@@ -94,11 +94,11 @@ This is a HAG artefact. The Delaunay TIN built from ground points becomes unreli
 How do I use a scikit-learn biomass model?
 -------------------------------------------
 
-Use :py:func:`alsdb.products.allometry.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
+Use :py:func:`alsdb.products.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
 
 .. code-block:: python
 
-    from alsdb.products.allometry import wrap_sklearn_model
+    from alsdb.products.biomass import wrap_sklearn_model
     from alsdb.products.biomass import compute_biomass
     from sklearn.ensemble import GradientBoostingRegressor
 

@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Simon Besnard
 # SPDX-FileCopyrightText: 2026 Helmholtz Centre Potsdam - GFZ German Research Centre for Geosciences
 
-"""Aboveground biomass models: power law, GEDI L4A forms, machine learning.
+"""Allometric equations for aboveground biomass, and their fitting.
 
-Every model here is a ``model_fn`` for
+Every equation here is a ``model_fn`` for
 :func:`~alsdb.products.biomass.compute_biomass`: a callable taking the metric
 arrays and returning biomass (Mg/ha).
 
@@ -14,8 +14,9 @@ arrays and returning biomass (Mg/ha).
 - :class:`LinearAGBModel`: linear models on transformed variables, the
   functional forms of GEDI L4A, with :func:`fit_linear_agb_model`,
   :func:`cross_validate` and the published models (:func:`gedi_l4a_model`).
-- :func:`wrap_sklearn_model` and :func:`wrap_torch_model`: fitted
-  machine-learning models.
+
+Trained machine-learning models are wrapped in :mod:`alsdb.products.biomass`
+(``wrap_sklearn_model``, ``wrap_torch_model``).
 
 GEDI's footprint biomass product (L4A; Kellner et al. 2023, Duncanson et al.
 2022) predicts aboveground biomass density (AGBD, Mg/ha) with linear models
@@ -595,232 +596,6 @@ def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
         "bias": float(np.mean(prediction[valid] - agb[valid])),
         "residual_quantiles": np.quantile(residual, [0.025, 0.5, 0.975]),
     }
-
-
-# ---------------------------------------------------------------------------
-# Machine-learning models
-# ---------------------------------------------------------------------------
-
-
-def wrap_sklearn_model(
-    estimator,
-    features: list[str] | None = None,
-    zero_without_cover: bool = True,
-    model_id: str | None = None,
-) -> Callable:
-    """Wrap a fitted model with ``predict(X)`` as a ``model_fn`` for :func:`compute_biomass`.
-
-    Works for scikit-learn estimators and anything with the same ``predict``
-    interface (XGBoost, LightGBM, a Keras model; PyTorch networks go through
-    :func:`wrap_torch_model`):
-    ``X`` is (cells, features) in *features* order, predictions of shape
-    (cells,) or (cells, 1). Models trained on a DataFrame receive one with
-    the same column names. Tiles run in threads, so ``predict`` may be called
-    concurrently when ``n_workers > 1``.
-
-    Parameters
-    ----------
-    estimator:
-        Fitted model with ``predict(X)``.
-    features:
-        Metric names in training order. Default: the estimator's
-        ``feature_names_in_`` (fitted on a DataFrame), otherwise all metrics
-        in :data:`_METRIC_NAMES` order. Given together with
-        ``feature_names_in_``, they must match it.
-    zero_without_cover:
-        Give 0 to cells without canopy cover (``cc == 0``, needs ``cc`` among
-        the features) whose other features are missing, e.g. height metrics
-        of cells without vegetation returns, as :func:`naesset_model`. Cells
-        with all features are always predicted.
-    model_id:
-        Identifier of the fitted model for safe resume; default a hash of
-        the model and features.
-
-    Returns
-    -------
-    Callable
-        ``model_fn(metrics) -> np.ndarray``; cells with missing features are
-        NaN (see *zero_without_cover*). Its ``model_id`` is a hash of the
-        model and features, or None if the model cannot be pickled: pass
-        ``model_id`` to :func:`compute_biomass` then, or it is recomputed.
-
-    Raises
-    ------
-    ValueError
-        If *features* are unknown or disagree with the estimator's feature
-        names or feature count.
-    """
-    import warnings
-
-    from alsdb.products.biomass import _METRIC_NAMES
-
-    names = getattr(estimator, "feature_names_in_", None)
-    names = None if names is None else [str(n) for n in names]
-    if features is None:
-        feat = list(names) if names is not None else list(_METRIC_NAMES)
-    else:
-        feat = list(features)
-        if names is not None and feat != names:
-            raise ValueError(
-                f"features {feat} differ from the names the estimator was fitted with {names}"
-            )
-    unknown = set(feat) - set(_METRIC_NAMES)
-    if unknown:
-        raise ValueError(f"Unknown metrics: {sorted(unknown)}")
-    expected = getattr(estimator, "n_features_in_", None)
-    if expected is not None and expected != len(feat):
-        raise ValueError(
-            f"The estimator expects {expected} features, got {len(feat)}: pass features="
-        )
-    zero = zero_without_cover and "cc" in feat
-
-    def _model(metrics: dict[str, np.ndarray]) -> np.ndarray:
-        shape = metrics[feat[0]].shape
-        # Stack into (n_pixels, n_features); ravel preserves north-up order
-        X = np.column_stack([np.asarray(metrics[k], dtype=np.float64).ravel() for k in feat])
-        valid = np.isfinite(X).all(axis=1)
-        result = np.full(X.shape[0], np.nan, dtype=np.float32)
-        if valid.any():
-            inputs = X[valid]
-            if names is not None:
-                import pandas as pd
-
-                inputs = pd.DataFrame(inputs, columns=names)
-            predicted = np.asarray(estimator.predict(inputs), dtype=np.float32)
-            if predicted.size != int(valid.sum()):
-                raise ValueError(
-                    f"predict returned {predicted.shape} for {int(valid.sum())} cells; "
-                    "expected one value per cell"
-                )
-            result[valid] = predicted.reshape(-1)
-        if zero:
-            cover = np.asarray(metrics["cc"], dtype=np.float64).ravel()
-            result[~valid & (cover == 0)] = 0.0
-        return result.reshape(shape)
-
-    _model.required_metrics = tuple(feat)
-    import joblib
-
-    if model_id is not None:
-        _model.model_id = model_id
-        return _model
-    try:
-        _model.model_id = joblib.hash((estimator, feat, zero))
-    except Exception as exc:  # noqa: BLE001 - pickling failures vary by framework
-        warnings.warn(
-            f"Cannot hash the model ({type(exc).__name__}); pass model_id to reuse results",
-            UserWarning,
-            stacklevel=2,
-        )
-        _model.model_id = None
-    return _model
-
-
-class _TorchPredictor:
-    """``predict(X)`` for a PyTorch network: scaled float32 batches in evaluation mode."""
-
-    def __init__(self, net, device, transform, batch_size):
-        import threading
-
-        self.net = net.to(device).eval()
-        self.device, self.transform, self.batch_size = device, transform, batch_size
-        # one forward pass at a time: tiles run in threads and share the network
-        self.lock = threading.Lock()
-
-    def predict(self, X):
-        import torch
-
-        X = np.asarray(self.transform(X) if self.transform is not None else X, np.float32)
-        outputs = []
-        with self.lock, torch.inference_mode():
-            for start in range(0, len(X), self.batch_size):
-                batch = torch.from_numpy(X[start : start + self.batch_size]).to(self.device)
-                outputs.append(self.net(batch).float().cpu().numpy().reshape(-1))
-        return np.concatenate(outputs) if outputs else np.empty(0, np.float32)
-
-
-def wrap_torch_model(
-    net,
-    features: list[str],
-    *,
-    transform: Callable | None = None,
-    device: str = "cpu",
-    batch_size: int = 65_536,
-    model_id: str | None = None,
-    zero_without_cover: bool = True,
-) -> Callable:
-    """Wrap a trained PyTorch network as a ``model_fn`` for :func:`compute_biomass`.
-
-    The network gets a float32 tensor of shape (cells, features), in
-    *features* order, and returns one value per cell, (cells,) or (cells, 1).
-    It runs in evaluation mode without gradients, in batches, one forward
-    pass at a time (tiles run in threads and share it). Requires ``torch``.
-
-    Preferably the network normalises its inputs itself, with the training
-    mean and standard deviation as buffers (``register_buffer``): they are
-    saved with the weights, follow the network to *device* and enter the
-    default ``model_id``. ``transform`` is for networks trained with an
-    external scaler. See doc/area_products.md for an example.
-
-    Parameters
-    ----------
-    net:
-        Trained ``torch.nn.Module`` (moved to *device*, set to eval mode).
-    features:
-        Metric names in training order; a network does not record them, so
-        a wrong order is not detected.
-    transform:
-        External input scaling used in training, applied to the (cells,
-        features) array before the network, e.g. a fitted scikit-learn
-        ``StandardScaler().transform``; None (default) when the network
-        normalises its inputs. Predictions are returned as the network gives
-        them: undo any target scaling inside the network.
-    device:
-        Torch device, e.g. ``"cpu"`` or ``"cuda"``.
-    batch_size:
-        Cells per forward pass.
-    model_id:
-        Identifier of the trained model for safe resume. Default: a hash of
-        the network class, its weights, *features* and *transform*; None
-        (recomputed each run, with a warning) if the transform cannot be
-        pickled, e.g. a lambda: pass one then.
-    zero_without_cover:
-        As :func:`wrap_sklearn_model`.
-
-    Returns
-    -------
-    Callable
-        ``model_fn(metrics) -> np.ndarray``, as :func:`wrap_sklearn_model`.
-    """
-    import warnings
-
-    import joblib
-
-    if not features:
-        raise ValueError("features must name the network's inputs in training order")
-    if batch_size < 1:
-        raise ValueError("batch_size must be positive")
-    model = wrap_sklearn_model(
-        _TorchPredictor(net, device, transform, int(batch_size)),
-        list(features),
-        zero_without_cover=zero_without_cover,
-        model_id="pending",
-    )
-    if model_id is None:
-        try:
-            weights = {k: v.detach().cpu().numpy() for k, v in net.state_dict().items()}
-            model_id = joblib.hash(
-                (type(net).__qualname__, weights, list(features), transform, zero_without_cover)
-            )
-        except Exception as exc:  # noqa: BLE001 - e.g. a lambda transform cannot be pickled
-            warnings.warn(
-                f"Cannot hash the network or transform ({type(exc).__name__}, e.g. a lambda); "
-                "pass model_id to reuse results",
-                UserWarning,
-                stacklevel=2,
-            )
-    model.model_id = model_id
-    return model
 
 
 # ---------------------------------------------------------------------------

@@ -278,7 +278,7 @@ Default parameters: ``a=0.8``, ``b=1.8``, ``c=0.5``. Output in Mg ha⁻¹.
 .. code-block:: python
 
     from sklearn.ensemble import RandomForestRegressor
-    from alsdb.products.allometry import wrap_sklearn_model
+    from alsdb.products.biomass import wrap_sklearn_model
     from alsdb.products.biomass import compute_biomass
 
     rf = RandomForestRegressor(n_estimators=200, random_state=42)
