@@ -31,6 +31,9 @@ PDAL_DTYPES: dict[str, type] = {
 }
 
 
+_QUERIES_SINCE_FULL_COLLECTION = [0]
+
+
 def release_query_buffers() -> None:
     """Free the result buffers of finished TileDB queries now.
 
@@ -38,11 +41,20 @@ def release_query_buffers() -> None:
     its result buffers alive until Python's cyclic collector runs, which can
     take hundreds of queries: reading 300 plots of the Barcelona array that
     way held 7.7 GB. They are young, so collecting generation 0 after the
-    results are copied frees them for about 1 ms per query.
+    results are copied frees them for about 1 ms per query. With threads, a
+    collection while other reads are running promotes their cycles to older
+    generations, so every 16th call collects all generations (4 threads: 3.3
+    GB after 150 plots with generation 0 alone).
     """
     import gc
 
-    gc.collect(0)
+    count = _QUERIES_SINCE_FULL_COLLECTION
+    count[0] += 1
+    if count[0] >= 16:
+        count[0] = 0
+        gc.collect()
+    else:
+        gc.collect(0)
 
 
 def query_to_array(
