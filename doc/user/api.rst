@@ -189,3 +189,5 @@ Utilities
 
    utils.constants.ALSProduct
    setup_logging
+   datasets.sample_laz
+   datasets.sample_info

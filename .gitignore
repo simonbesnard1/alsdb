@@ -1,5 +1,5 @@
-output/
-data/
+/output/
+/data/
 
 # Local scripts (data ingestion, one-off utilities)
 scripts/

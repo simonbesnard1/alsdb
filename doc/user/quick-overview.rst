@@ -4,7 +4,15 @@
 Quick Overview
 ##############
 
-This section provides a brief end-to-end example of the alsDB workflow: ingesting LAZ files, querying points, and computing a Canopy Height Model. For detailed explanations refer to :ref:`fundamentals`.
+This page runs the whole alsDB workflow on a sample tile that ships with the
+package: ingest, query, terrain and canopy height, structural metrics and a
+simulated GEDI waveform. Copy the blocks in order into a script or notebook;
+they run as written (a test executes this page). It takes about ten seconds.
+
+The sample is 100 m × 100 m of tropical forest in Acre, Brazil, from the 2014
+survey of the Sustainable Landscapes Brazil project (dos-Santos, Keller and
+Morton 2019, ORNL DAAC, https://doi.org/10.3334/ORNLDAAC/1644): about 66 points
+per m², classified ground and vegetation, canopy up to ~45 m.
 
 Setup
 -----
@@ -13,153 +21,134 @@ Setup
 
     import alsdb
     from alsdb import ALSDatabase, ALSProvider
+    from alsdb.datasets import sample_info, sample_laz
     from alsdb.storage import ALSZarrStore
 
-    alsdb.setup_logging()   # INFO-level logging to stderr
+    alsdb.setup_logging()  # INFO-level progress messages
+
+    info = sample_info()
+    print(info["crs"], info["year"], info["bbox"])  # EPSG:32719 2014 (658180.0, ...)
 
 Ingest a LAZ tile
 -----------------
 
-:py:class:`alsdb.ALSDatabase` reads the LAZ header automatically to extract the acquisition year, CRS, and bounding box. The TileDB array is created on first write.
+:py:class:`alsdb.ALSDatabase` stores the points in a TileDB array, under the
+survey year and CRS read from the LAZ header. The array is created on first
+write; ingesting the same file again is skipped (it is recorded in a manifest).
 
 .. code-block:: python
 
-    db = ALSDatabase(storage_type="local", uri="my_array")
-    db.ingest("path/to/tile.laz")
+    db = ALSDatabase(storage_type="local", uri="quickstart_array")
+    db.ingest(sample_laz())
 
-To ingest a full directory in parallel:
+    print(db.stored_crs())          # EPSG:32719
+    print(db.list_ingested()[0])    # file, year, CRS, bounds, number of points
+
+For your own survey, ingest a whole folder in parallel:
 
 .. code-block:: python
+   :class: norun
 
     from pathlib import Path
 
     paths = sorted(Path("/data/als/").glob("*.laz"))
-    db.ingest_many(paths, n_workers=8, consolidate_every=50)
-
-Already-ingested files (tracked in the manifest) are skipped automatically.
+    db.ingest_many(paths, n_workers=8)
 
 Query points
 ------------
 
-:py:class:`alsdb.ALSProvider` queries the TileDB array by bounding box and year.
+:py:class:`alsdb.ALSProvider` reads points by bounding box and year.
 
 .. code-block:: python
 
-    reader = ALSProvider(storage_type="local", uri="my_array")
+    reader = ALSProvider(storage_type="local", uri="quickstart_array")
+    print(reader.available_years())  # [2014]
 
-    # All points in a bounding box (returns pandas DataFrame)
-    df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000)
+    df = reader.query_bbox(*info["bbox"], year=2014)  # pandas DataFrame
+    print(len(df), "points")
 
-    # Restrict to a single survey year
-    df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
+    ds_points = reader.to_xarray(*info["bbox"], year=2014)  # the same as xarray
 
-    # Which survey years are stored?
-    print(reader.available_years())   # e.g. [2019, 2021, 2023]
+Terrain and canopy height
+-------------------------
 
-    # As xarray Dataset
-    ds = reader.to_xarray(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
-
-Compute a Canopy Height Model
------------------------------
-
-All processing functions write directly to an ``ALSZarrStore``: a Zarr v3 hierarchy that holds multiple resolutions and survey years.
+All products are written to an :py:class:`~alsdb.storage.ALSZarrStore`, a Zarr
+store holding several resolutions and survey years. ``compute_all`` makes the
+DTM, DSM and CHM in one pass; ``method`` chooses the CHM algorithm (see
+:ref:`algorithms`).
 
 .. code-block:: python
 
-    from alsdb.products.chm import compute_chm
+    from alsdb.products.chm import compute_all
 
-    store = ALSZarrStore("output/forest.zarr")
+    store = ALSZarrStore("quickstart.zarr")
+    compute_all(reader, store, resolution=1.0, year=2014, method="pitfree")
 
-    compute_chm(
-        provider=reader,
-        store=store,
-        resolution=1.0,
-        bbox=(308_000, 4_688_000, 310_000, 4_690_000),
-        year=2021,
-    )
+    ds = store.to_dataset(resolution=1.0)  # xarray: dtm, dsm, chm and quality layers
+    chm = ds["chm"].sel(time=2014)
+    print(f"CHM: mean {float(chm.mean()):.1f} m, max {float(chm.max()):.1f} m")
 
-For a large area, split into sub-tiles with a parallel worker pool:
+    from alsdb.utils.viz_raster import plot_chm
+
+    plot_chm(store, resolution=1.0, year=2014)
+
+Large areas are processed in buffered tiles, in parallel:
+
+.. code-block:: python
+   :class: norun
+
+    compute_all(reader, store, resolution=1.0, year=2021, method="pitfree",
+                tile_size=500.0, tile_buffer=50.0, n_workers=8)
+
+Structural metrics and biomass
+------------------------------
+
+``compute_metrics`` writes height percentiles, canopy cover, foliage height
+diversity and height strata per cell.
 
 .. code-block:: python
 
-    compute_chm(
-        provider=reader,
-        store=store,
-        resolution=1.0,
-        year=2021,
-        tile_size=500.0,    # 500 m sub-tiles
-        tile_buffer=50.0,   # 50 m buffer for accurate HAG at tile edges
-        n_workers=4,
-    )
+    from alsdb.products.biomass import compute_metrics
 
-Read the result as xarray
---------------------------
+    compute_metrics(reader, store, resolution=10.0, year=2014)
 
-.. code-block:: python
-
-    ds = store.to_dataset(resolution=1.0)     # coords: time, y, x
-    chm = ds["chm"].sel(time=2021)            # DataArray (ny, nx)
-
-    # CRS is attached via rioxarray if available
-    print(ds.rio.crs)
-
-Compute biomass and structural metrics
----------------------------------------
-
-.. code-block:: python
-
-    from alsdb.products.biomass import compute_biomass, compute_metrics
-
-    # 16 LiDAR structural metrics at 10 m:
-    # height percentiles (h50, h75, h95, hmax, hmean), canopy cover (cc),
-    # point density, FHD, VCI, CRR, and 6 height-stratum proportions (pv_*)
-    compute_metrics(
-        provider=reader, store=store, resolution=10.0, year=2021,
-        min_density=1.0,   # mask cells below 1 pt m⁻² (optional guard)
-    )
-
-    # Aboveground biomass using the Næsset (2002) model
-    # Always calibrate coefficients against field plots before scientific use
-    compute_biomass(provider=reader, store=store, resolution=10.0, year=2021)
-
-    # Read results
     ds10 = store.to_dataset(resolution=10.0)
-    agb = ds10["biomass"].sel(time=2021)
+    print(f"h95 {float(ds10['h95'].mean()):.1f} m, cover {float(ds10['cc'].mean()):.2f}")
 
-Multi-temporal change detection
----------------------------------
+``compute_biomass`` applies a model to those metrics: the Næsset power law,
+the GEDI L4A models, your own fitted model, or a scikit-learn or PyTorch
+model. Its default coefficients are placeholders: calibrate them against field
+plots first (``plot_metrics`` and ``calibrate_naesset``; see :ref:`algorithms`).
 
-:py:func:`alsdb.products.change.compute_change` computes pixel-wise absolute change,
-relative change, and a gain/loss flag between two survey years:
-
-.. code-block:: python
-
-    from alsdb.products.change import compute_change
-
-    # Compute CHM change 2017 → 2021, ignoring sub-0.5 m differences
-    compute_change(store, "chm", year_from=2017, year_to=2021,
-                   resolution=1.0, min_delta=0.5, pct_min_abs=0.5)
-
-    # Three products are written: chm_delta, chm_delta_pct, chm_change_flag
-    ds = store.to_dataset(resolution=1.0)
-    gain_loss = ds["chm_change_flag"].sel(time=2021)  # +1 gain, −1 loss, 0 stable
-
-Simulate large-footprint waveforms
------------------------------------
+Simulate a GEDI waveform
+------------------------
 
 .. code-block:: python
 
     from alsdb.products.waveform import simulate_waveform
 
-    result = simulate_waveform(
-        provider=reader,
-        center_x=308_500.0, center_y=4_689_000.0,
-        footprint_radius=12.5,
-        year=2021,
-    )
-    print(result.rh[98])    # RH98 height above ground (m)
-    print(result.cover)     # canopy cover fraction
+    result = simulate_waveform(reader, center_x=658_230.0, center_y=8_901_910.0, year=2014)
+    print(f"RH98 {result.rh[98]:.1f} m, cover {result.cover:.2f}")
+
+    from alsdb.utils.viz import plot_waveform
+
+    plot_waveform(result)
+
+Change between surveys
+----------------------
+
+With two survey years in the same array and store, ``compute_change`` maps the
+difference of any product:
+
+.. code-block:: python
+   :class: norun
+
+    from alsdb.products.change import compute_change
+
+    compute_change(store, "chm", year_from=2017, year_to=2021, resolution=1.0, min_delta=0.5)
+    # writes chm_delta, chm_delta_pct and chm_change_flag (+1 gain, -1 loss, 0 stable)
 
 ---
 
-For a complete explanation of these concepts, including the two-layer storage architecture, tiling strategy, and overwrite semantics, continue to :ref:`fundamentals`.
+Next: :ref:`algorithms` for every method and its defaults, and
+:ref:`fundamentals` for the storage design, tiling and overwrite rules.

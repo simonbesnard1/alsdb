@@ -73,22 +73,37 @@ pixi shell            # activate the environment
 
 ## Quick start
 
+A sample tile ships with the package, so this runs as written:
+
 ```python
 import alsdb
 from alsdb import ALSDatabase, ALSProvider
+from alsdb.datasets import sample_laz
+from alsdb.products.chm import compute_all
+from alsdb.storage import ALSZarrStore
 
 alsdb.setup_logging()
 
-# Ingest
-db = ALSDatabase(storage_type="local", uri="my_array")
-db.ingest("path/to/tile.laz")  # year, CRS, bbox from LAZ header
-db.ingest_many(paths, n_workers=8)  # batch — already-ingested files skipped
+# Ingest: year, CRS and bounds are read from the LAZ header
+db = ALSDatabase(storage_type="local", uri="quickstart_array")
+db.ingest(sample_laz())  # your own survey: db.ingest_many(paths, n_workers=8)
 
 # Query
-reader = ALSProvider(storage_type="local", uri="my_array")
-df = reader.query_bbox(308_000, 4_688_000, 310_000, 4_690_000, year=2021)
-print(reader.available_years())  # [2019, 2021, 2023]
+reader = ALSProvider(storage_type="local", uri="quickstart_array")
+print(reader.available_years())  # [2014]
+
+# DTM, DSM and pit-free CHM at 1 m
+store = ALSZarrStore("quickstart.zarr")
+compute_all(reader, store, resolution=1.0, year=2014, method="pitfree")
+print(store.to_dataset(resolution=1.0)["chm"].max().item())  # ~42 m
 ```
+
+The [Quick Overview](https://alsdb.readthedocs.io/en/latest/user/quick-overview.html)
+continues with metrics, biomass and GEDI waveforms. Sample data: 100 m x 100 m of
+the 2014 RIB_A01 survey, Acre, Brazil (Sustainable Landscapes Brazil): dos-Santos,
+M.N., M.M. Keller, and D.C. Morton. 2019. LiDAR Surveys over Selected Forest
+Research Sites, Brazilian Amazon, 2008-2018. ORNL DAAC.
+https://doi.org/10.3334/ORNLDAAC/1644
 
 ---
 
