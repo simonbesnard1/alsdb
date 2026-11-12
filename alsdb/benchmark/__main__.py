@@ -1,6 +1,7 @@
 """Command-line entry point for alsdb validation benchmarks."""
 
 import argparse
+import json
 import sys
 
 
@@ -240,6 +241,16 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser("calibrate-biomass",
+                       help="fit the Næsset AGB model to Spanish inventory (IFN4) plots")  # fmt: skip
+    p.add_argument("tiledb", help="ALS TileDB array (local path)")
+    p.add_argument("nfi_csv", help="harmonised IFN plot-level CSV")
+    p.add_argument("out_dir")
+    p.add_argument("--province", nargs="*", help="INE province codes to keep (e.g. 8)")
+    p.add_argument("--radius", type=float, default=25.0, help="plot radius (m)")
+    p.add_argument("--workers", type=int, default=8, help="threads reading plots")
+    p.add_argument("--crs", help="array CRS when not stored")
+
     p = sub.add_parser("gedi-attenuation",
                        help="GEDI attenuation on every block of Lidar HD selections (gedi env)")  # fmt: skip
     p.add_argument("out_dir")
@@ -437,6 +448,12 @@ def main(argv=None):
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep,
                        keep_classes=tuple(args.classes) if args.classes else None,
                        candidate_fraction=args.candidate_fraction, centre=args.centre))  # fmt: skip
+    elif args.command == "calibrate-biomass":
+        from alsdb.benchmark.biomass_calibration import run_calibration
+
+        record = run_calibration(args.tiledb, args.nfi_csv, args.out_dir, provinces=args.province,
+                                 radius=args.radius, n_workers=args.workers, crs=args.crs)  # fmt: skip
+        print(json.dumps(record["results"], indent=2))
     elif args.command == "gedi-attenuation":
         from alsdb.benchmark.gedi import run_blocks
 
