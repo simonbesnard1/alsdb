@@ -39,6 +39,8 @@ from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
 from alsdb.products._tiling import PointGrid
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from alsdb.providers.tiledb_provider import TileDBProvider
     from alsdb.storage.zarr_store import ALSZarrStore
 
@@ -647,6 +649,108 @@ def compute_metrics(
         ground_extrapolation=ground_extrapolation,
         metrics=metrics,
     )
+
+
+def plot_metrics(
+    provider: TileDBProvider,
+    x,
+    y,
+    radius: float = 25.0,
+    year: int | None = None,
+    *,
+    buffer: float = 20.0,
+    metrics: tuple[str, ...] | None = None,
+    cc_threshold: float = _DEFAULT_CC_THRESHOLD,
+    veg_classes: tuple[int, ...] = _VEG_CLASSES,
+    ground_outlier_removal: bool = True,
+    max_ground_distance: float | None = None,
+    ground_extrapolation: bool = True,
+    n_workers: int = 1,
+) -> pd.DataFrame:
+    """Structural metrics over circular field plots, as :func:`compute_metrics` computes them.
+
+    For each plot the points within ``radius + buffer`` are read once,
+    cleaned and normalised to the ground exactly as a tile of
+    :func:`compute_metrics`, and the metrics are taken over the disc of
+    *radius* around the plot centre with the code of ``baba_radius``. A
+    calibration on these values therefore matches maps made with
+    ``compute_metrics(..., baba_radius=radius)`` or ``compute_biomass``.
+
+    Parameters
+    ----------
+    provider:
+        Point cloud provider.
+    x, y:
+        Plot centres in the array's CRS.
+    radius:
+        Plot radius (m); 25 m for the Spanish forest inventory's largest circle.
+    year:
+        Survey year; ``None`` reads every year stored there (one survey per
+        location is the common case).
+    buffer:
+        Extra margin read around the plot so the ground model has support at
+        its edge (m).
+    metrics:
+        Metric names (default all of :func:`compute_metrics`).
+    cc_threshold, veg_classes, ground_outlier_removal, max_ground_distance, ground_extrapolation:
+        As :func:`compute_metrics`.
+    n_workers:
+        Threads reading plots in parallel (reads dominate on remote storage).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per plot, in input order: the metrics and ``n_points`` (points
+        within *radius*); NaN where a plot has no points.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pandas as pd
+    import tiledb
+
+    from alsdb.methods._surface import clean_points
+    from alsdb.methods._terrain import normalize_points
+    from alsdb.products._tiling import _filter_ground_outliers, query_to_array
+
+    xs, ys = np.asarray(x, float).ravel(), np.asarray(y, float).ravel()
+    if xs.shape != ys.shape:
+        raise ValueError("x and y must have the same length")
+    names = tuple(_METRIC_NAMES if metrics is None else dict.fromkeys(metrics))
+    reach = radius + buffer
+    attrs = ("Z", "Classification", "ReturnNumber", "Withheld")
+
+    def one(i):
+        px, py = xs[i], ys[i]
+        row = {name: np.nan for name in names}
+        row["n_points"] = 0
+        if not (np.isfinite(px) and np.isfinite(py)):
+            return row
+        try:
+            arr = query_to_array(provider, (px - reach, py - reach, px + reach, py + reach),
+                                 year=year, attributes=attrs)  # fmt: skip
+        except tiledb.TileDBError:  # plot outside the array's domain
+            return row
+        arr = clean_points(arr)
+        if ground_outlier_removal and len(arr):
+            arr = clean_points(_filter_ground_outliers(arr))
+        if not len(arr) or not np.any(arr["Classification"] == 2):
+            return row
+        normalized, _ = normalize_points(arr, max_distance=max_ground_distance,
+                                         extrapolate=ground_extrapolation, distances=False)  # fmt: skip
+        cell = (px - 0.5, py - 0.5, px + 0.5, py + 0.5)  # one 1 m cell centred on the plot
+        values = _extract_metrics_baba(normalized, 1.0, cell, radius, cc_threshold, 0.0,
+                                       veg_classes, metrics=names)  # fmt: skip
+        row.update({name: float(values[name].ravel()[0]) for name in names})
+        inside = (normalized["X"] - px) ** 2 + (normalized["Y"] - py) ** 2 <= radius**2
+        row["n_points"] = int(inside.sum())
+        return row
+
+    if n_workers > 1:
+        with ThreadPoolExecutor(n_workers) as pool:
+            rows = list(pool.map(one, range(len(xs))))
+    else:
+        rows = [one(i) for i in range(len(xs))]
+    return pd.DataFrame(rows)
 
 
 def compute_biomass(

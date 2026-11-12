@@ -606,8 +606,8 @@ def validate_naesset(h95, cc, agb_field, spatial_groups, *, n_splits=5):
 # AGBD = C * (b0 + sum(b_k * sqrt(RH_k + 100)))^2, RH in metres above the
 # waveform ground. Plant functional types: DBT deciduous broadleaf, EBT
 # evergreen broadleaf, ENT evergreen needleleaf trees, GSW grasses, shrubs and
-# woodlands. "GSW x Australia and Oceania" is left out: the sign of its RH80
-# term is printed as a plus-minus in the document.
+# woodlands. Where the product's AGBD differs from the document, the entry
+# follows the product (comments below; see gedi_l4a_model).
 GEDI_L4A_MODELS: dict[str, tuple[float, float, dict[int, float]]] = {
     "DBT": (1.017, -110.059, {60: 5.134, 98: 6.172}),
     "EBT": (1.113, -104.965, {50: 6.802, 98: 3.955}),

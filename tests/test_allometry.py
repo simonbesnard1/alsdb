@@ -183,3 +183,26 @@ def test_fitted_model_runs_in_compute_biomass(provider, store):
     assert np.isfinite(expected).any()
     runs = group["biomass"].attrs["processing_runs"]["2021"]["configuration"]
     assert runs["model_id"] == model.model_id and runs["features"] == ["h50", "h95", "cc"]
+
+
+def test_plot_metrics_match_compute_metrics_with_the_same_disc(provider, store):
+    from alsdb.products.biomass import compute_metrics, plot_metrics
+
+    # the shared array is sparse (150 vegetation returns over 0.64 km2): 100 m discs
+    bbox = (308100.0, 4688100.0, 308900.0, 4688900.0)
+    names = ("h95", "cc", "hmean")
+    compute_metrics(provider, store, 200.0, bbox, 2021, metrics=names, baba_radius=100.0,
+                    tile_size=400.0, tile_buffer=150.0)  # fmt: skip
+    group = store._root["200m"]
+    cx = bbox[0] + 100.0 + 200.0 * np.arange(4)
+    cy = bbox[3] - 100.0 - 200.0 * np.arange(4)  # north-up rows
+    xx, yy = np.meshgrid(cx, cy)
+    plots = plot_metrics(provider, xx.ravel(), yy.ravel(), 100.0, 2021, metrics=names,
+                         buffer=150.0, n_workers=2)  # fmt: skip
+    for name in names:
+        grid = np.asarray(group[name][0]).ravel()
+        assert np.isfinite(grid).sum() >= 12  # a real comparison, not NaN against NaN
+        np.testing.assert_allclose(plots[name].to_numpy(), grid, rtol=1e-5, atol=1e-5)
+    assert (plots["n_points"] > 0).all()
+    empty = plot_metrics(provider, [0.0], [0.0], metrics=("h95",))
+    assert np.isnan(empty.loc[0, "h95"]) and empty.loc[0, "n_points"] == 0
