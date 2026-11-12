@@ -763,7 +763,8 @@ def compute_als_pavd_batch(
         Shot table with ``x_col`` and ``y_col``.
     x_col, y_col : str
         Easting and northing columns.
-    footprint_radius, terrain_buffer, z_step, k, min_points, min_ground_points,
+    footprint_radius, terrain_buffer, z_step, k, min_points, min_ground_points
+        As :func:`compute_als_pavd_profile`.
     veg_classes, max_ground_distance, ground_extrapolation
         As :func:`compute_als_pavd_profile`.
     year : int, optional

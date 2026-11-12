@@ -705,7 +705,7 @@ def plot_rh_profile(
                 1.05,
                 (h_w[low_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad)),
             ),
-            textcoords=("axes fraction" if False else "data", "axes fraction"),
+            textcoords=("data", "axes fraction"),
             xycoords="data",
             arrowprops={"arrowstyle": "->", "lw": 0.8},
             fontsize=10,
@@ -718,7 +718,7 @@ def plot_rh_profile(
                 1.05,
                 (h_w[high_peak] - (hmin - hpad)) / (hmax + hpad - (hmin - hpad)),
             ),
-            textcoords=("axes fraction" if False else "data", "axes fraction"),
+            textcoords=("data", "axes fraction"),
             xycoords="data",
             arrowprops={"arrowstyle": "->", "lw": 0.8},
             fontsize=10,
@@ -919,9 +919,7 @@ def plot_pointcloud_3d(
             rasterized=True,
         )
     else:
-        from matplotlib import cm
-
-        cmap_obj = cm.get_cmap(cmap)
+        cmap_obj = plt.get_cmap(cmap)
         ax.scatter(
             x,
             y,

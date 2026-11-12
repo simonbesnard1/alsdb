@@ -36,6 +36,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _store_name(store) -> str:
+    """Last part of the store's path (a local path or an S3 URI, both kept as strings)."""
+    return str(store.path).rstrip("/").rsplit("/", 1)[-1]
+
+
 def _read_from_store(
     store: ALSZarrStore,
     variable: str,
@@ -111,7 +116,7 @@ def _hillshade_blend(grid: np.ndarray, cmap, vert_exag: float = 3.0):
 
 def _label(store: ALSZarrStore, variable: str, year: int | None) -> str:
     year_str = f" ({year})" if year is not None else ""
-    return f"{variable.upper()}{year_str} — {store.path.name}"
+    return f"{variable.upper()}{year_str} — {_store_name(store)}"
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +613,7 @@ def plot_metrics(
         axes[idx // ncols][idx % ncols].set_visible(False)
 
     year_str = f" ({year})" if year is not None else ""
-    fig.suptitle(title or f"LiDAR metrics — {store.path.name}{year_str}", fontsize=13)
+    fig.suptitle(title or f"LiDAR metrics — {_store_name(store)}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig
 
@@ -658,7 +663,7 @@ def plot_products(
     plot_chm(store, resolution=resolution, year=year, ax=axes[2])
 
     year_str = f" ({year})" if year is not None else ""
-    fig.suptitle(title or f"DTM / DSM / CHM — {store.path.name}{year_str}", fontsize=13)
+    fig.suptitle(title or f"DTM / DSM / CHM — {_store_name(store)}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig
 
@@ -670,14 +675,14 @@ def plot_products_agb(
     figsize: tuple[float, float] = (22, 6),
     hillshade: bool = True,
     title: str | None = None,
+    surface_resolution: float | None = None,
 ):
     """
     Four-panel overview: DTM | DSM | CHM | AGB.
 
-    All panels read from *store* at *resolution*.  The CHM and terrain models
-    are typically computed at 1 m while AGB is at 10 m, so this composite is
-    most useful when a single resolution holds all variables (or when the user
-    passes a coarser resolution for all).
+    AGB is read at *resolution* and the terrain and canopy models at
+    *surface_resolution* (default: the same), since they are usually computed
+    at 1 m and AGB at 10 m: ``plot_products_agb(store, 10.0, surface_resolution=1.0)``.
 
     Parameters
     ----------
@@ -694,6 +699,8 @@ def plot_products_agb(
         Apply hillshade to DTM and DSM panels.
     title:
         Optional suptitle.
+    surface_resolution:
+        Resolution group of the DTM, DSM and CHM (default *resolution*).
 
     Returns
     -------
@@ -702,13 +709,14 @@ def plot_products_agb(
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(1, 4, figsize=figsize)
+    surface = resolution if surface_resolution is None else surface_resolution
 
-    plot_dtm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[0])
-    plot_dsm(store, resolution=resolution, year=year, hillshade=hillshade, ax=axes[1])
-    plot_chm(store, resolution=resolution, year=year, ax=axes[2])
+    plot_dtm(store, resolution=surface, year=year, hillshade=hillshade, ax=axes[0])
+    plot_dsm(store, resolution=surface, year=year, hillshade=hillshade, ax=axes[1])
+    plot_chm(store, resolution=surface, year=year, ax=axes[2])
     plot_agb(store, resolution=resolution, year=year, ax=axes[3])
 
     year_str = f" ({year})" if year is not None else ""
-    fig.suptitle(title or f"DTM / DSM / CHM / AGB — {store.path.name}{year_str}", fontsize=13)
+    fig.suptitle(title or f"DTM / DSM / CHM / AGB — {_store_name(store)}{year_str}", fontsize=13)
     fig.tight_layout()
     return fig

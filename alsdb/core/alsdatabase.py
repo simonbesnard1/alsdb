@@ -628,8 +628,8 @@ class ALSDatabase(TileDBProvider):
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
 
-        Automatically consolidates fragments every *consolidate_every* newly
-        written tiles to keep read performance healthy.
+        Consolidates the array metadata every *consolidate_every* newly
+        written tiles; ``optimize=True`` also merges the fragments at the end.
 
         Parameters
         ----------
