@@ -146,6 +146,6 @@ The following columns are available depending on what was stored during ingestio
 Performance notes
 -----------------
 
-- Queries scan only the TileDB fragments that overlap the requested ``X``/``Y``/``Year`` range. Fragment consolidation (see :ref:`fundamentals-processor`) significantly reduces per-query overhead for large arrays.
+- Queries scan only the TileDB fragments that overlap the requested ``X``/``Y``/``Year`` range. Merging fragments (``ALSDatabase.optimize()``, see :ref:`fundamentals-processor`) is optional: with 100 fragments on a local disk reads were as fast as with one; it may help with many thousands of fragments or on object storage.
 - For very large bounding boxes, consider using :ref:`fundamentals-processing` (``run_tiled``) rather than a single ``query_bbox`` call.
 - On S3, query performance depends on network bandwidth and TileDB S3 timeout settings.

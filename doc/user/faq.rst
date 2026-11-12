@@ -21,7 +21,7 @@ Why can't I install alsDB with pip alone?
     git clone https://github.com/simonbesnard1/alsdb.git
     cd alsdb && pixi install
 
-See :ref:`installing` for full instructions.
+Without pixi, a conda environment with ``pdal``, ``python-pdal``, ``rasterio`` and ``pyproj`` from conda-forge followed by ``pip install -e .`` works too. See :ref:`installing` for full instructions.
 
 Why does ingestion say "already ingested, skipping"?
 ------------------------------------------------------
@@ -45,7 +45,19 @@ alsDB is dataset-agnostic. CRS, bounding box, and acquisition year are read from
 - US 3DEP (USGS 3D Elevation Program)
 - Any custom or research ALS campaign
 
-For PNOA tiles, the tile name parser (``PNOATileName``) extracts year, CRS, and bounding box from the filename as a fallback if the LAZ header is incomplete.
+Two header problems are common:
+
+- **No CRS in the header** (e.g. Sustainable Landscapes Brazil): create the array with the CRS first; such tiles then take the array's CRS.
+
+  .. code-block:: python
+
+      db = ALSDatabase(storage_type="local", uri="my_array")
+      db.create(crs="EPSG:32719")
+      db.ingest_many(paths)
+
+- **Year**: points are stored under the year in the header, which some providers set to the processing date rather than the flight. Check ``db.list_ingested()`` after the first tile.
+
+For PNOA filenames, :py:func:`alsdb.parse_tile_filename` also reads year, CRS and bounds from the name.
 
 What happens to cells with no data?
 -------------------------------------
@@ -78,13 +90,12 @@ Check the following:
 
 1. **Year**: call ``reader.available_years()`` to confirm the year is stored.
 2. **Bounding box**: the coordinates must be in the same CRS as the array (typically UTM). Passing geographic coordinates (lon/lat) to a UTM array returns no data.
-3. **Fragment consolidation**: if you just ingested data, try ``db.consolidate()`` first.
-4. **Domain bounds**: data ingested outside the TileDB domain bounds is silently clipped. Check ``db.stored_crs()`` and verify the coordinates.
+3. **Domain bounds**: data ingested outside the TileDB domain bounds is silently clipped. Check ``db.stored_crs()`` and verify the coordinates.
 
 Why is my CHM noisy at tile edges?
 ------------------------------------
 
-This is a HAG artefact. The Delaunay TIN built from ground points becomes unreliable near tile edges where only one side of the boundary has data. Increase ``tile_buffer`` from 50 m to 100 m:
+Tiles are read with a buffer (``tile_buffer``, 50 m) so the ground model is supported on both sides of each tile edge. On sparse ground (dense tropical canopy, steep slopes) a wider buffer helps:
 
 .. code-block:: python
 
@@ -94,7 +105,7 @@ This is a HAG artefact. The Delaunay TIN built from ground points becomes unreli
 How do I use a scikit-learn biomass model?
 -------------------------------------------
 
-Use :py:func:`alsdb.products.biomass.wrap_sklearn_model` to wrap any sklearn-compatible estimator. The features must be in the same order as the training data. The default feature set is all 16 metrics produced by ``compute_metrics()`` (``_METRIC_NAMES``): h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2, pv_2_5, pv_5_10, pv_10_20, pv_20_40, pv_above40. Pass an explicit ``features`` list when the model was trained on a subset:
+Use :py:func:`alsdb.products.biomass.wrap_sklearn_model` to wrap any estimator with ``predict(X)`` (scikit-learn, XGBoost, LightGBM). Train it on a DataFrame whose columns are metric names (as written by ``compute_metrics``: h50, h75, h95, hmax, hmean, cc, density, fhd, vci, crr, pv_0_2 … pv_above40): the wrapper reads the names from the model. Otherwise pass ``features`` in training order. Get the training metrics for field plots with :py:func:`alsdb.products.biomass.plot_metrics`, so they are computed exactly as in the map:
 
 .. code-block:: python
 
@@ -102,20 +113,22 @@ Use :py:func:`alsdb.products.biomass.wrap_sklearn_model` to wrap any sklearn-com
     from alsdb.products.biomass import compute_biomass
     from sklearn.ensemble import GradientBoostingRegressor
 
-    model = GradientBoostingRegressor()
-    model.fit(X_train, y_agb)   # X columns must match _METRIC_NAMES order
+    from alsdb.products.biomass import plot_metrics
+
+    features = ["h95", "cc", "density"]
+    X = plot_metrics(reader, plots.x, plots.y, radius=25.0, year=2021, metrics=features)
+    model = GradientBoostingRegressor().fit(X[features], plots.agb)  # a DataFrame: names recorded
 
     compute_biomass(
         provider=reader, store=store, resolution=10.0, year=2021,
         model_fn=wrap_sklearn_model(model),
     )
 
-    # If the model was trained on a subset, declare the feature order explicitly:
-    model_subset = GradientBoostingRegressor()
-    model_subset.fit(X_train[["h95", "cc", "density"]], y_agb)
+    # A model trained on a plain array: give the feature order explicitly
+    model_np = GradientBoostingRegressor().fit(X[features].to_numpy(), plots.agb)
     compute_biomass(
         provider=reader, store=store, resolution=10.0, year=2021,
-        model_fn=wrap_sklearn_model(model_subset, features=["h95", "cc", "density"]),
+        model_fn=wrap_sklearn_model(model_np, features=features),
     )
 
 How do I detect forest change between two surveys?
@@ -142,7 +155,7 @@ Use :py:func:`alsdb.products.change.compute_change` after computing the same var
 How do I calibrate the Næsset biomass model?
 ----------------------------------------------
 
-Use :py:func:`alsdb.products.allometry.calibrate_naesset` with co-located field inventory plots.  At least 20 valid plots are required; fewer than 50 emits a quality warning:
+Use :py:func:`alsdb.products.allometry.calibrate_naesset` with co-located field inventory plots, their metrics computed by :py:func:`alsdb.products.biomass.plot_metrics` over the plot circle. At least 20 valid plots are required; fewer than 50 emits a quality warning. :py:func:`alsdb.products.allometry.validate_naesset` gives the cross-validated error (whole spatial groups held out), and ``python -m alsdb.benchmark calibrate-biomass`` runs the whole calibration against the Spanish forest inventory:
 
 .. code-block:: python
 

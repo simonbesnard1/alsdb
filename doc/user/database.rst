@@ -133,8 +133,8 @@ All raster plot functions read from an ``ALSZarrStore`` at a given resolution an
     # Three-panel: DTM | DSM | CHM
     plot_products(store, resolution=1.0, year=2021)
 
-    # Four-panel: DTM | DSM | CHM | AGB
-    plot_products_agb(store, resolution=10.0, year=2021)
+    # Four-panel: DTM | DSM | CHM (1 m) | AGB (10 m)
+    plot_products_agb(store, resolution=10.0, year=2021, surface_resolution=1.0)
 
 If the store contains only one survey year the ``year=`` argument can be omitted.
 
@@ -185,6 +185,9 @@ The CLI
 
     # Filter to specific classes
     alsdb ingest tile.laz my_array -c 2 -c 3 -c 4 -c 5
+
+    # Classify ground (and vegetation by height) while ingesting
+    alsdb ingest tile.laz my_array --classify --ground-method ptd
 
     # Show file metadata (year, CRS, bbox, point count)
     alsdb info tile.laz

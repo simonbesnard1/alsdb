@@ -15,11 +15,11 @@ alsDB requires Python ≥ 3.11 and the following dependencies, all resolved auto
 +-------------------+-----------------+----------------------------------------------+
 | Dependency        | Minimum Version | Purpose                                      |
 +===================+=================+==============================================+
-| pdal              | 2.7             | LAZ/LAS reading, HAG filter                  |
+| pdal              | 2.7             | LAZ/LAS reading, ground filters              |
 +-------------------+-----------------+----------------------------------------------+
 | python-pdal       | 3.4             | Python bindings for PDAL                     |
 +-------------------+-----------------+----------------------------------------------+
-| tiledb            | 0.28            | Sparse point-cloud storage (local + S3)      |
+| tiledb            | 0.35.2 (pinned) | Sparse point-cloud storage (local + S3)      |
 +-------------------+-----------------+----------------------------------------------+
 | zarr              | 3.0             | Zarr v3 store for gridded products           |
 +-------------------+-----------------+----------------------------------------------+
@@ -39,6 +39,10 @@ alsDB requires Python ≥ 3.11 and the following dependencies, all resolved auto
 +-------------------+-----------------+----------------------------------------------+
 | rioxarray         | 0.15            | CRS attachment on ``to_dataset()`` output    |
 +-------------------+-----------------+----------------------------------------------+
+| rasterio          | 1.3             | TIN rasterisation (tin, pit-free CHMs)       |
++-------------------+-----------------+----------------------------------------------+
+| pyproj            | 3.6             | CRS parsing                                  |
++-------------------+-----------------+----------------------------------------------+
 
 Installation Instructions
 -------------------------
@@ -57,6 +61,46 @@ This installs all dependencies, including ``pdal`` and ``python-pdal`` from cond
 .. note::
 
    ``pip install alsdb`` will install the pure-Python dependencies but **will fail to import** without ``pdal`` present in the environment. Use pixi or set up a conda environment with ``pdal`` from conda-forge before using pip.
+
+Optional environments
+---------------------
+
+Some methods need extra packages. Each lives in its own pixi environment; run a
+script in it with ``pixi run -e <name> python script.py``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 50 36
+
+   * - Environment
+     - Adds
+     - Needed for
+   * - ``spikefree``
+     - the compiled backends (CGAL constrained Delaunay, PTD); build them once with
+       ``pixi run -e spikefree build-spikefree``
+     - ``method="spikefree"`` CHMs and ``ground_method="ptd"`` classification
+   * - ``lasr``
+     - R and lasR (``pixi run -e lasr install-lasr``)
+     - the lasR reference in ``alsdb.benchmark``
+   * - ``helios``
+     - the HELIOS++ lidar simulator
+     - simulated scenes in ``alsdb.benchmark``
+   * - ``gedi``
+     - gedidb
+     - real GEDI shots (``alsdb.products.gedi_attenuation``)
+
+Without pixi, create a conda environment with PDAL, rasterio and pyproj from
+conda-forge, then install alsdb with pip:
+
+.. code-block:: bash
+
+    mamba create -n alsdb -c conda-forge python=3.13 pdal python-pdal rasterio pyproj
+    mamba activate alsdb
+    pip install -e .            # from the cloned repository
+
+rasterio must come from conda-forge, not pip: alsdb passes rasters from PDAL to
+rasterio through GDAL's in-memory files, which only works when both use the
+same GDAL library (pip's rasterio bundles its own).
 
 Development install
 -------------------
@@ -84,3 +128,6 @@ Verifying the install
 
     pixi run python -c "import alsdb; print('alsdb', alsdb.__version__)"
     pixi run alsdb --help
+
+Then run the :ref:`overview`: it uses a sample tile shipped with alsdb and takes
+about ten seconds.

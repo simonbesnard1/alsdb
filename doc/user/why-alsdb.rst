@@ -29,8 +29,9 @@ What alsDB enables
 - **Unified multi-temporal point cloud**: All survey years in one TileDB array, queryable by bounding box and year.
 - **Direct-to-Zarr processing**: CHM, DTM, DSM, gap fraction, LAI, structural metrics, and biomass are written tile-by-tile directly to the output store: no GeoTIFF intermediates, no mosaic step.
 - **Dataset-agnostic ingestion**: CRS, bounding box, and acquisition year are read from the LAZ header automatically. Any national or global ALS dataset works without a custom parser.
-- **Scalable tiling**: Large areas are split into sub-tiles with configurable size and buffer. Processing is parallel via a ``ThreadPoolExecutor`` with ``n_workers``.
-- **Large-footprint waveform simulation**: Sensor-agnostic full-waveform simulation (GEDI, LVIS, GLAS) at configurable footprint scale for direct comparison with space-borne LiDAR.
+- **Scalable tiling**: Large areas are split into sub-tiles with configurable size and buffer, processed in parallel threads or worker processes (``n_workers``, ``parallel``).
+- **Transparent, benchmarked algorithms**: ground classifiers (CSF, PMF, SMRF, PTD and its tilt ensemble) and CHM methods (TIN, pit-free, spike-free, local spike-free) with documented defaults (:ref:`algorithms`), benchmarked against lasR, LAStools and known truth.
+- **Large-footprint waveform simulation**: GEDI-like waveforms (as the GEDI simulator; footprint and pulse configurable), canopy profiles, and a pipeline comparing them with real GEDI shots.
 
 Pipeline output: a 1 km² tropical forest tile
 ------------------------------------------------
@@ -58,7 +59,7 @@ The two storage layers
 alsDB uses two complementary storage backends:
 
 **TileDB sparse array** (point clouds)
-  Each LAZ tile is ingested into a 3-D sparse array with dimensions ``X`` (float64), ``Y`` (float64), ``Year`` (int16). Multiple survey years coexist in the same array. Spatial domain bounds are selected automatically per CRS. ByteShuffle + ZSTD compression is applied to float attributes; DoubleDelta + ZSTD to the Year dimension. Each ingested tile creates a new *fragment*; fragments are consolidated periodically to keep read performance healthy.
+  Each LAZ tile is ingested into a 3-D sparse array with dimensions ``X`` (float64), ``Y`` (float64), ``Year`` (int16). Multiple survey years coexist in the same array. Spatial domain bounds are selected automatically per CRS. ByteShuffle + ZSTD compression is applied to float attributes; DoubleDelta + ZSTD to the Year dimension. Each ingested tile creates a new *fragment*; the array metadata is consolidated periodically, and merging the fragments themselves is optional (``ALSDatabase.optimize()``).
 
 **Zarr v3 store** (gridded products)
   All processing outputs are written to an ``ALSZarrStore``: a Zarr v3 hierarchy organised by resolution (``1m/``, ``10m/``) with a time axis for multi-year products. Sub-tiles write directly to non-overlapping spatial slices in the shared arrays, so the product is complete as soon as the last tile finishes.
@@ -68,18 +69,23 @@ See :ref:`fundamentals` for a detailed explanation of both layers and how they i
 Core components of alsDB
 -------------------------
 
-1. :py:class:`alsdb.ALSDatabase`: manages ingestion: LAZ → TileDB fragments, with a manifest for idempotency, parallel workers, and periodic consolidation.
+1. :py:class:`alsdb.ALSDatabase`: manages ingestion: LAZ → TileDB fragments, with a manifest for idempotency, parallel workers, periodic metadata consolidation and optional ground classification.
 
 2. :py:class:`alsdb.ALSProvider`: queries the TileDB array by bounding box and year, returning results as ``pandas.DataFrame`` or ``xarray.Dataset``.
 
 3. ``ALSZarrStore``: the gridded output store. Accepts tile writes from all processing functions and exposes the result via ``to_dataset()`` as a CRS-aware ``xarray.Dataset``.
 
-4. ``processing.*``: modular processing functions:
+4. ``alsdb.products``: modular processing functions:
 
    - ``alsdb.products.chm``: Canopy Height Model, DTM, DSM
    - ``alsdb.products.gap``: gap fraction, effective LAI
-   - ``alsdb.products.biomass``: structural metrics, aboveground biomass
-   - ``alsdb.products.waveform``: large-footprint waveform simulation (GEDI by default)
+   - ``alsdb.products.biomass``: structural metrics, aboveground biomass, metrics over field plots
+   - ``alsdb.products.allometry``: biomass equations (Næsset, the GEDI L4A models, your own fits)
+   - ``alsdb.products.waveform`` and ``alsdb.products.profiles``: GEDI-like waveforms and canopy profiles
+   - ``alsdb.products.gedi_attenuation``: real GEDI shots against ALS-simulated ones
+   - ``alsdb.products.change``: change between survey years
+
+5. ``alsdb.benchmark``: the benchmark suite (reference tools, synthetic and real scenes, timing, biomass calibration); see :doc:`../benchmarking`.
 
 Goals and aspirations
 ---------------------
