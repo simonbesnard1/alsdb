@@ -480,8 +480,14 @@ The `gedi` pixi environment adds gedidb (from git) to alsdb.
 
 On a Barcelona PNOA tile (inner 1 km², same auto parameters), alsdb pitfree
 matched lasR on 99.3% of cells to within 1 cm; spike-free was 80% identical,
-alsdb +0.18 m on average (lasR seeds freezing with the highest point of a
-coarse grid; alsdb freezes at each insertion). Agreement between
+alsdb +0.18 m on average. That spike-free gap is not a setting: it stays on
+identical points with the same freeze distance, and lasR is only ever equal or
+lower. lasR freezes a triangle only when a point lands in it, so insertions
+next to it can still reshape it. alsdb, like LAStools, freezes every short
+triangle as soon as the sweep has passed `height_buffer` below its lowest
+vertex. alsdb's code with lasR's lazy rule reproduces lasR to 1 cm on 98 % of
+cells (a Lidar HD scene at 2 pulses/m²), against 64 % for the standard
+version. alsdb matches LAStools to 1 cm on over 90 % of cells. Agreement between
 implementations is not accuracy: field data (e.g. NFI plots) remain necessary.
 
 ## References

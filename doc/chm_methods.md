@@ -25,6 +25,14 @@ only trimmed by `max_triangle_edge` (default: none). Every higher layer drops
 triangles with a horizontal edge longer than `pitfree_max_edge`; `"auto"` uses
 three times the pulse spacing of the thinned returns (rapidlasso's pit-free
 `-kill` rule of thumb), estimated per buffered tile, so check seams explicitly.
+Because the returns are first thinned to one per cell, that spacing cannot
+fall below about one cell. From about 1 pulse/m² at 1 m resolution, nearly
+every cell holds a return and `"auto"` settles near 3 m; below that it grows
+(about 4.2 m at 0.5 pulses/m²). The longer edges bridge gaps and crown edges,
+so a sparse survey's pit-free CHM sits higher than a fixed edge would give.
+This is +0.5 m at 0.5 pulses/m² on Lidar HD; with a fixed edge, the error
+falls steadily with density. Pass a number for density-independent behaviour.
+lasR's `pitfree()` uses the same rule.
 Those upper-layer triangles are the ones that span crown gaps; the previous
 point-distance masks (`pitfree_max_distance`, `spikefree_max_distance`) kept
 them and inflated mean CHM by ~2 m on Barcelona NFI plots, and were removed.
