@@ -99,26 +99,6 @@ _FHD_N_BINS: int = len(_FHD_BINS) - 1  # number of 1 m bands
 _VCI_MAX_ENTROPY: float = np.log(_FHD_N_BINS)
 
 
-def _fhd_from_hag(hag_vals: np.ndarray) -> float:
-    """Return the foliage height diversity (Shannon entropy of the height distribution)."""
-    if len(hag_vals) == 0:
-        return np.nan
-    counts, _ = np.histogram(hag_vals, bins=_FHD_BINS)
-    c = counts[counts > 0].astype(np.float64)
-    if c.size == 0:
-        return np.nan
-    p = c / c.sum()
-    return float(-np.sum(p * np.log(p)))
-
-
-def _vci_from_hag(hag_vals: np.ndarray) -> float:
-    """Return the vegetation complexity index (FHD normalised by its maximum); it grows with canopy height."""
-    fhd = _fhd_from_hag(hag_vals)
-    if np.isnan(fhd) or _VCI_MAX_ENTROPY == 0:
-        return np.nan
-    return float(fhd / _VCI_MAX_ENTROPY)
-
-
 # ---------------------------------------------------------------------------
 # Per-cell metric extraction
 # ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@ import pytest
 from alsdb.products.gap import (
     LAI_K_PRESETS,
     _compute_gap_grid,
-    _compute_gap_grid_baba,
     _gap_to_lai,
     compute_gap_fraction,
 )
@@ -241,8 +240,16 @@ def test_compute_gap_grid_min_density_zero_behaves_as_before():
 
 
 # ---------------------------------------------------------------------------
-# _compute_gap_grid_baba — unit tests
+# gap fraction in a circular neighbourhood (gap_statistics with baba_radius)
 # ---------------------------------------------------------------------------
+
+
+def _compute_gap_grid_baba(points, resolution, bbox, baba_radius, min_density=0.0,
+                           veg_classes=(3, 4, 5)):  # fmt: skip
+    from alsdb.products.gap import gap_statistics
+
+    return gap_statistics(points, resolution, bbox, min_density, veg_classes,
+                          baba_radius=baba_radius)["gap"]  # fmt: skip
 
 
 def _make_baba_points(n_gnd: int, n_veg: int, bbox: tuple, seed: int = 0) -> np.ndarray:

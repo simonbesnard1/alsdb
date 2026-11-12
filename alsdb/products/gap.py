@@ -177,30 +177,6 @@ def _gap_to_lai(gap: np.ndarray, k: float, clumping_index: float = 1.0) -> np.nd
 # ---------------------------------------------------------------------------
 
 
-def _compute_gap_grid_baba(
-    points: np.ndarray,
-    resolution: float,
-    bbox: tuple[float, float, float, float],
-    baba_radius: float,
-    min_density: float = 0.0,
-    veg_classes: tuple[int, ...] = _VEG_CLASSES,
-) -> np.ndarray:
-    """Compute gap fraction with a circular neighbourhood around each cell.
-
-    The denominator is ``N_gnd + N_veg`` (classified first returns only),
-    consistent with the standard grid estimator.  Unclassified, noise, and
-    building returns are excluded so they do not dilute the gap estimate.
-
-    veg_classes:
-        LAS classification codes treated as vegetation (default ``(3, 4,
-        5)``, standard ASPRS) -- see :func:`_compute_gap_grid`'s docstring;
-        not universal across surveys.
-    """
-    return gap_statistics(
-        points, resolution, bbox, min_density, veg_classes, baba_radius=baba_radius
-    )["gap"]
-
-
 # ---------------------------------------------------------------------------
 # Per-tile worker
 # ---------------------------------------------------------------------------

@@ -1,17 +1,83 @@
 import csv
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pytest
 
 from alsdb.benchmark.classification import (
     PTDParameters,
-    SyntheticClassificationScenario,
     score_ground_classification,
-    synthetic_points,
     terrain_error,
 )
+
+# Synthetic point clouds with exact ground labels (test data only).
+
+
+@dataclass(frozen=True)
+class SyntheticClassificationScenario:
+    """Deterministic synthetic point cloud with exact ground labels."""
+
+    terrain: str = "rolling"
+    size: float = 100.0
+    density: float = 2.0
+    ground_fraction: float = 0.3
+    low_vegetation_fraction: float = 0.2
+    noise_fraction: float = 0.002
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate the synthetic-scene settings."""
+        if self.terrain not in ("flat", "rolling", "steep", "rough"):
+            raise ValueError("terrain must be flat, rolling, steep, or rough")
+        if self.size <= 0 or self.density <= 0:
+            raise ValueError("size and density must be positive")
+        fractions = (self.ground_fraction, self.low_vegetation_fraction, self.noise_fraction)
+        if any(not 0 <= value <= 1 for value in fractions):
+            raise ValueError("scenario fractions must be in [0, 1]")
+
+
+def _terrain_height(x: np.ndarray, y: np.ndarray, terrain: str) -> np.ndarray:
+    if terrain == "flat":
+        return np.full_like(x, 100.0)
+    if terrain == "rolling":
+        return 100 + 2.5 * np.sin(x / 18) + 1.5 * np.cos(y / 24)
+    if terrain == "steep":
+        return 100 + 0.45 * x + 0.12 * y + 2 * np.sin(y / 12)
+    return 100 + 0.18 * x + 3 * np.sin(x / 8) * np.cos(y / 11)
+
+
+def synthetic_points(
+    scenario: SyntheticClassificationScenario,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate points and an exact Boolean ground mask for *scenario*."""
+    rng = np.random.default_rng(scenario.seed)
+    count = max(4, round(scenario.size**2 * scenario.density))
+    dtype = [
+        ("X", "f8"),
+        ("Y", "f8"),
+        ("Z", "f8"),
+        ("Classification", "u1"),
+        ("ReturnNumber", "u1"),
+        ("NumberOfReturns", "u1"),
+    ]
+    points = np.zeros(count, dtype=dtype)
+    points["X"], points["Y"] = rng.uniform(0, scenario.size, (2, count))
+    terrain = _terrain_height(points["X"], points["Y"], scenario.terrain)
+    truth = rng.random(count) < scenario.ground_fraction
+    nonground = ~truth
+    low = nonground & (rng.random(count) < scenario.low_vegetation_fraction)
+    height = np.zeros(count)
+    height[truth] = rng.normal(0, 0.03, truth.sum())
+    height[low] = rng.uniform(0.15, 2.0, low.sum())
+    height[nonground & ~low] = rng.uniform(2.0, 30.0, (nonground & ~low).sum())
+    noise = rng.random(count) < scenario.noise_fraction
+    height[noise] = rng.choice((-1, 1), noise.sum()) * rng.uniform(10, 40, noise.sum())
+    truth[noise] = False
+    points["Z"] = terrain + height
+    points["Classification"] = 1
+    points["ReturnNumber"] = points["NumberOfReturns"] = 1
+    return points, truth
 
 
 def test_classification_scores_known_confusion_matrix():
@@ -195,8 +261,6 @@ def test_file_benchmark_runs_each_ptd_parameter_set(tmp_path, monkeypatch):
 
 def _write_scene(scene, terrain="rolling"):
     import pdal
-
-    from alsdb.benchmark.classification import _terrain_height
 
     points, truth = synthetic_points(
         SyntheticClassificationScenario(terrain=terrain, size=60, density=4, noise_fraction=0)

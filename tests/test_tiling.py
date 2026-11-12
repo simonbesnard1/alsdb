@@ -85,19 +85,6 @@ def test_check_bbox_overlap_false(provider):
 # ---------------------------------------------------------------------------
 
 
-def _minimal_arr(n_gnd: int, n_other: int = 5) -> np.ndarray:
-    """Minimal PDAL-compatible structured array for hag_stage tests."""
-    n = n_gnd + n_other
-    dtype = [(name, LAS_ATTRIBUTES[name]) for name in LAS_ATTRIBUTES] + [
-        ("X", np.float64),
-        ("Y", np.float64),
-    ]
-    arr = np.zeros(n, dtype=dtype)
-    arr["Classification"][:n_gnd] = 2  # ground
-    arr["Classification"][n_gnd:] = 3  # vegetation
-    return arr
-
-
 # ---------------------------------------------------------------------------
 # _filter_ground_outliers
 # ---------------------------------------------------------------------------

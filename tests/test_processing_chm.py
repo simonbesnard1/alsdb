@@ -552,17 +552,6 @@ def test_thin_highest_per_subcell_absolute_grid_not_relative_to_input_extent():
 # ---------------------------------------------------------------------------
 
 
-def _ground_points(n: int = 50, z_mean: float = 500.0, seed: int = 0) -> np.ndarray:
-    """Minimal structured array of ground points for IDW tests."""
-    rng = np.random.default_rng(seed)
-    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64)]
-    arr = np.zeros(n, dtype=dtype)
-    arr["X"] = rng.uniform(0.0, 100.0, n)
-    arr["Y"] = rng.uniform(0.0, 100.0, n)
-    arr["Z"] = rng.normal(z_mean, 0.5, n)
-    return arr
-
-
 # ---------------------------------------------------------------------------
 # _delaunay_raster — unit tests (real PDAL filters.delaunay/faceraster)
 # ---------------------------------------------------------------------------
@@ -694,33 +683,6 @@ def test_validate_grid_alignment_rejects_non_multiple():
 # ---------------------------------------------------------------------------
 
 
-def _veg_points(xs, ys) -> np.ndarray:
-    dtype = [("X", np.float64), ("Y", np.float64), ("HeightAboveGround", np.float64)]
-    arr = np.zeros(len(xs), dtype=dtype)
-    arr["X"] = xs
-    arr["Y"] = ys
-    arr["HeightAboveGround"] = 10.0
-    return arr
-
-
-def _ground_at(xs, ys) -> np.ndarray:
-    dtype = [("X", np.float64), ("Y", np.float64)]
-    arr = np.zeros(len(xs), dtype=dtype)
-    arr["X"] = xs
-    arr["Y"] = ys
-    return arr
-
-
 # ---------------------------------------------------------------------------
 # _nn_fill — unit tests
 # ---------------------------------------------------------------------------
-
-
-def _ground_arr_nn(n: int = 30, z: float = 100.0, seed: int = 0) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    dtype = [("X", np.float64), ("Y", np.float64), ("Z", np.float64)]
-    arr = np.zeros(n, dtype=dtype)
-    arr["X"] = rng.uniform(0.0, 100.0, n)
-    arr["Y"] = rng.uniform(0.0, 100.0, n)
-    arr["Z"] = z
-    return arr

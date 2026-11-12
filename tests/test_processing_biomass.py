@@ -15,8 +15,6 @@ from alsdb.products.allometry import (
 from alsdb.products.biomass import (
     _extract_metrics,
     _extract_metrics_baba,
-    _fhd_from_hag,
-    _vci_from_hag,
     compute_biomass,
     compute_metrics,
     wrap_sklearn_model,
@@ -347,8 +345,23 @@ def test_calibrate_naesset_ignores_nan_plots():
 
 
 # ---------------------------------------------------------------------------
-# _fhd_from_hag / _vci_from_hag
+# fhd / vci of _extract_metrics, on one cell
 # ---------------------------------------------------------------------------
+
+
+def _one_cell(hag, name):
+    pts = np.zeros(len(hag), dtype=[("X", "f8"), ("Y", "f8"), ("HeightAboveGround", "f8"),
+                                    ("Classification", "u1"), ("ReturnNumber", "u1")])  # fmt: skip
+    pts["HeightAboveGround"], pts["Classification"], pts["ReturnNumber"] = hag, 5, 1
+    return float(_extract_metrics(pts, 1.0, (-0.5, -0.5, 0.5, 0.5), metrics=(name,))[name][0, 0])
+
+
+def _fhd_from_hag(hag):
+    return _one_cell(np.asarray(hag, float), "fhd")
+
+
+def _vci_from_hag(hag):
+    return _one_cell(np.asarray(hag, float), "vci")
 
 
 def test_fhd_from_hag_empty_returns_nan():

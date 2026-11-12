@@ -165,18 +165,6 @@ class ALSProvider(TileDBProvider):
     # Format helpers
     # ------------------------------------------------------------------
 
-    def to_dataframe(
-        self,
-        min_x: float,
-        min_y: float,
-        max_x: float,
-        max_y: float,
-        attributes: list[str] | None = None,
-        year: int | None = None,
-    ) -> pd.DataFrame:
-        """Alias for :meth:`query_bbox` — returns a :class:`pandas.DataFrame`."""
-        return self.query_bbox(min_x, min_y, max_x, max_y, attributes=attributes, year=year)
-
     def to_xarray(
         self,
         min_x: float,
