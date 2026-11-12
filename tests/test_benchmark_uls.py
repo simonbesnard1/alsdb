@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import struct
+from dataclasses import asdict
 
 import numpy as np
 import pytest
@@ -144,3 +145,40 @@ def test_read_trees_from_geopackage(tmp_path):
     con.commit()
     t = uls.read_trees(str(path), "tls_treeheight", (0, 0, 100, 100))
     assert t.tolist() == [[10.0, 20.0, 25.5]]
+
+
+def test_nadir_surface_keeps_only_near_nadir_pulses(scan, area):
+    """Half the pulses are at 40 deg: the near-nadir surface holds half the returns' cells."""
+    full, nadir = np.isfinite(scan.surface), np.isfinite(scan.surface_nadir)
+    assert np.all(nadir <= full)
+    assert nadir.sum() == pytest.approx(full.sum() / 2, rel=0.05)
+    truth, _ = uls.reference(scan, area, nadir=True)
+    chm = truth["chm_max"][::-1]
+    # every crown cell still holds near-nadir pulses
+    assert np.allclose(chm[6:14, 6:14], TOP - GROUND, atol=1e-3)
+    default, _ = uls.reference(scan, area)
+    assert np.allclose(truth["dtm"], default["dtm"])  # terrain unchanged
+
+
+def test_nadir_truth_scores_rescores_thinned_scenes(scan, area, tmp_path):
+    truth, _ = uls.reference(scan, area)
+    x0, y1 = area.x0, area.y0 + area.core
+    for variant in ("thinned", "helios"):
+        scene = tmp_path / f"{area.name}_{variant}_d2"
+        scene.mkdir()
+        np.savez_compressed(scene / "truth.npz", **truth, x0=x0, y1=y1, tree_x=np.zeros(0),
+                            tree_y=np.zeros(0), tree_h=np.zeros(0))  # fmt: skip
+        np.savez_compressed(scene / "preds.npz", alsdb_pitfree=truth["chm_max"])
+        meta = {"scenario": {"site": area.site, "variant": variant, "density": 2.0,
+                             "max_angle": 20.0, "reference_centre_m": 0.2},
+                "area": asdict(area)}  # fmt: skip
+        (scene / "scene.json").write_text(json.dumps(meta))
+    out = uls.nadir_truth_scores(tmp_path, tmp_path / "nadir.csv")
+    import pandas as pd
+
+    r = pd.read_csv(out)
+    assert list(r.scenario) == [f"{area.name}_thinned_d2"]  # thinned only
+    assert (tmp_path / f"{area.name}_thinned_d2" / "truth_nadir.npz").exists()
+    assert r.mae_max.iloc[0] == pytest.approx(0.0, abs=1e-3)  # crown tops seen by nadir pulses too
+    uls.nadir_truth_scores(tmp_path, out)  # rerun skips finished scenes
+    assert len(pd.read_csv(out)) == 1

@@ -732,15 +732,16 @@ def _peaks(a, rows, cols, k=1):
     )
 
 
-def score(scene_dir):
+def score(scene_dir, truth_file="truth.npz"):
     """One row per CHM output: errors against both truths, cover, mean height, tree tops.
 
     Cells where the truth is missing (a real-data reference can have gaps)
     are left out. When the truth carries ``tree_h_field`` (e.g. TLS heights),
-    tree tops are also scored against those.
+    tree tops are also scored against those. *truth_file* scores against
+    another truth in the scene folder (e.g. ``truth_nadir.npz``).
     """
     scene_dir = Path(scene_dir)
-    truth = np.load(scene_dir / "truth.npz")
+    truth = np.load(scene_dir / truth_file)
     preds = dict(np.load(scene_dir / "preds.npz"))
     meta = json.loads((scene_dir / "scene.json").read_text())
     n = truth["chm_max"].shape[0]

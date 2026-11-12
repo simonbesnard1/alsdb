@@ -151,6 +151,7 @@ class Scan:
     zmin: float
     ground: np.ndarray  # lowest ground return per 25 cm: (n, 3) x, y, z
     surface: np.ndarray  # highest return per 10 cm cell, NaN where empty
+    surface_nadir: np.ndarray  # the same from near-nadir pulses only (what thinning samples)
     veg: np.ndarray  # near-nadir vegetation return weight per voxel (x, y, z)
     ground_weight: np.ndarray  # near-nadir ground return weight per voxel column
     candidates: np.ndarray  # points of preselected near-nadir pulses
@@ -183,6 +184,7 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
     if not voxels:
         nv = 0
     surface = np.full(ns * ns, -np.inf)
+    surface_nadir = np.full(ns * ns, -np.inf)
     veg = np.zeros(nv * nv * nz)
     ground_w = np.zeros(nv * nv)
     ground_parts, cand_parts = [], []
@@ -202,7 +204,8 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
             # surface: highest return per 10 cm
             i = ((x[inbox] - bx0) / SURFACE_CELL).astype(np.int64)
             j = ((y[inbox] - by0) / SURFACE_CELL).astype(np.int64)
-            np.maximum.at(surface, np.minimum(j, ns - 1) * ns + np.minimum(i, ns - 1), z[inbox])
+            cell10 = np.minimum(j, ns - 1) * ns + np.minimum(i, ns - 1)
+            np.maximum.at(surface, cell10, z[inbox])
             # ground: lowest return per 25 cm, with its position
             g = inbox & ground
             if g.any():
@@ -213,6 +216,7 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
                 ground_parts.append(np.column_stack((cell[o][first], x[g][o][first],
                                                      y[g][o][first], z[g][o][first])))  # fmt: skip
             nadir = np.abs(a["ScanAngleRank"]) <= max_angle
+            np.maximum.at(surface_nadir, cell10[nadir[inbox]], z[inbox][nadir[inbox]])
             nadir_first += int(np.sum(nadir & inbox & (a["ReturnNumber"] == 1)))
             if voxels:
                 # voxel profiles from near-nadir returns, each weighted 1 / its pulse's returns
@@ -235,8 +239,10 @@ def scan_area(area, *, max_angle=20.0, candidate_fraction=0.05, seed=0, workers=
     o = np.lexsort((ground[:, 3], ground[:, 0]))  # lowest per cell across chunks
     ground = ground[o][np.r_[True, ground[o][1:, 0] != ground[o][:-1, 0]]][:, 1:]
     surface[~np.isfinite(surface)] = np.nan
+    surface_nadir[~np.isfinite(surface_nadir)] = np.nan
     return Scan(
         box=area.box, zmin=zmin, ground=ground, surface=surface.reshape(ns, ns),
+        surface_nadir=surface_nadir.reshape(ns, ns),
         veg=veg.reshape(nv, nv, nz), ground_weight=ground_w.reshape(nv, nv),
         candidates=np.concatenate(cand_parts) if cand_parts else np.zeros(0),
         crs=area.crs or crs, points=points,
@@ -266,12 +272,15 @@ def _terrain(ground, box):
     return at
 
 
-def reference(scan, area, centre=0.2):
+def reference(scan, area, centre=0.2, nadir=False):
     """Full-density DTM and CHM truths on the core (1 m, north-up) and the 1 m terrain grid.
 
     ``chm_centre`` is the highest return within the *centre* x *centre* m
     around each cell centre (0.2 m for ULS; ~0.4 m for 30 pulses/m2 ALS, so
-    that most windows hold a return).
+    that most windows hold a return). *nadir* builds both CHM truths from
+    near-nadir pulses only, the subset the thinned scans sample: crown tips
+    that only oblique drone pulses reached then drop out of the truth. The
+    terrain is the same either way.
     """
     at = _terrain(scan.ground, scan.box)
     size = scan.box[2] - scan.box[0]
@@ -280,7 +289,7 @@ def reference(scan, area, centre=0.2):
     ns = scan.surface.shape[0]
     c = (np.arange(ns) + 0.5) * SURFACE_CELL
     cx, cy = np.meshgrid(c, c)
-    hag = scan.surface - at(cx, cy)  # [y, x], 10 cm
+    hag = (scan.surface_nadir if nadir else scan.surface) - at(cx, cy)  # [y, x], 10 cm
     m0, nc, per = round(area.margin), round(area.core), round(1 / SURFACE_CELL)
     core = hag[m0 * per : (m0 + nc) * per, m0 * per : (m0 + nc) * per].reshape(nc, per, nc, per)
     half = round(centre / SURFACE_CELL / 2)
@@ -483,3 +492,49 @@ def run_area(out_dir, area, *, densities=(0.5, 2.0, 10.0), variants=("thinned", 
                 shutil.rmtree(scene / sub, ignore_errors=True)
             (scene / "forest.vox").unlink(missing_ok=True)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Near-nadir truth for finished thinned scenes
+# ---------------------------------------------------------------------------
+
+
+def nadir_truth_scores(scenes_dir, out_csv):
+    """Re-score finished thinned scenes against a truth from near-nadir pulses only.
+
+    The thinned scans sample near-nadir pulses (|scan angle| <= the scene's
+    ``max_angle``), but the default truth takes the highest return per 10 cm
+    from every pulse of the drone scan, including crown tips only oblique
+    pulses reached. Each area is read once more (no thinning, voxels or
+    tools); ``truth_nadir.npz`` is written next to ``truth.npz`` in each of
+    its thinned scenes, and their saved ``preds.npz`` are scored against it
+    into *out_csv*. Areas already in *out_csv* are skipped.
+    """
+    scenes_dir, out_csv = Path(scenes_dir), Path(out_csv)
+    done = synthetic.finished_scenarios(out_csv)
+    groups = {}
+    for meta_path in sorted(scenes_dir.glob("*/scene.json")):
+        meta = json.loads(meta_path.read_text())
+        sc = meta["scenario"]
+        if sc.get("variant") != "thinned" or meta_path.parent.name in done:
+            continue
+        if not (meta_path.parent / "preds.npz").exists():
+            continue
+        key = json.dumps({**meta["area"], "max_angle": sc["max_angle"],
+                          "centre": sc.get("reference_centre_m", 0.2)}, sort_keys=True)  # fmt: skip
+        groups.setdefault(key, []).append(meta_path.parent)
+    for key, scenes in groups.items():
+        spec = json.loads(key)
+        max_angle, centre = spec.pop("max_angle"), spec.pop("centre")
+        area = Area(**spec)
+        t = time.perf_counter()
+        scan = scan_area(area, max_angle=max_angle, candidate_fraction=0, voxels=False)
+        truth, _ = reference(scan, area, centre=centre, nadir=True)
+        for scene in scenes:
+            old = np.load(scene / "truth.npz")
+            extra = {k: old[k] for k in old.files if k not in truth}
+            np.savez_compressed(scene / "truth_nadir.npz", **truth, **extra)
+            synthetic.append_results(out_csv, synthetic.score(scene, "truth_nadir.npz"))
+        print(f"{area.name}: near-nadir truth for {len(scenes)} scenes, "
+              f"{time.perf_counter() - t:.0f} s", flush=True)  # fmt: skip
+    return out_csv

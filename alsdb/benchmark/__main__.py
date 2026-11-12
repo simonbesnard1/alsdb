@@ -240,6 +240,11 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser("uls-nadir-truth",
+                       help="re-score finished thinned ULS scenes against a near-nadir truth")  # fmt: skip
+    p.add_argument("scenes_dir", help="folder of uls scenes (thinned ones are used)")
+    p.add_argument("out_csv")
+
     p = sub.add_parser(
         "decimated", help="decimated copies of a dense ALS survey vs its full density"
     )
@@ -416,6 +421,10 @@ def main(argv=None):
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep,
                        keep_classes=tuple(args.classes) if args.classes else None,
                        candidate_fraction=args.candidate_fraction, centre=args.centre))  # fmt: skip
+    elif args.command == "uls-nadir-truth":
+        from alsdb.benchmark.uls import nadir_truth_scores
+
+        print(nadir_truth_scores(args.scenes_dir, args.out_csv))
     elif args.command == "decimated":
         from alsdb.benchmark import decimated
         from alsdb.benchmark.uls import Area
