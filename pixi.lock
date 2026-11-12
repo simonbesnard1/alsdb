@@ -28011,6 +28011,8 @@ packages:
   - joblib>=1.3 ; extra == 'ml'
   - torch>=2.0 ; extra == 'torch'
   - joblib>=1.3 ; extra == 'torch'
+  - gedidb ; extra == 'gedi'
+  - geopandas ; extra == 'gedi'
   requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/64/b4/0f0a247b23cbfc3ef98fe9e76c9c1ebb12697315db303682b3e1dc8ea560/tiledb-0.35.2-cp314-cp314-manylinux_2_28_x86_64.whl
   name: tiledb

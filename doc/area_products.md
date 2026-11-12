@@ -323,6 +323,45 @@ the simulation cannot represent. Heights above ground come from one TIN per
 chunk of shots; on the 64 Petit Buech test footprints the canopy/ground split
 agreed with gediRat's to 0.3% of the energy and its ground height to 0.21 m.
 
+### Real GEDI shots: the attenuation pipeline
+
+`alsdb.products.gedi_attenuation.run_gedi_attenuation(provider, out_dir, year=...)`
+brings the real GEDI profile, the simulated one and the ALS one to the same
+footprints:
+
+1. it reads the GEDI shots over the ALS extent from a gedidb database
+   (Besnard et al. 2025; by default the public one at GFZ), with reflectances,
+   quality flags and profiles, cached in `gedi_shots.npz`;
+2. it keeps shots with the L2A and L2B quality flags set, no degraded
+   geolocation, sensitivity of at least 0.95, leaf-on where the plant
+   functional type is deciduous, and at least 25 m inside the ALS extent;
+3. it simulates each shot with its own canopy-to-ground reflectance ratio
+   (`rhov / rhog`);
+4. it runs gedidb's `GEDIVerticalProfiler` on the simulated and ALS gap
+   profiles with each shot's `rossg` and `omega` (`cp_profiles.npz`);
+5. it compares the three per relative height (`attenuation_profiles.csv`) and
+   fits `ratio = a exp(-beta C)` to the median ratio, with `C` the ALS plant
+   area above the level.
+
+```python
+from alsdb.products.gedi_attenuation import run_gedi_attenuation
+
+result = run_gedi_attenuation(provider, "attenuation/petit_buech", year=2023, n_workers=4)
+result["profiles"]  # per relative height: ALS, simulated and real GEDI, and their ratios
+result["fits"]  # beta and amplitude for the simulated waveform and for real GEDI
+```
+
+The query and the retrieval need the `gedidb` package (the `gedi` extra) in
+the same environment; the other steps do not. `cp_pavd` is the plant area in
+each 1 % step of the canopy height (its 101 values sum to the plant area
+index). GEDI variables are kept in `footprints.parquet` as `gedi_<name>` next
+to the simulated metrics. The database has no beam elevation angle, so the
+retrieval of the simulated and ALS profiles assumes a nadir beam (less than
+0.6 % in path length). On a first test the query took under a minute; a 2 km
+PNOA tile had 331 shots, 203 after the filters, processed in 16 s. GEDI's
+geolocation error (about 10 m) and the years between the surveys are part of
+the real-against-simulated difference.
+
 ## Validation and performance
 
 The regression tests cover buffer contamination, exact boundary ownership,

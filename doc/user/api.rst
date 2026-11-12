@@ -84,8 +84,8 @@ Structural metrics and biomass
    products.biomass.compute_biomass
    products.allometry.naesset_model
    products.allometry.calibrate_naesset
-   products.allometry.wrap_sklearn_model
-   products.allometry.wrap_torch_model
+   products.biomass.wrap_sklearn_model
+   products.biomass.wrap_torch_model
    products.allometry.LinearAGBModel
    products.allometry.fit_linear_agb_model
    products.allometry.cross_validate
@@ -109,6 +109,13 @@ Waveform simulation
 
    products.waveform.simulate_waveform
    products.waveform.simulate_batch
+   products.profiles.simulate_gedi_profiles
+   products.profiles.compute_als_pavd_batch
+   products.gedi_attenuation.run_gedi_attenuation
+   products.gedi_attenuation.query_gedi_shots
+   products.gedi_attenuation.select_shots
+   products.gedi_attenuation.canopy_profiles
+   products.gedi_attenuation.attenuation_summary
 
 Tiling utilities
 -----------------
