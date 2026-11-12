@@ -27,9 +27,10 @@ dependencies:
   - sphinx-inline-tabs>=2023.4
   - numpydoc>=1.6
   - sphinxcontrib-mermaid>=0.9
-  - myst-parser>=2.0
   - ipython>=8.0
   - pip
   - pip:
     - sphinx-autosummary-accessors
     - sphinx-remove-toctrees
+    # pip, not conda: adding it to the conda solve made Read the Docs cancel the environment step
+    - myst-parser>=2.0
