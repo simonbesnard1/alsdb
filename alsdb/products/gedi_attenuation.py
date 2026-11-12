@@ -347,7 +347,8 @@ def attenuation_summary(
     shots: dict[str, np.ndarray] | None = None,
     *,
     reference: str = "als_all",
-    min_plant_area: float = 1e-3,
+    min_plant_area: float = 5e-3,
+    min_cumulative: float = 0.05,
 ) -> dict:
     """Compare the profiles per relative height and fit the transmittance model.
 
@@ -363,14 +364,24 @@ def attenuation_summary(
         ``"als_first"``.
     min_plant_area : float
         Reference plant area of a 1 % step below which it is left out of the
-        ratios.
+        per-level ratios. Near the canopy top most footprints hold almost no
+        plant area per step (over 1 km2 of Petit Buëch, 97 % below 0.005 at
+        90-100 % of the height), and ratios of such values are noise: the
+        median ratio, the ratio of means and the ratio of medians there gave
+        0.4, 1.9 and infinity on the same footprints.
+    min_cumulative : float
+        Reference plant area above a level below which the cumulative ratio
+        is left out.
 
     Returns
     -------
     dict
         ``profiles``: a table per relative height (0-100 %) with the median
-        plant area step of every profile over the usable footprints and the
-        median ratio to the reference; ``fits``: for the simulated waveform (and real
+        plant area step of every profile over the usable footprints, the
+        median ratio to the reference (``ratio_<name>``) and the median ratio
+        of the plant area from the canopy top down to that level
+        (``cumratio_<name>``, stable where the per-level ratio is not);
+        ``fits``: for the simulated waveform (and real
         GEDI), ``beta`` and ``amplitude`` of ``ratio = a * exp(-beta * C)``
         with ``C`` the reference plant area above the level, fitted to the
         median ratio; ``n_footprints``. Also written to
@@ -406,6 +417,11 @@ def attenuation_summary(
             ratio = np.where(rows[:, None] & (ref_pavd > min_plant_area), pavd / ref_pavd, np.nan)
         levels[f"pavd_{name}"] = median(np.where(rows[:, None], pavd, np.nan))
         levels[f"ratio_{name}"] = median(ratio)
+        obs_down = _plant_area_above(pavd) + np.where(np.isfinite(pavd), pavd, 0.0)
+        ref_down = above + np.where(np.isfinite(ref_pavd), ref_pavd, 0.0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cum = np.where(rows[:, None] & (ref_down > min_cumulative), obs_down / ref_down, np.nan)
+        levels[f"cumratio_{name}"] = median(cum)
         if name == other:
             continue
         fit = _profiles.fit_transmittance_model(

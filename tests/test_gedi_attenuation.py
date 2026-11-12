@@ -147,6 +147,9 @@ def test_attenuation_summary_recovers_a_known_attenuation(tmp_path):
     assert result["fits"]["gedi"]["beta"] == pytest.approx(0.8, abs=0.03)
     levels = result["profiles"]
     assert levels["ratio_als_first"].dropna().to_numpy() == pytest.approx(1.3)
+    # cumulative from the top: a constant factor stays constant, at every level with enough area
+    assert levels["cumratio_als_first"].dropna().to_numpy() == pytest.approx(1.3)
+    assert levels["cumratio_als_first"].notna().sum() >= 95
     assert (tmp_path / "attenuation_profiles.csv").exists() and len(levels) == 101
     without = ga.attenuation_summary(tmp_path)
     assert "gedi" not in without["fits"]
