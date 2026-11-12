@@ -118,6 +118,7 @@ def test_full_alsdb_run_resumes_and_reports(tiles, tmp_path, capsys):
     assert "alsdb" in text and "km2/core-h" in text
 
 
+@pytest.mark.skipif(not _have_native_spikefree(), reason="needs the native spikefree build")
 def test_alsdb_processes_runs_only_with_several_cores(tiles, tmp_path):
     work, local = tmp_path / "work", tmp_path / "local"
     timing.main([str(tiles), str(work), "--areas", "1", "--cores", "1", "2", "--repeats", "1",
