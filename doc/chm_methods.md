@@ -104,6 +104,14 @@ insertion elevation rather than LAStools' configurable height intervals. High
 outliers still need classification/filtering; triangle freezing prevents downward
 pits rather than identifying all erroneous high returns.
 
+Tiling has little effect on the spike-free result. A 1 km box of PNOA data
+computed as one tile and as 500 m or 250 m tiles (original at 3 pulses/m2,
+thinned to 0.5, and with missing strips and holes) differs in 2-3 % of the
+cells, almost all by less than a millimetre and not concentrated at the seams.
+With `freeze_distance="auto"` at most 0.01 % of the cells differ by more than
+0.5 m (the freeze distance is estimated per tile); with `"local"` no cell
+differs by more than 0.15 m. A 100 m buffer changes nothing against 50 m.
+
 ### How sensitive is the freeze distance?
 
 Measured with `python -m alsdb.benchmark sensitivity` (see
@@ -197,9 +205,12 @@ Ground TIN interpolation is shared between CHM normalization and TIN DTM output.
 The terrain uses `ground_classes` (default 2 and 9: water returns are the
 terrain surface over water, as in lidR). Duplicate ground XY locations use mean
 elevation. Outside the convex hull, or
-with insufficient noncollinear ground, heights remain missing by default.
-`ground_extrapolation=True` explicitly enables nearest-ground fallback (IDW uses
-its neighbourhood outside the hull). `max_ground_distance` limits support for
+with insufficient noncollinear ground, the terrain is the nearest ground return
+by default (IDW uses its neighbourhood outside the hull), as for the area
+metrics and profiles, and the cells carry the `terrain_extrapolated` flag;
+`ground_extrapolation=False` leaves them missing. On a 2 km PNOA tile this
+fills 1.1 % of the DTM cells, all at the data edge, and changes fewer than
+100 CHM cells. `max_ground_distance` limits support for
 both normalized points and output cells. `dtm_method="min"` is ground-point
 binning and does not interpolate. IDW and TIN retain query-buffer points.
 

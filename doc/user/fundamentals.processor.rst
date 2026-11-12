@@ -19,7 +19,7 @@ Overview of the ingestion workflow
 
 5. **Update the manifest**: on success the manifest entry is marked ``"ingested"`` with point count, CRS, and bbox recorded.
 
-6. **Consolidate**: after every ``consolidate_every`` tiles ``ingest_many()`` consolidates the array metadata (commits, fragment metadata, manifest entries); the fragments are merged once at the end (``optimize=True``).
+6. **Consolidate**: after every ``consolidate_every`` tiles ``ingest_many()`` consolidates the array metadata (commits, fragment metadata, manifest entries); the fragments are merged at the end only with ``optimize=True`` (off by default).
 
 Example usage
 -------------

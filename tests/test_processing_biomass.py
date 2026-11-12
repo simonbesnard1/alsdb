@@ -625,3 +625,22 @@ def test_torch_network_with_its_own_normalisation():
     # the normalisation is part of the weights, so of the model identity
     other = wrap_torch_model(AGBNet([12.0, 0.0], [5.0, 1.0]), ["h95", "cc"])
     assert other.model_id != model.model_id
+
+
+def test_torch_network_on_gpu_matches_cpu():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
+    import copy
+
+    torch.manual_seed(0)
+    net = torch.nn.Sequential(torch.nn.Linear(2, 16), torch.nn.ReLU(), torch.nn.Linear(16, 1))
+    m = _flat_metrics(ny=30, nx=40, h95_val=20.0, cc_val=0.5)
+    m["h95"] = m["h95"] + np.linspace(0, 5, 40, dtype=np.float32)
+    m["h95"][0, 0] = np.nan
+    m["h95"][0, 1], m["cc"][0, 1] = np.nan, 0.0
+    on_cpu = wrap_torch_model(copy.deepcopy(net), ["h95", "cc"], batch_size=500)(m)
+    on_gpu = wrap_torch_model(copy.deepcopy(net), ["h95", "cc"], device="cuda", batch_size=500)(m)
+    assert on_gpu.dtype == np.float32 and on_gpu.shape == (30, 40)
+    assert np.isnan(on_gpu[0, 0]) and on_gpu[0, 1] == 0.0
+    np.testing.assert_allclose(on_gpu, on_cpu, rtol=1e-5, atol=1e-5)

@@ -70,7 +70,7 @@ All 18 standard LAS point attributes (``Z``, ``Intensity``, ``ReturnNumber``, ``
 
 **Fragment consolidation**
 
-Each ingest call creates a new fragment. After many ingestions, fragment count grows and query overhead increases. ``ALSDatabase.optimize()`` merges fragments to restore performance; ``ingest_many()`` calls it at the end (``optimize=True``) and consolidates the array metadata (commits, fragment metadata, manifest entries) every ``consolidate_every`` tiles (default 50).
+Each ingest call creates a new fragment. After many ingestions, fragment count grows and query overhead increases. ``ALSDatabase.optimize()`` merges fragments (optional: in a 100-fragment test on a local disk reads were as fast without it); ``ingest_many()`` calls it at the end only with ``optimize=True`` and consolidates the array metadata (commits, fragment metadata, manifest entries) every ``consolidate_every`` tiles (default 50).
 
 **Domain bounds**
 

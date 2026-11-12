@@ -48,7 +48,9 @@ class CHMConfig:
     pit_fill: bool = False
     fill_max_cells: int = 4
     max_ground_distance: float | None = None
-    ground_extrapolation: bool = False
+    # Nearest ground outside the TIN hull, as the area metrics and profiles (and
+    # lidR's default); the cells are flagged EXTRAPOLATED.
+    ground_extrapolation: bool = True
     veg_classes: tuple = (3, 4, 5)
     ground_classes: tuple = GROUND_CLASSES
     pitfree_thresholds: tuple = (0.0, 2.0, 5.0, 10.0, 15.0, 20.0)

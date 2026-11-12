@@ -110,6 +110,58 @@ model may be called concurrently. Any other callable taking the metric dict and
 returning the grid also works as `model_fn`, with `model_features` and
 `model_id`.
 
+### Models in the GEDI L4A forms
+
+`alsdb.products.allometry` adds the model family of GEDI's footprint biomass
+product (L4A; Kellner et al. 2023, Duncanson et al. 2022): a linear model on
+transformed variables, `h(AGB) = b0 + b1 g(x1 + offset) + ...`, with `h` and `g`
+a square root, a natural logarithm or no transformation, transformed back with
+a bias correction (Snowdon 1991, or Baskerville 1972 for logarithms). A
+logarithm on both sides is a power law, so the Næsset form is one member.
+
+```python
+from alsdb.products.allometry import cross_validate, fit_linear_agb_model
+
+# plots: one row per field plot, metrics computed at the support of the plot
+model = fit_linear_agb_model(plots, plots["agb"], ("h50", "h95"))  # sqrt on both sides
+check = cross_validate(
+    lambda m, a: fit_linear_agb_model(m, a, ("h50", "h95")),
+    plots[["h50", "h95"]],
+    plots["agb"],
+    plots["block"],
+)
+compute_biomass(provider, store, resolution=40, year=2021, model_fn=model)
+out = model.predict(metrics, level=0.95)  # agb, se (transformed units), lower, upper
+```
+
+The fitted model records its residual error and coefficient covariance, so
+`predict` returns the standard error of a prediction, `sqrt(MSE + x Cov(b) x')`
+in transformed units, and a prediction interval, as L4A does. It is hashable
+and picklable (it runs in worker processes and identifies itself for
+resuming). Cells with returns but no canopy cover get 0, as with the Næsset
+model. With a square-root response, a negative transformed prediction gives 0.
+
+`gedi_l4a_model("ENT x Europe")` returns a published L4A model (13 models for
+32 prediction strata of plant functional type and world region; coefficients
+from Table 3 of Kellner et al. 2023, without error terms, which the document
+does not list; the model for grasses, shrubs and woodlands of Australia and
+Oceania is left out because one sign is not legible there). These models take
+the RH metrics of 25 m waveforms with 100 added before the square root, so
+they apply to simulated footprints, not to the height percentiles of
+`compute_metrics`:
+
+```python
+from alsdb.products.allometry import gedi_l4a_model
+from alsdb.products.waveform import simulate_batch
+
+footprints = simulate_batch(provider, shots, year=2021, n_workers=4)  # rh0 ... rh100
+agbd = gedi_l4a_model("ENT x Europe")(footprints)  # Mg/ha per footprint
+```
+
+The stratum has to be chosen from land cover: the forest models have a
+positive floor (the tree models for Europe give 23-24 Mg/ha on bare ground,
+RH98 of 2 m; the grass, shrub and woodland model below 1).
+
 Matching completed metric slices are read from Zarr in tile-sized windows, so
 changing the biomass model does not require rereading and normalizing the point
 cloud. Reuse requires identical input fragments, extent, buffers, ground policy,

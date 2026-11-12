@@ -622,7 +622,7 @@ class ALSDatabase(TileDBProvider):
         overwrite: bool = False,
         reproject_to: str | None = None,
         classification_config: ClassificationConfig | None = None,
-        optimize: bool = True,
+        optimize: bool = False,
         classification_workers: int | None = None,
     ) -> dict[str, int]:
         """
@@ -653,9 +653,10 @@ class ALSDatabase(TileDBProvider):
             ignoring the manifest.  If ``False`` (default), files already
             marked ``"ok"`` in the manifest are skipped.
         optimize:
-            Merge the per-file fragments at the end (:meth:`optimize`);
-            ``False`` leaves it to a separate call (it is the memory peak of
-            an ingest).
+            Also merge the per-file fragments at the end (:meth:`optimize`).
+            Off by default: with 100 fragments of 3 M points on a local disk
+            it took longer than the ingest and 11 GB of memory, and reads
+            were no faster afterwards.
         classification_workers:
             Threads per file for the runs of the PTD tilt ensemble (default:
             the CPUs available to this process divided by *n_workers*, so
@@ -827,12 +828,14 @@ class ALSDatabase(TileDBProvider):
         return results
 
     def optimize(self, memory_budget: int = 8_000_000_000, max_passes: int = 200) -> int:
-        """Merge fragments for faster reads; return the number left.
+        """Merge fragments into fewer, larger ones; return the number left.
 
         Iterative compaction: each pass merges at most 50 fragments of similar
         size, and passes repeat until the count stops falling, so memory stays
         bounded (*memory_budget* per pass) even with thousands of fragments.
-        Run after ingesting; reading works without it, only slower.
+        Optional: reading works without it, and on a local disk 100 fragments
+        read as fast as one (products are identical either way). It may help
+        with many more fragments or on object storage, which is untested.
         """
         logger.info("Starting iterative fragment compaction…")
         prev = None

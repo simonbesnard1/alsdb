@@ -19,6 +19,9 @@ The default model is a Næsset-style power law, ``AGB = a * h95^b * cc^c``
 (Næsset 2002) with generic coefficients ``a=0.8, b=1.8, c=0.5``: calibrate
 it against field plots (:func:`calibrate_naesset`) before using the
 results. Cells with returns but no canopy get 0, cells without returns NaN.
+:mod:`alsdb.products.allometry` adds models in the functional forms of GEDI
+L4A (square-root and logarithmic linear models with prediction intervals) and
+the published L4A models.
 
 References
 ----------

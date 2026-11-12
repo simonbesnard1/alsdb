@@ -85,6 +85,11 @@ Structural metrics and biomass
    products.biomass.naesset_model
    products.biomass.calibrate_naesset
    products.biomass.wrap_sklearn_model
+   products.biomass.wrap_torch_model
+   products.allometry.LinearAGBModel
+   products.allometry.fit_linear_agb_model
+   products.allometry.cross_validate
+   products.allometry.gedi_l4a_model
 
 Multi-temporal change detection
 --------------------------------

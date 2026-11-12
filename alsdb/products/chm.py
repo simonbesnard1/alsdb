@@ -129,7 +129,7 @@ def compute_chm(
     lastools_executable: str = "las2dem64",
     lastools_demo: bool = False,
     freeze_interval: float = 0.25,
-    ground_extrapolation: bool = False,
+    ground_extrapolation: bool = True,
     fill_max_cells: int = 4,
     parallel: str = "threads",
 ) -> None:
@@ -140,8 +140,9 @@ def compute_chm(
     number (m), "auto" (three pulse spacings per tile) or "local" (per 5 m
     cell, Fischer et al. 2024). Quality flags mark cells below
     ``min_pulse_density`` (pulses/m2) or above ``max_scan_angle`` (degrees);
-    ``None`` disables a flag. Terrain is missing outside the ground hull
-    unless ``ground_extrapolation=True``.
+    ``None`` disables a flag. Outside the ground hull the terrain is the
+    nearest ground return (flagged ``terrain_extrapolated``);
+    ``ground_extrapolation=False`` leaves it missing.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at
@@ -174,14 +175,15 @@ def compute_dtm(
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
     max_ground_distance: float | None = None,
-    ground_extrapolation: bool = False,
+    ground_extrapolation: bool = True,
     ground_classes: tuple[int, ...] = GROUND_CLASSES,
     parallel: str = "threads",
 ) -> None:
     """Compute a digital terrain model and write it to Zarr.
 
-    Terrain is missing outside the ground hull unless
-    ``ground_extrapolation=True``; ``max_ground_distance`` limits support.
+    Outside the ground hull the terrain is the nearest ground return;
+    ``ground_extrapolation=False`` leaves it missing, and
+    ``max_ground_distance`` limits support.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at
@@ -271,7 +273,7 @@ def compute_all(
     lastools_executable: str = "las2dem64",
     lastools_demo: bool = False,
     freeze_interval: float = 0.25,
-    ground_extrapolation: bool = False,
+    ground_extrapolation: bool = True,
     fill_max_cells: int = 4,
     parallel: str = "threads",
 ) -> None:
