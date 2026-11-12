@@ -139,20 +139,35 @@ def test_cross_validation_holds_out_whole_groups():
 
 def test_gedi_l4a_models_match_the_published_table():
     # Kellner et al. (2023), Table 3
-    model = gedi_l4a_model("ENT x Europe")
+    model = gedi_l4a_model("DBT x Europe")
     rh = {"rh70": np.array([10.0]), "rh98": np.array([25.0])}
-    expected = 1.018 * (-96.531 + 7.175 * np.sqrt(110.0) + 2.921 * np.sqrt(125.0)) ** 2
+    expected = 0.963 * (-96.531 + 7.175 * np.sqrt(110.0) + 2.921 * np.sqrt(125.0)) ** 2
     assert float(model(rh)[0]) == pytest.approx(expected, rel=1e-6)
     assert model.offset == 100.0 and (model.y_transform, model.x_transform) == ("sqrt", "sqrt")
     assert gedi_l4a_model("GSW").predictors == ("rh98",)
     # strata resolve to their model (Table 2); the multiplication sign is accepted
     assert gedi_l4a_model("EBT × Europe").name == "GEDI L4A DBT x Europe"
     assert gedi_l4a_model("DNT x North America").name == "GEDI L4A ENT x North America"
-    assert set(GEDI_L4A_STRATA.values()) <= set(GEDI_L4A_MODELS) and len(GEDI_L4A_MODELS) == 13
+    assert set(GEDI_L4A_STRATA.values()) <= set(GEDI_L4A_MODELS) and len(GEDI_L4A_MODELS) == 15
     # negative RH (below the waveform ground) stays defined thanks to the offset
     assert np.isfinite(gedi_l4a_model("EBT")({"rh50": np.array([-3.0]), "rh98": np.array([9.0])}))
     with pytest.raises(ValueError, match="unknown GEDI L4A"):
-        gedi_l4a_model("GSW x Australia and Oceania")
+        gedi_l4a_model("GSW x Oceania")
+
+
+@pytest.mark.parametrize(
+    "stratum, rh, agbd",
+    [  # real GEDI shots (gedidb: L2A RH, GEDI04_A agbd), 2020-2021
+        ("ENT x Europe", {"rh70": 6.92, "rh98": 13.36}, 74.03),
+        ("ENT x North America", {"rh70": 5.53, "rh98": 24.47}, 87.068),
+        ("GSW x Australia", {"rh50": 0.11, "rh80": 2.83, "rh98": 13.54}, 65.972),
+        ("DBT x South America", {"rh50": 8.68, "rh98": 31.0}, 136.972),
+    ],
+)
+def test_gedi_l4a_models_reproduce_the_product(stratum, rh, agbd):
+    # the four entries where the product differs from the document's Table 3
+    value = gedi_l4a_model(stratum)({k: np.array([v]) for k, v in rh.items()})
+    assert float(value[0]) == pytest.approx(agbd, rel=0.01)
 
 
 def test_fitted_model_runs_in_compute_biomass(provider, store):

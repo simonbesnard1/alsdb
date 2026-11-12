@@ -142,11 +142,23 @@ and picklable (it runs in worker processes and identifies itself for
 resuming). Cells with returns but no canopy cover get 0, as with the Næsset
 model. With a square-root response, a negative transformed prediction gives 0.
 
-`gedi_l4a_model("ENT x Europe")` returns a published L4A model (13 models for
-32 prediction strata of plant functional type and world region; coefficients
-from Table 3 of Kellner et al. 2023, without error terms, which the document
-does not list; the model for grasses, shrubs and woodlands of Australia and
-Oceania is left out because one sign is not legible there). These models take
+`gedi_l4a_model("ENT x Europe")` returns a published L4A model: 15 models for 33
+prediction strata of plant functional type and world region. The coefficients
+come from Table 3 of Kellner et al. (2023), without error terms, which the
+document does not list.
+
+The models were checked against the AGBD of real GEDI04_A shots (L2A RH and L4A
+AGBD from gedidb, 2020-2021, 14 regions). They then reproduce the product within
+1 % on every shot of 15 strata. Four entries follow the product where it differs
+from the document:
+- ENT × Europe uses the correction 0.963, not 1.018;
+- DBT × South America uses the correction 1.1055;
+- ENT × North America has an RH70 slope of 8.401, not 9.401;
+- GSW × Australia has a minus sign on RH80, which is illegible in the
+  document.
+
+EBT × South America could not be checked: there the product mostly uses RH
+metrics of an L2A algorithm that gedidb does not hold. These models take
 the RH metrics of 25 m waveforms with 100 added before the square root, so
 they apply to simulated footprints, not to the height percentiles of
 `compute_metrics`:

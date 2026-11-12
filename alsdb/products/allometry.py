@@ -619,9 +619,19 @@ GEDI_L4A_MODELS: dict[str, tuple[float, float, dict[int, float]]] = {
     "EBT x Africa": (1.113, -104.965, {50: 6.802, 98: 3.955}),
     "EBT x Australia": (1.018, -155.414, {70: 7.817, 98: 7.710}),
     "EBT x South America": (1.056, -134.770, {50: 6.654, 98: 6.687}),
+    # Same model as EBT x South America, but the product applies another
+    # back-transformation correction (fitted to GEDI04_A AGBD over Patagonia,
+    # exact to 1e-5; the document assigns 1.056).
+    "DBT x South America": (1.1055, -134.770, {50: 6.654, 98: 6.687}),
     "ENT x Australia": (0.898, -101.984, {40: 6.397, 98: 4.259}),
-    "ENT x Europe": (1.018, -96.531, {70: 7.175, 98: 2.921}),
-    "ENT x North America": (1.013, -114.355, {70: 9.401, 98: 3.346}),
+    # The document gives 1.018; the product applies 0.963, as for DBT x Europe
+    # (checked on 14,367 shots: every one within 1 % with 0.963, none with 1.018).
+    "ENT x Europe": (0.963, -96.531, {70: 7.175, 98: 2.921}),
+    # The document prints 9.401 for RH70; the product's AGBD gives 8.401
+    # (60,123 shots, exact to 1e-5).
+    "ENT x North America": (1.013, -114.355, {70: 8.401, 98: 3.346}),
+    # The document's RH80 sign is illegible ("±"); the product's AGBD gives minus.
+    "GSW x Australia": (1.128, -151.383, {50: 4.491, 80: -2.347, 98: 12.941}),
 }
 
 # Prediction stratum (plant functional type x world region) -> model
@@ -651,7 +661,7 @@ GEDI_L4A_STRATA: dict[str, str] = {
     "EBT x Africa": "EBT x Africa",
     "DBT x Australia": "EBT x Australia",
     "EBT x Australia": "EBT x Australia",
-    "DBT x South America": "EBT x South America",
+    "DBT x South America": "DBT x South America",
     "EBT x South America": "EBT x South America",
     "DNT x Australia": "ENT x Australia",
     "ENT x Australia": "ENT x Australia",
@@ -659,6 +669,7 @@ GEDI_L4A_STRATA: dict[str, str] = {
     "ENT x Europe": "ENT x Europe",
     "DNT x North America": "ENT x North America",
     "ENT x North America": "ENT x North America",
+    "GSW x Australia": "GSW x Australia",
 }
 
 
@@ -666,10 +677,17 @@ def gedi_l4a_model(stratum: str) -> LinearAGBModel:
     """Return the GEDI L4A model of a prediction stratum or model name.
 
     Coefficients are those of Table 3 of Kellner et al. (2023), for releases
-    1 and 2 of the product, transcribed from the algorithm document; check
-    them against the ``model_data`` group of the L4A files before relying on
-    exact agreement with the product. The document gives no residual errors
-    or covariances, so these models predict without standard errors.
+    1 and 2 of the product, transcribed from the algorithm document and
+    checked against the AGBD of real GEDI04_A shots (L2A RH metrics and L4A
+    AGBD from the gedidb database, 2020-2021, 14 regions). The models then
+    reproduce the product within 1 % on every shot of 15 strata. Four entries
+    differ from the document, following the product: the ENT x Europe and
+    DBT x South America corrections, the ENT x North America RH70 slope, and
+    the GSW x Australia RH80 sign (see the comments in
+    :data:`GEDI_L4A_MODELS`). EBT x South America could not be checked: there
+    the product mostly uses RH metrics of an L2A algorithm not in the
+    database. The document gives no residual errors or covariances, so these
+    models predict without standard errors.
 
     The models take RH metrics of 25 m waveforms in metres (columns ``rh40``
     to ``rh98`` of :func:`alsdb.products.waveform.simulate_batch`), not
