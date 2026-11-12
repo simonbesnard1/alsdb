@@ -58,7 +58,8 @@ pixi shell            # activate the environment
 
 | Package | Purpose |
 |---------|---------|
-| `pdal` / `python-pdal` | LAZ/LAS reading, HAG filter |
+| `pdal` / `python-pdal` | LAZ/LAS reading, ground filters |
+| `rasterio` | TIN rasterisation (tin, pit-free CHMs); from conda-forge, sharing PDAL's GDAL |
 | `tiledb` | Sparse point-cloud storage (local + S3) |
 | `zarr` | Zarr v3 store for gridded products |
 | `numpy` / `scipy` | Array operations, rasterisation, peak detection |

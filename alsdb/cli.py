@@ -116,7 +116,7 @@ def ingest_cmd(
     vegetation_thresholds: tuple[float, float, float],
     overwrite: bool,
 ) -> None:
-    """Ingest a PNOA LAZ tile into a TileDB array at ARRAY_URI."""
+    """Ingest a LAZ/LAS tile into a TileDB array at ARRAY_URI (year and CRS from its header)."""
     credentials: dict[str, str] | None = None
     if s3_access_key and s3_secret_key:
         credentials = {"AccessKeyId": s3_access_key, "SecretAccessKey": s3_secret_key}
@@ -166,7 +166,7 @@ def ingest_cmd(
 @main.command("info")
 @click.argument("laz_path", type=click.Path(exists=True, path_type=Path))
 def info_cmd(laz_path: Path) -> None:
-    """Show filename metadata and bounding box for a PNOA LAZ tile."""
+    """Show the year, bounding box and point count of a LAZ/LAS tile."""
     from alsdb.tile.tile import Tile
 
     tile = Tile(laz_path)

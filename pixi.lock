@@ -31835,6 +31835,8 @@ packages:
   - click>=8.1
   - xarray>=2024.1
   - retry>=0.9
+  - rasterio>=1.3
+  - pyproj>=3.6
   - rioxarray>=0.15 ; extra == 'crs'
   - boto3>=1.34 ; extra == 's3'
   - s3fs>=2024.2 ; extra == 's3'
