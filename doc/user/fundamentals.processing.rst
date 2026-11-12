@@ -17,18 +17,17 @@ write results directly to an :class:`~alsdb.storage.ALSZarrStore`.
 Common preprocessing
 --------------------
 
-Before any height-above-ground computation, ground points (``Classification == 2``)
-are screened for outliers using two PDAL filters applied to the ground-point
-subset only (vegetation classification is never changed):
+Before any height-above-ground computation, noise (classes 7 and 18) and
+withheld points are dropped, and low outliers in the ground class (multipath
+returns, water reflections) are reclassified as noise with PDAL's
+``filters.elm`` (Extended Local Minimum; ``ground_outlier_removal=True``).
+Vegetation classes are never changed.
 
-- ``filters.elm`` (Extended Local Minimum) — detects below-ground misclassifications
-  (multipath returns, water-surface reflections).
-- ``filters.outlier`` (statistical mode) — detects above-ground spikes in the ground
-  class (misclassified buildings or vegetation returns).
-
-Height-above-ground is then computed with ``filters.hag_delaunay`` (Delaunay TIN,
-the same method used by the DTM pipeline) with an automatic ``filters.hag_nn``
-fallback for tiles that contain fewer than 3 ground points.
+Heights above ground then come from one ground model per tile: a Delaunay TIN
+of the ground classes (``ground_classes=(2, 9)``, ground and water), extended
+beyond the outermost ground points (``ground_extrapolation=True``). Every
+product (DTM, CHM, metrics, gap fraction, waveforms) uses the same model. See
+:ref:`algorithms` for every option.
 
 Store setup
 -----------
@@ -54,7 +53,8 @@ Canopy Height Model / DTM / DSM
 
     from alsdb.products.chm import compute_chm, compute_dtm, compute_dsm, compute_all
 
-    # CHM at 1 m resolution (first returns only, max HAG per cell)
+    # CHM at 1 m resolution (default method="max": highest return per cell;
+    # "pitfree", "spikefree" and "tin" are the gap-free alternatives, see Algorithms)
     compute_chm(
         provider=reader,
         store=store,
@@ -101,8 +101,11 @@ Canopy Height Model / DTM / DSM
   by default (``dtm_method="tin"``). IDW and minimum-Z binning are available as
   alternatives via ``dtm_method="idw"`` and ``dtm_method="min"``.
 - **DSM**: maximum ``Z`` of first returns per cell (no HAG normalisation).
-- **CHM**: maximum ``HeightAboveGround`` of vegetation first returns per cell
-  (``Classification`` ∈ {3, 4, 5}, ``ReturnNumber == 1``).
+- **CHM**: heights of normalised vegetation **and** ground returns
+  (``veg_classes`` 3-5, ``ground_classes`` 2 and 9), so crown gaps stay at
+  ground level. ``method`` chooses the algorithm: ``"max"`` (default, highest
+  return per cell), ``"tin"``, ``"pitfree"``, ``"spikefree"`` or ``"lastools"``;
+  see :ref:`algorithms` and :doc:`../chm_methods`.
 
 Sub-tiles with no returns remain ``NaN`` in the store.
 

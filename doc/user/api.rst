@@ -49,6 +49,16 @@ Tile and tile name
    PNOATileName
    parse_tile_filename
 
+Ground classification
+=====================
+
+.. autosummary::
+   :toctree: generated/
+   :recursive:
+
+   methods.classification.ClassificationConfig
+   methods.ptd.ptd_ground
+
 Processing
 ==========
 
@@ -84,6 +94,8 @@ Structural metrics and biomass
    products.biomass.compute_biomass
    products.allometry.naesset_model
    products.allometry.calibrate_naesset
+   products.allometry.validate_naesset
+   products.biomass.plot_metrics
    products.biomass.wrap_sklearn_model
    products.biomass.wrap_torch_model
    products.allometry.LinearAGBModel
@@ -109,6 +121,7 @@ Waveform simulation
 
    products.waveform.simulate_waveform
    products.waveform.simulate_batch
+   products.profiles.compute_als_pavd_profile
    products.profiles.simulate_gedi_profiles
    products.profiles.compute_als_pavd_batch
    products.gedi_attenuation.run_gedi_attenuation

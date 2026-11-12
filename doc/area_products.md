@@ -381,6 +381,6 @@ selective metrics, shared normalization, provenance/restarts,
 slope-normalized PAVD, fixed pulse spacing, batch/single
 agreement, duplicate row labels, and deterministic noise.
 
-See [the benchmark instructions](benchmarks/README.md) for a reproducible real
+See [the benchmark instructions](https://github.com/simonbesnard1/alsdb/blob/main/doc/benchmarks/README.md) for a reproducible real
 sample benchmark and measured timings. Benchmarks are local observations, not
 promises for full surveys or different hardware.

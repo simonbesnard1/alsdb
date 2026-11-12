@@ -104,7 +104,7 @@ Pass a list of class codes to ``ingest()`` or ``ingest_many()`` to store only sp
 .. code-block:: python
 
     # Store only ground (2) and vegetation (3, 4, 5)
-    db.ingest("tile.laz", classes=[2, 3, 4, 5])
+    db.ingest("tile.laz", classification_filter=[2, 3, 4, 5])
 
     # Store everything (default is no filter)
     db.ingest("tile.laz")
@@ -117,7 +117,7 @@ Role of classification in processing
 The processing pipeline uses ``Classification`` and ``ReturnNumber`` directly:
 
 **HAG computation (all processing functions)**
-  ``filters.hag_delaunay`` uses ground points (``Classification == 2``) to build a Delaunay TIN, from which height-above-ground is interpolated for every other point.
+  A Delaunay TIN of the ground points (``Classification`` 2 and 9, ground and water) gives the height above ground of every other point; it is extended beyond the outermost ground points (``ground_extrapolation=True``).
 
 **Gap fraction** (``alsdb.products.gap``)
   The MacArthur–Wilson estimator uses first returns only (``ReturnNumber == 1``):

@@ -27,6 +27,7 @@ dependencies:
   - sphinx-inline-tabs>=2023.4
   - numpydoc>=1.6
   - sphinxcontrib-mermaid>=0.9
+  - myst-parser>=2.0
   - ipython>=8.0
   - pip
   - pip:

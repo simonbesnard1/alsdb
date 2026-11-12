@@ -82,7 +82,7 @@ Zarr store on S3
 TileDB S3 performance tuning
 ------------------------------
 
-For large-scale campaigns on S3, tune the TileDB S3 settings via the ``tiledb_config`` argument:
+For large-scale campaigns on S3, tune the TileDB S3 settings via the ``s3_config_overrides`` argument (raw TileDB ``vfs.s3.*`` keys, applied after alsDB's defaults):
 
 .. code-block:: python
 
@@ -95,7 +95,7 @@ For large-scale campaigns on S3, tune the TileDB S3 settings via the ``tiledb_co
             "AccessKeyId": "...",
             "SecretAccessKey": "...",
         },
-        tiledb_config={
+        s3_config_overrides={
             "vfs.s3.connect_timeout_ms": "300000",
             "vfs.s3.request_timeout_ms": "600000",
             "vfs.s3.connect_max_tries": "10",
@@ -124,5 +124,5 @@ Security considerations
     reader = ALSProvider(
         storage_type="s3",
         uri="s3://public-bucket/als_array",
-        tiledb_config={"vfs.s3.no_sign_request": "true"},
+        s3_config_overrides={"vfs.s3.no_sign_request": "true"},
     )

@@ -21,6 +21,15 @@ Welcome to the **alsDB User Guide**. This guide covers the complete workflow fro
    fundamentals
 
 .. toctree::
+   :caption: Methods
+   :maxdepth: 1
+
+   algorithms
+   CHM methods and quality <../chm_methods>
+   Area-based products, biomass and waveforms <../area_products>
+   Benchmarking <../benchmarking>
+
+.. toctree::
    :caption: Advanced Usage
    :maxdepth: 1
 

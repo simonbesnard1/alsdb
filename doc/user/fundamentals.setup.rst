@@ -30,7 +30,7 @@ Overview
       ├── ALSProvider.query_bbox()  → pandas DataFrame / xarray Dataset
       │
       └── processing.*
-             │  PDAL hag_delaunay + scipy binned_statistic_2d
+             │  ground TIN per tile → height above ground → gridded products
              ▼
           ALSZarrStore  (Zarr v3, local / s3://)
              ├── 1m/   chm, dtm, dsm          (T × ny × nx) float32
@@ -107,7 +107,7 @@ Tiling strategy
 For areas larger than a single tile, processing is split into **500 m sub-tiles** (configurable via ``tile_size``). Each sub-tile has two bounding boxes:
 
 ``query_bbox``
-  Inflated by ``tile_buffer`` (default 50 m) on all sides. Used for the TileDB query and for HAG computation via ``filters.hag_delaunay``. The larger neighbourhood ensures the Delaunay TIN is well-constrained near tile edges.
+  Inflated by ``tile_buffer`` (default 50 m) on all sides. Used for the TileDB query and for the ground TIN that gives heights above ground. The larger neighbourhood ensures the Delaunay TIN is well-constrained near tile edges.
 
 ``crop_bbox``
   The original, non-overlapping tile extent. Only pixels inside this bbox are written to the Zarr store. This prevents double-writing at tile boundaries.

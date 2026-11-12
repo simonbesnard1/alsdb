@@ -44,6 +44,7 @@ extensions = [
     "sphinx_design",
     "sphinx_inline_tabs",
     "sphinx_gallery.gen_gallery",
+    "myst_parser",  # the Markdown method pages (chm_methods.md, area_products.md, benchmarking.md)
 ]
 
 # Gallery configuration — files are shown as static examples (not executed)
@@ -64,7 +65,8 @@ for ext, warn in skippable_extensions:
         print(f"Unable to find Sphinx extension '{ext}', {warn}.")
 
 templates_path = ["_templates"]
-source_suffix = ".rst"
+source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
+myst_heading_anchors = 3
 
 project = "alsdb"
 year = datetime.now(UTC).year
@@ -78,7 +80,7 @@ today_fmt = "%B %d, %Y"
 html_last_updated_fmt = today_fmt
 
 exclude_dirs = []
-exclude_patterns = ["gallery/README.rst"]
+exclude_patterns = ["gallery/README.rst", "README.rst", "benchmarks/**", "_build/**", "index.html"]
 
 default_role = "autolink"
 

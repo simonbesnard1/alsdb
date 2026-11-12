@@ -167,7 +167,7 @@ The ``ALSZarrStore`` is a thin wrapper around a Zarr v3 group hierarchy. For adv
     import numpy as np
     data = np.zeros((100, 100), dtype=np.float32)
     bbox = (308_000.0, 4_688_000.0, 309_000.0, 4_689_000.0)
-    store.write_tile("my_variable", 10.0, 2021, data, bbox, crs="EPSG:25830")
+    store.write_tile("my_variable", 10.0, 2021, data, bbox)  # CRS: the store's (crs_wkt)
 
 The CLI
 --------

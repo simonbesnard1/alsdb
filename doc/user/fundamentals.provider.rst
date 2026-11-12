@@ -43,14 +43,14 @@ Basic query example
 Selecting attributes
 --------------------
 
-By default all stored attributes are returned. Pass ``attrs`` to restrict the output:
+By default all stored attributes are returned. Pass ``attributes`` to restrict the output:
 
 .. code-block:: python
 
     df = reader.query_bbox(
         308_000, 4_688_000, 310_000, 4_690_000,
         year=2021,
-        attrs=["Z", "Classification", "HeightAboveGround"],
+        attributes=["Z", "Classification", "ReturnNumber"],
     )
 
 To see what attributes are available:

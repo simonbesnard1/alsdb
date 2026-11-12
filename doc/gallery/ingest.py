@@ -49,8 +49,9 @@ print("\nStored CRS:", db.stored_crs())
 # --------------------------------------------
 #
 # :py:meth:`alsdb.ALSDatabase.ingest_many` processes a list of LAZ files in parallel
-# using a ``ThreadPoolExecutor``. Fragment consolidation is triggered every
-# ``consolidate_every`` tiles.
+# using a ``ThreadPoolExecutor``. The array metadata is consolidated every
+# ``consolidate_every`` tiles; merging the fragments themselves
+# (:py:meth:`alsdb.ALSDatabase.optimize`) is optional.
 
 from pathlib import Path
 
@@ -58,8 +59,8 @@ paths = sorted(Path("/path/to/als_tiles/").glob("*.laz"))
 
 db.ingest_many(
     paths,
-    max_workers=8,  # number of parallel LAZ readers / TileDB writers
-    consolidate_every=50,  # merge fragments every 50 tiles for better query performance
+    n_workers=8,  # number of parallel LAZ readers / TileDB writers
+    consolidate_every=50,  # consolidate the array metadata every 50 tiles
 )
 
 # %%
@@ -71,7 +72,7 @@ db.ingest_many(
 
 db.ingest(
     "/path/to/tile.laz",
-    classes=[2, 3, 4, 5],  # ASPRS classification codes
+    classification_filter=[2, 3, 4, 5],  # keep only these ASPRS classes
 )
 
 # %%

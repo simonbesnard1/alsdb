@@ -34,7 +34,7 @@ To ingest a full directory in parallel:
     from pathlib import Path
 
     paths = sorted(Path("/data/als/").glob("*.laz"))
-    db.ingest_many(paths, max_workers=8, consolidate_every=50)
+    db.ingest_many(paths, n_workers=8, consolidate_every=50)
 
 Already-ingested files (tracked in the manifest) are skipped automatically.
 

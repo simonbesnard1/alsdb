@@ -211,3 +211,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Sphinx build outputs written into doc/
+doc/_build/
+doc/auto_examples/
+doc/user/generated/
+doc/sg_execution_times.rst

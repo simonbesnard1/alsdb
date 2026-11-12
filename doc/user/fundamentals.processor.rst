@@ -46,8 +46,8 @@ Example usage
 
     db.ingest_many(
         paths,
-        max_workers=8,          # parallel LAZ readers / TileDB writers
-        consolidate_every=50,   # consolidate fragments every 50 tiles
+        n_workers=8,            # parallel LAZ readers / TileDB writers
+        consolidate_every=50,   # consolidate the array metadata every 50 tiles
     )
 
 **Filter to specific LAS classes**
@@ -56,7 +56,7 @@ Pass a list of LAS class codes to ``ingest()`` or ``ingest_many()`` to restrict 
 
 .. code-block:: python
 
-    db.ingest("tile.laz", classes=[2, 3, 4, 5])
+    db.ingest("tile.laz", classification_filter=[2, 3, 4, 5])
 
 **Re-ingest from scratch**
 
@@ -77,26 +77,27 @@ The manifest records the ingestion status of every file. It is stored in the Til
     # Check stored CRS
     print(db.stored_crs())   # e.g. "EPSG:25830"
 
-Fragment consolidation
------------------------
+Fragment compaction
+-------------------
 
-Every ingested tile creates a new TileDB *fragment*. After many ingestions, fragment count grows and the overhead of opening/scanning fragments during queries increases. Consolidation merges fragments into larger ones:
-
-.. code-block:: python
-
-    db.consolidate()
-
-By default ``ingest_many()`` consolidates every 50 tiles automatically. For very large campaigns you may want to run a final consolidation after all tiles are ingested:
+Every ingested tile creates a new TileDB *fragment*. ``ingest_many()``
+consolidates the array **metadata** (commits, fragment metadata, manifest
+entries) every ``consolidate_every`` tiles, which keeps opening the array fast.
+Merging the fragments themselves is optional:
 
 .. code-block:: python
 
-    db.ingest_many(paths, max_workers=8, consolidate_every=500)
-    db.consolidate()   # final consolidation
+    db.optimize()   # iterative compaction, bounded memory; returns the fragments left
+
+On a local disk, reading 100 fragments was as fast as reading one, and
+products are identical either way. Compaction may help with many thousands of
+fragments or on object storage (untested); ``ingest_many(..., optimize=True)``
+runs it after ingesting.
 
 Performance considerations
 --------------------------
 
-- Use ``max_workers=8`` or more for large campaigns. Each worker reads a LAZ file and writes to TileDB independently.
-- Keep ``consolidate_every`` between 50 and 200. Too frequent consolidation adds overhead; too infrequent degrades query performance.
+- Use ``n_workers=8`` or more for large campaigns. Each worker reads a LAZ file and writes to TileDB independently.
+- Keep ``consolidate_every`` between 50 and 200: each pass consolidates only metadata, so it is cheap, but too infrequent passes slow down opening the array.
 - On S3, set ``multipart_part_size`` in the TileDB S3 config to at least 50 MB for efficient multipart uploads.
 - The TileDB domain bounds are set once at array creation. If you later ingest data outside the initial domain, points will be silently clipped. Choose domain bounds conservatively (see :ref:`fundamentals-setup`).
