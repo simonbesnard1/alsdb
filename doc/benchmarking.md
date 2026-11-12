@@ -449,6 +449,33 @@ Buëch terrain is milder (at most 18% above 45°); Robson Creek's reference
 classification is itself uncertain. A 500 m tile at 2 pulses/m² took 9 s for
 one run, 77 s for the ensemble and 14 s with `workers=8`.
 
+## GEDI attenuation over many blocks
+
+`pixi run -e gedi python -m alsdb.benchmark gedi-attenuation <out_dir> --selection
+<lidarhd-select CSVs> --data-dir <tiles>` runs
+`alsdb.products.gedi_attenuation.run_gedi_attenuation` on every block:
+- ingest the block's tiles;
+- query the GEDI L2A/L2B shots over it from gedidb, keeping those within
+  `--year-window` years (default 2) of the ALS survey;
+- simulate the same footprints from the ALS points with each shot's
+  rhov/rhog;
+- compare the real, simulated and ALS canopy profiles.
+
+Blocks flown leaf-off are skipped, since their ALS profile is not comparable
+with leaf-on shots. GEDI's own `leaf_off_flag` is kept as a column but not
+applied: it comes from a phenology climatology and flagged late-August orbits
+over Petit Buëch as leaf-off. Pass `--gedi-leaf-flag` to filter on it at
+selection.
+
+Outputs:
+- `blocks.csv`: one row per block, with its status, shots and fitted
+  transmittance;
+- `profiles.csv`: every block's per-height table;
+- `<block>/`: each block's footprint table and profiles. Its TileDB store is
+  deleted afterwards unless `--keep-store`.
+
+The `gedi` pixi environment adds gedidb (from git) to alsdb.
+
 ## What agreement to expect
 
 On a Barcelona PNOA tile (inner 1 km², same auto parameters), alsdb pitfree

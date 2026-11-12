@@ -156,8 +156,31 @@ install-lasr = "Rscript -e \"install.packages('lasR', repos = c('https://r-lidar
 python = "3.12.*"
 helios = ">=2.2.2"
 
+# Optional gedidb (GFZ) for alsdb.products.gedi_attenuation: real GEDI L2A/L2B
+# shots next to the simulated ones. gedidb from git (below); its compiled dependencies
+# from conda-forge (numba pins the Python version it supports).
+[tool.pixi.feature.gedi.dependencies]
+python = "3.13.*"
+numba = ">=0.62"
+dask = ">=2025.10"
+distributed = ">=2025.9"
+geopandas = ">=1.1"
+h5py = ">=3.14"
+# As in lasr: without these, PDAL's TileDB and HDF plugins fail to load (libaws-c-s3.so.1.1).
+hdf5 = ">=2"
+aws-c-s3 = "<1"
+
+[tool.pixi.feature.gedi.activation.env]
+PYTHONNOUSERSITE = "1"  # packages in ~/.local/lib/python3.13 otherwise shadow the environment's
+
+[tool.pixi.feature.gedi.pypi-dependencies]
+# From git: the 2026.04.30 release predates the s3.gfz.de access point and the
+# batched S3 reads, and its query exhausted 14 GB on a 4 km2 block.
+gedidb = { git = "https://github.com/simonbesnard1/gedidb.git", rev = "a75ff1e58a98074bd71c02b2d3d2da44ee5f4f47" }
+
 [tool.pixi.environments]
 default = { features = [] }
 spikefree = { features = ["spikefree"] }
 lasr = { features = ["lasr"] }
 helios = { features = ["helios"], no-default-feature = true }
+gedi = { features = ["gedi"] }

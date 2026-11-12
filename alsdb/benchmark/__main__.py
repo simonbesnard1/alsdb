@@ -240,6 +240,22 @@ def main(argv=None):
     p.add_argument("--threads", type=int, default=8, help="HELIOS++ threads")
     p.add_argument("--keep", action="store_true", help="keep HELIOS++ output and tool products")
 
+    p = sub.add_parser("gedi-attenuation",
+                       help="GEDI attenuation on every block of Lidar HD selections (gedi env)")  # fmt: skip
+    p.add_argument("out_dir")
+    p.add_argument("--selection", nargs="+", required=True, help="lidarhd-select CSV(s)")
+    p.add_argument("--data-dir", required=True, help="folder with one tile folder per block")
+    p.add_argument("--crs", default="EPSG:2154")
+    p.add_argument("--year-window", type=int, default=2,
+                   help="keep GEDI shots within this many years of the ALS survey")  # fmt: skip
+    p.add_argument("--include-leaf-off", action="store_true",
+                   help="also blocks flown leaf-off (not comparable with leaf-on shots)")  # fmt: skip
+    p.add_argument("--gedi-leaf-flag", action="store_true",
+                   help="drop shots GEDI flags leaf-off (default: keep, filter in the analysis)")  # fmt: skip
+    p.add_argument("--workers", type=int, default=4, help="simulation worker processes")
+    p.add_argument("--ingest-workers", type=int, default=4)
+    p.add_argument("--keep-store", action="store_true", help="keep each block's TileDB store")
+
     p = sub.add_parser("uls-nadir-truth",
                        help="re-score finished thinned ULS scenes against a near-nadir truth")  # fmt: skip
     p.add_argument("scenes_dir", help="folder of uls scenes (thinned ones are used)")
@@ -421,6 +437,13 @@ def main(argv=None):
                        max_angle=args.max_angle, threads=args.threads, keep=args.keep,
                        keep_classes=tuple(args.classes) if args.classes else None,
                        candidate_fraction=args.candidate_fraction, centre=args.centre))  # fmt: skip
+    elif args.command == "gedi-attenuation":
+        from alsdb.benchmark.gedi import run_blocks
+
+        print(run_blocks(args.out_dir, args.selection, args.data_dir, crs=args.crs,
+                         year_window=args.year_window, include_leaf_off=args.include_leaf_off,
+                         leaf_flag=args.gedi_leaf_flag, n_workers=args.workers,
+                         ingest_workers=args.ingest_workers, keep_store=args.keep_store))  # fmt: skip
     elif args.command == "uls-nadir-truth":
         from alsdb.benchmark.uls import nadir_truth_scores
 
