@@ -159,10 +159,18 @@ class TileDBProvider:
     # ------------------------------------------------------------------
 
     def __getstate__(self) -> dict:
-        """Return the picklable state: everything but the TileDB context."""
+        """Return the picklable state: everything but the TileDB context.
+
+        A relative local path is made absolute, so a worker process finds the
+        array whatever its working directory (the provider itself keeps the
+        path as given, which product provenance records).
+        """
         state = self.__dict__.copy()
         state.pop("ctx", None)
         state["_schema_cache"] = None
+        uri = state.get("array_uri")
+        if self.storage_type == "local" and uri and "://" not in uri:
+            state["array_uri"] = os.path.abspath(uri)
         return state
 
     def __setstate__(self, state: dict) -> None:

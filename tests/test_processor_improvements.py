@@ -1,5 +1,7 @@
 """Regressions for buffered ownership, shared work and footprint physics."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -214,6 +216,26 @@ def test_provider_pickles_for_worker_processes(provider):
     assert lean._raw_cfg["sm.tile_cache_size"] == "0"
     assert provider._raw_cfg["sm.tile_cache_size"] != "0"  # the original is untouched
     assert len(query_to_array(lean, bbox, 2021, ("Z",))) > 0
+
+
+def test_relative_provider_path_survives_a_change_of_directory(provider, tmp_path, monkeypatch):
+    """Worker processes may start elsewhere: the pickled path is absolute."""
+    import copy
+    import os
+    import pickle
+
+    from alsdb.products._tiling import query_to_array
+
+    monkeypatch.chdir(Path(provider.array_uri).parent)
+    relative = copy.copy(provider)
+    relative.array_uri = os.path.relpath(provider.array_uri)
+    data = pickle.dumps(relative)
+    assert relative.array_uri == os.path.relpath(provider.array_uri)  # kept as given (provenance)
+    monkeypatch.chdir(tmp_path)
+    clone = pickle.loads(data)
+    assert clone.array_uri == os.path.abspath(provider.array_uri)
+    bbox = (308400.0, 4688400.0, 308500.0, 4688500.0)
+    assert len(query_to_array(clone, bbox, 2021, ("Z",))) > 0
 
 
 def test_batched_waveforms_duplicate_indices_and_worker_determinism(provider):
