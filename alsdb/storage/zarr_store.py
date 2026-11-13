@@ -125,6 +125,28 @@ def _res_str(resolution: float) -> str:
     return f"{resolution}m"
 
 
+def _same_configuration(record, fingerprint):
+    """Whether a stored run record has the configuration of *fingerprint*.
+
+    Runs recorded before local array paths were made absolute may carry a
+    relative ``source``: it counts as the same if it resolves (against the
+    current directory) to the source of the new configuration.
+    """
+    import hashlib
+    import json
+    import os
+
+    if record["fingerprint"] == fingerprint:
+        return True
+    configuration = record.get("configuration")
+    source = configuration.get("source") if isinstance(configuration, dict) else None
+    if not isinstance(source, str) or "://" in source or os.path.isabs(source):
+        return False
+    resolved = {**configuration, "source": os.path.abspath(source)}
+    encoded = json.dumps(resolved, sort_keys=True, allow_nan=False)
+    return hashlib.sha256(encoded.encode()).hexdigest() == fingerprint
+
+
 class ALSZarrStore:
     """
     Zarr-backed store for ALS gridded products.
@@ -447,7 +469,7 @@ class ALSZarrStore:
                     f"{variable}/{year} has no processing provenance; use overwrite=True"
                 )
             return False
-        if record["fingerprint"] != fingerprint:
+        if not _same_configuration(record, fingerprint):
             raise ValueError(
                 f"{variable}/{year} has a different processing configuration; use overwrite=True"
             )
@@ -476,7 +498,7 @@ class ALSZarrStore:
             arr = group[variable]
             records = dict(arr.attrs.get("processing_runs", {}))
             previous = records.get(str(year))
-            resumed = bool(resume and previous and previous["fingerprint"] == fingerprint)
+            resumed = bool(resume and previous and _same_configuration(previous, fingerprint))
             records[str(year)] = {
                 "status": "running",
                 "fingerprint": fingerprint,

@@ -218,24 +218,46 @@ def test_provider_pickles_for_worker_processes(provider):
     assert len(query_to_array(lean, bbox, 2021, ("Z",))) > 0
 
 
-def test_relative_provider_path_survives_a_change_of_directory(provider, tmp_path, monkeypatch):
-    """Worker processes may start elsewhere: the pickled path is absolute."""
-    import copy
+def test_relative_local_uri_is_resolved_once(provider, tmp_path, monkeypatch):
+    """TileDB resolves relative paths against its first working directory, so
+    the provider resolves them itself, when it is made."""
     import os
     import pickle
 
+    from alsdb.core.alsprovider import ALSProvider
     from alsdb.products._tiling import query_to_array
 
     monkeypatch.chdir(Path(provider.array_uri).parent)
-    relative = copy.copy(provider)
-    relative.array_uri = os.path.relpath(provider.array_uri)
-    data = pickle.dumps(relative)
-    assert relative.array_uri == os.path.relpath(provider.array_uri)  # kept as given (provenance)
-    monkeypatch.chdir(tmp_path)
-    clone = pickle.loads(data)
-    assert clone.array_uri == os.path.abspath(provider.array_uri)
+    relative = ALSProvider(storage_type="local", uri=os.path.basename(provider.array_uri))
+    assert relative.array_uri == os.path.abspath(provider.array_uri)
+    monkeypatch.chdir(tmp_path)  # later directory changes do not move the array
     bbox = (308400.0, 4688400.0, 308500.0, 4688500.0)
+    assert len(query_to_array(relative, bbox, 2021, ("Z",))) > 0
+    clone = pickle.loads(pickle.dumps(relative))  # what a worker process receives
     assert len(query_to_array(clone, bbox, 2021, ("Z",))) > 0
+    assert ALSProvider(storage_type="local", uri="file:///x/y").array_uri == "file:///x/y"
+
+
+def test_run_recorded_with_a_relative_source_is_still_the_same_run(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import os
+
+    from alsdb.storage.zarr_store import _same_configuration
+
+    def record(config):
+        encoded = json.dumps(config, sort_keys=True)
+        return {"fingerprint": hashlib.sha256(encoded.encode()).hexdigest(),
+                "configuration": config}  # fmt: skip
+
+    monkeypatch.chdir(tmp_path)
+    old = record({"source": "my_array", "resolution": 1.0})
+    new = record({"source": os.path.abspath("my_array"), "resolution": 1.0})
+    assert _same_configuration(old, new["fingerprint"])
+    other = record({"source": os.path.abspath("other_array"), "resolution": 1.0})
+    assert not _same_configuration(old, other["fingerprint"])
+    changed = record({"source": os.path.abspath("my_array"), "resolution": 2.0})
+    assert not _same_configuration(old, changed["fingerprint"])
 
 
 def test_batched_waveforms_duplicate_indices_and_worker_determinism(provider):

@@ -12,6 +12,19 @@ import tiledb
 logger = logging.getLogger(__name__)
 
 
+def local_uri(uri: str) -> str:
+    """Absolute form of a local array path (URIs with a scheme are returned as given).
+
+    TileDB resolves relative paths against the working directory it saw when
+    first used in the process, not the current one: after ``os.chdir`` (e.g.
+    ``%cd`` in Jupyter) a relative path would silently point to the old
+    folder, and worker processes, which start from the current one, would not
+    find the array. Resolving once, when the provider is made, avoids both.
+    """
+    uri = str(uri)
+    return uri if "://" in uri else os.path.abspath(uri)
+
+
 class TileDBProvider:
     """
     Base class for managing low-level interactions with TileDB arrays for ALS data.
@@ -74,7 +87,7 @@ class TileDBProvider:
         elif self.storage_type == "local":
             if not uri:
                 raise ValueError("'uri' must be provided when storage_type='local'.")
-            self.array_uri = uri
+            self.array_uri = local_uri(uri)
             self._raw_cfg, self.ctx = self._initialize_local_context()
 
         else:
@@ -159,18 +172,10 @@ class TileDBProvider:
     # ------------------------------------------------------------------
 
     def __getstate__(self) -> dict:
-        """Return the picklable state: everything but the TileDB context.
-
-        A relative local path is made absolute, so a worker process finds the
-        array whatever its working directory (the provider itself keeps the
-        path as given, which product provenance records).
-        """
+        """Return the picklable state: everything but the TileDB context."""
         state = self.__dict__.copy()
         state.pop("ctx", None)
         state["_schema_cache"] = None
-        uri = state.get("array_uri")
-        if self.storage_type == "local" and uri and "://" not in uri:
-            state["array_uri"] = os.path.abspath(uri)
         return state
 
     def __setstate__(self, state: dict) -> None:
