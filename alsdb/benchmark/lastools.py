@@ -133,7 +133,7 @@ def rasterize_lastools(
 # File-based reference products
 # ---------------------------------------------------------------------------
 
-PRODUCTS = ("spikefree", "max")
+PRODUCTS = ("spikefree", "max", "dtm")
 
 
 def _tool(name, lastools_dir):
@@ -213,7 +213,7 @@ def run(
     laz_dir,
     out_dir,
     *,
-    products=PRODUCTS,
+    products=("spikefree", "max"),
     veg_classes=(3, 4, 5),
     ground_classes=GROUND_CLASSES,
     resolution=1.0,
@@ -231,7 +231,9 @@ def run(
 
     ``lasheight -replace_z`` normalises points on LAStools' own ground TIN;
     ``spikefree`` runs ``las2dem -spike_free`` on the surface classes and
-    ``max`` runs ``lascanopy -max`` on their first returns.
+    ``max`` runs ``lascanopy -max`` on their first returns. ``dtm`` runs
+    ``las2dem`` on the ground classes of the raw tile (a TIN of ground and
+    water, as alsdb's DTM); it needs no normalisation.
     ``freeze_distance="auto"`` applies alsdb's rule per tile. Tiles have no
     neighbour buffer. Finished outputs are skipped; *hag_dir* reuses existing
     heights; each call is killed after *timeout* seconds.
@@ -242,9 +244,13 @@ def run(
     out_dir = Path(out_dir)
     classes = " ".join(map(str, surface_classes(veg_classes, ground_classes)))
     lasheight, env = _tool("lasheight64", lastools_dir)  # products=() runs only lasheight
-    las2dem, _ = _tool("las2dem64", lastools_dir) if "spikefree" in products else (None, None)
+    needs_dem = {"spikefree", "dtm"} & set(products)
+    las2dem, _ = _tool("las2dem64", lastools_dir) if needs_dem else (None, None)
+    ground = " ".join(map(str, ground_classes))
+    needs_hag = not products or {"spikefree", "max"} & set(products)
     lascanopy, _ = _tool("lascanopy64", lastools_dir) if "max" in products else (None, None)
-    for sub in ("hag", *products):
+    subs = ("hag", *products) if needs_hag else products
+    for sub in subs:
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
     files = list_tiles(laz_dir, tiles)
     record = {
@@ -254,7 +260,7 @@ def run(
 
     # Outputs go under .partial/ and are moved into place only on success, so
     # an interrupted run never leaves a truncated file that looks finished.
-    for sub in ("hag", *products):
+    for sub in subs:
         shutil.rmtree(out_dir / sub / ".partial", ignore_errors=True)
         (out_dir / sub / ".partial").mkdir()
 
@@ -269,7 +275,7 @@ def run(
         hag = Path(hag_dir) / f"{stem}.laz" if hag_dir is not None else None
         if hag is None or not hag.is_file():
             hag = out_dir / "hag" / f"{stem}.laz"
-        if not hag.is_file():
+        if needs_hag and not hag.is_file():
             _call(
                 [
                     lasheight,
@@ -303,6 +309,14 @@ def run(
             ]  # fmt: skip
             _call(command, env, partial(targets["spikefree"]), timeout)
             os.replace(partial(targets["spikefree"]), targets["spikefree"])
+        if "dtm" in products and not targets["dtm"].is_file():
+            command = [
+                las2dem, "-i", str(path), "-keep_class", *ground.split(),
+                "-kill", str(max_triangle_edge), "-step", str(resolution),
+                "-nbits", "32", "-no_kml", "-fail", "-o", str(partial(targets["dtm"])),
+            ]  # fmt: skip
+            _call(command, env, partial(targets["dtm"]), timeout)
+            os.replace(partial(targets["dtm"]), targets["dtm"])
         if "max" in products and not targets["max"].is_file():
             # lascanopy appends "_max" to the output name it is given.
             stub = partial(targets["max"]).with_name(f"{stem}.tif")
@@ -324,6 +338,7 @@ def run(
         "hag_dir": None if hag_dir is None else str(hag_dir),
         "products": products,
         "surface_classes": classes,
+        "ground_classes": ground,
         "resolution": resolution,
         "freeze_distance": freeze_distance,
         "freeze_interval": freeze_interval,

@@ -17,6 +17,7 @@ from pathlib import Path
 from alsdb.benchmark._common import write_provenance
 
 SCRIPT = Path(__file__).with_name("lasr_chm.R")
+DTM_SCRIPT = Path(__file__).with_name("lasr_dtm.R")
 
 
 def lasr_version(rscript="Rscript"):
@@ -93,3 +94,23 @@ def run(
         },
     )
     return {"pitfree": out_dir / "pitfree", "spikefree": out_dir / "spikefree"}
+
+
+def run_dtm(laz_dir, out_dir, *, n_workers=8, tiles=None, rscript="Rscript"):
+    """Write ``<out_dir>/dtm/<tile>.tif``: lasR TIN of ground and water (classes 2, 9).
+
+    Each tile is read with a 50 m buffer from its neighbours, as :func:`run`;
+    finished tiles are skipped. The run record goes to ``runs.json``.
+    """
+    version = lasr_version(rscript)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    command = [shutil.which(rscript), str(DTM_SCRIPT), str(laz_dir), str(out_dir),
+               f"--ncores={int(n_workers)}"]  # fmt: skip
+    if tiles is not None:
+        command.append(f"--tiles={int(tiles)}")
+    subprocess.run(command, check=True)
+    write_provenance(out_dir, {"tool": "lasR", "version": version, "product": "dtm",
+                               "params": {"laz_dir": str(laz_dir), "ground_classes": [2, 9],
+                                          "buffer": 50, "tiles": tiles}})  # fmt: skip
+    return out_dir / "dtm"

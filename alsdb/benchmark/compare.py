@@ -99,6 +99,7 @@ class _Candidate:
     t: int
     done: np.ndarray  # (tile_row, tile_col) finished
     tile_px: int
+    group: object = None  # zarr group of the resolution, for other layers
 
 
 def _open_candidate(name, path, variable, resolution, year):
@@ -127,7 +128,8 @@ def _open_candidate(name, path, variable, resolution, year):
         flat[[i for i in finished if i < flat.size]] = True
         done = flat.reshape(shape)
     grid = (float(attrs["x_origin"]), float(attrs["y_origin"]), ny, nx)
-    return _Candidate(name, array, int(np.flatnonzero(times == year)[0]), done, tile_px), grid
+    t = int(np.flatnonzero(times == year)[0])
+    return _Candidate(name, array, t, done, tile_px, group), grid
 
 
 def reference_index(ref_dir):
@@ -218,6 +220,7 @@ class Comparison:
     candidates: list
     references: list
     height_bins: tuple
+    bin_variable: str = None  # None: classes by the reference value
     overall: dict = field(default_factory=dict)  # (ref, cand) -> Moments
     binned: dict = field(default_factory=dict)  # (ref, cand, bin) -> Moments
     samples: dict = field(default_factory=dict)  # (ref, cand, bin) -> Reservoir
@@ -252,7 +255,8 @@ class Comparison:
                     f"  {cand:12s} n={a['n']:,}  bias={a['bias']:+.3f}  MAE={a['mae']:.3f}  "
                     f"RMSE={a['rmse']:.3f}  R2={a['r2']:.3f}  r={a['r']:.3f}"
                 )
-            lines.append("  bias by reference height: " + "   ".join(
+            by = f"by {self.bin_variable}" if self.bin_variable else "by reference value"
+            lines.append(f"  bias {by}: " + "   ".join(
                 f"{b['lo']:g}-{b['hi']:g}" for b in next(iter(by_cand.values()))["bins"]))  # fmt: skip
             for cand, s in by_cand.items():
                 lines.append(f"  {cand:12s} " + "  ".join(
@@ -277,6 +281,7 @@ def compare(
     resolution=1.0,
     variable="chm",
     height_bins=HEIGHT_BINS,
+    bin_variable=None,
     map_block=100,
     sample_cap=200_000,
     limit=None,
@@ -286,7 +291,11 @@ def compare(
     """Score each alsdb store in *candidates* against each folder in *references*.
 
     *candidates* and *references* map display names to paths. Candidate stores
-    must share one grid. Height classes use the reference value. ``limit``
+    must share one grid. *variable* is the compared layer ("chm", "dtm",
+    ...). Classes (*height_bins*) use the reference value, or with
+    *bin_variable* that layer of the first candidate store, e.g.
+    ``variable="dtm", bin_variable="chm_terrain_slope"`` scores the DTM by
+    terrain slope (degrees). ``limit``
     stops after that many candidate tiles (smoke test). Residual samples (up to
     *sample_cap* per reference/candidate/class) and *map_block*-pixel block
     means of the residual are kept for plotting.
@@ -302,7 +311,12 @@ def compare(
         raise ValueError(f"Candidate stores are on different grids: {sorted(grids)}")
     x_origin, y_origin, ny, nx = grids.pop()
     indexes = {name: reference_index(path) for name, path in references.items()}
-    result = Comparison(list(candidates), list(references), tuple(height_bins))
+    result = Comparison(list(candidates), list(references), tuple(height_bins), bin_variable)
+    binner = None
+    if bin_variable:
+        if bin_variable not in opened[0].group:
+            raise ValueError(f"{opened[0].name}: no layer {bin_variable!r} at this resolution")
+        binner = opened[0].group[bin_variable]
     rng = np.random.default_rng(seed)
     nbins = len(height_bins) - 1
     mshape = (-(-ny // map_block), -(-nx // map_block))
@@ -341,13 +355,22 @@ def compare(
             )
             brow = np.broadcast_to((rows // map_block)[:, None], valid.shape)
             bcol = np.broadcast_to((cols // map_block)[None, :], valid.shape)
+            classes = (
+                None
+                if binner is None
+                else np.asarray(binner[opened[0].t, row0:row1, col0:col1], np.float32)
+            )
             for ref, index in indexes.items():
                 reference = read_reference(index, bounds, resolution)
                 m = valid & np.isfinite(reference)
                 if not m.any():
                     continue
                 x = reference[m]
-                bin_of = np.digitize(x, height_bins[1:-1])
+                if classes is None:
+                    bin_of = np.digitize(x, height_bins[1:-1])
+                else:  # cells without a class value (NaN) fall in no class
+                    c = classes[m]
+                    bin_of = np.where(np.isfinite(c), np.digitize(c, height_bins[1:-1]), -1)
                 for cand, v in values.items():
                     y = v[m]
                     result.overall[(ref, cand)].update(x, y)

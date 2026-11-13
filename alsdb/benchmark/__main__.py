@@ -145,6 +145,7 @@ def main(argv=None):
     p.add_argument("laz_dir")
     p.add_argument("out_dir")
     p.add_argument("--products", nargs="*", default=["spikefree", "max"],
+                   choices=["spikefree", "max", "dtm"],
                    help="none given: only lasheight normalization")  # fmt: skip
     p.add_argument("--veg", type=_classes, default=(3, 4, 5), help="e.g. 3,4,5")
     p.add_argument("--freeze", type=_number_or_auto, default="auto")
@@ -162,6 +163,7 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--tiles", type=int, help="only the first N tiles (pilot)")
     p.add_argument("--normalized", action="store_true", help="input Z is already height")
+    p.add_argument("--dtm", action="store_true", help="only the DTM (TIN of ground and water)")
 
     p = sub.add_parser("synthetic", help="HELIOS++ scenes with exact truth; score all tools")
     p.add_argument("out_dir")
@@ -329,6 +331,9 @@ def main(argv=None):
     p.add_argument("--ref", nargs="+", required=True, metavar="NAME=DIR")
     p.add_argument("--year", type=int, required=True)
     p.add_argument("--resolution", type=float, default=1.0)
+    p.add_argument("--variable", default="chm", help="compared layer, e.g. chm or dtm")
+    p.add_argument("--bin-variable", help="classes from this store layer, e.g. chm_terrain_slope")
+    p.add_argument("--bins", type=float, nargs="+", help="class edges (default 0 2 5 10 15 20 inf)")
     p.add_argument("--limit", type=int, help="stop after N tiles (smoke test)")
     p.add_argument("--npz", help="save stats, residual samples and maps here")
 
@@ -393,11 +398,14 @@ def main(argv=None):
     elif args.command == "lasr":
         from alsdb.benchmark import lasr
 
-        lasr.run(
-            args.laz_dir, args.out_dir, veg_classes=args.veg, freeze_distance=args.freeze,
-            max_edge=args.edge, n_workers=args.workers, tiles=args.tiles,
-            normalized=args.normalized,
-        )  # fmt: skip
+        if args.dtm:
+            lasr.run_dtm(args.laz_dir, args.out_dir, n_workers=args.workers, tiles=args.tiles)
+        else:
+            lasr.run(
+                args.laz_dir, args.out_dir, veg_classes=args.veg, freeze_distance=args.freeze,
+                max_edge=args.edge, n_workers=args.workers, tiles=args.tiles,
+                normalized=args.normalized,
+            )  # fmt: skip
     elif args.command == "synthetic":
         import itertools
 
@@ -504,10 +512,12 @@ def main(argv=None):
 
         print(run(args.scenes_dir, args.out_csv, workers=args.workers, keep=args.keep))
     elif args.command == "compare":
-        from alsdb.benchmark.compare import compare
+        from alsdb.benchmark.compare import HEIGHT_BINS, compare
 
         result = compare(
             _pairs(args.store), _pairs(args.ref), year=args.year, resolution=args.resolution,
+            variable=args.variable, bin_variable=args.bin_variable,
+            height_bins=tuple(args.bins) if args.bins else HEIGHT_BINS,
             limit=args.limit, progress=True,
         )  # fmt: skip
         print(result.summary())

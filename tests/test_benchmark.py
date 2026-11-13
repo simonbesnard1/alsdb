@@ -1,6 +1,7 @@
 """alsdb.benchmark: reference runners (external tools faked) and matched comparison."""
 
 import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,6 +74,24 @@ def test_compare_uses_only_tiles_finished_in_every_candidate(provider, store, tm
     result = compare({"alsdb": store.path}, {"ref": ref}, year=2021, resolution=10.0)
     assert result.tiles_compared == 1
     assert result.stats()["ref"]["alsdb"]["all"]["n"] == np.isfinite(chm[:50, :50]).sum()
+
+
+def test_compare_bins_by_a_store_layer(provider, store, tmp_path):
+    from alsdb.benchmark.compare import compare
+
+    compute_chm(provider, store, **OPTS)
+    chm = _chm(store)
+    ref = _offset_reference(tmp_path, chm, 1.0)
+    bins = (0.0, 10.0, math.inf)
+    result = compare({"alsdb": store.path}, {"ref": ref}, year=2021, resolution=10.0,
+                     bin_variable="chm", height_bins=bins)  # fmt: skip
+    got = [b["n"] for b in result.stats()["ref"]["alsdb"]["bins"]]
+    valid = chm[np.isfinite(chm)]
+    assert got == [(valid < 10).sum(), (valid >= 10).sum()]  # by the store's CHM, not the reference
+    assert "by chm" in result.summary()
+    with pytest.raises(ValueError, match="no layer"):
+        compare({"alsdb": store.path}, {"ref": ref}, year=2021, resolution=10.0,
+                bin_variable="missing")  # fmt: skip
 
 
 def test_compare_rejects_misaligned_reference(provider, store, tmp_path):
