@@ -2,8 +2,10 @@
 
 Ground filters: CSF (Zhang et al. 2016, the default), PMF (Zhang et al.
 2003) and SMRF (Pingel et al. 2013) as implemented in PDAL (Butler et al.
-2021), and progressive TIN densification (PTD; Axelsson 2000) from
-:mod:`alsdb.methods.ptd`. The optional noise stage is PDAL's extended local
+2021), progressive TIN densification (PTD; Axelsson 2000) from
+:mod:`alsdb.methods.ptd`, and the robust envelope seeded by PTD
+(:mod:`alsdb.methods.envelope`; Kraus & Pfeifer 1998 weights scaled by
+vegetation evidence). The optional noise stage is PDAL's extended local
 minimum filter (Chen et al. 2012) followed by a radius outlier filter.
 
 References
@@ -14,6 +16,10 @@ Axelsson, P. (2000). DEM generation from laser scanner data using adaptive TIN
 Butler, H., Chambers, B., Hartzell, P., & Glennie, C. (2021). PDAL: An open
     source library for the processing and analysis of point clouds. Computers
     & Geosciences, 148, 104680. https://doi.org/10.1016/j.cageo.2020.104680
+Kraus, K., & Pfeifer, N. (1998). Determination of terrain models in wooded
+    areas with airborne laser scanner data. ISPRS Journal of Photogrammetry
+    and Remote Sensing, 53(4), 193-203.
+    https://doi.org/10.1016/S0924-2716(98)00009-4
 Chen, Z., Devereux, B., Gao, B., & Amable, G. (2012). Upward-fusion urban DTM
     generating method using airborne Lidar data. ISPRS Journal of
     Photogrammetry and Remote Sensing, 72, 121-130.
@@ -46,7 +52,7 @@ class ClassificationConfig:
     """Configuration for optional ingestion-time ground and vegetation classification."""
 
     enabled: bool = True
-    ground_method: Literal["csf", "pmf", "smrf", "ptd"] = "csf"
+    ground_method: Literal["csf", "pmf", "smrf", "ptd", "envelope"] = "csf"
     denoise: bool = False
     outlier_radius: float = 1.0
     outlier_min_neighbors: int = 2
@@ -74,6 +80,14 @@ class ClassificationConfig:
     ptd_tilt_runs: int = 8
     ptd_tilt: float = 10.0
     ptd_votes: int = 3
+    # Robust envelope (alsdb.methods.envelope.DEFAULTS); its seeding
+    # PTD run uses alsdb's tuned single-run settings, not the fields above.
+    envelope_cell: float = 1.0
+    envelope_smoothness: float = 0.1
+    envelope_iterations: int = 5
+    envelope_evidence_threshold: float = 0.2
+    envelope_keep: float = 0.1
+    envelope_keep_bare: float = 1.0
     hag_neighbors: int = 10
     allow_hag_extrapolation: bool = True
     vegetation_low: float = 0.5
@@ -85,8 +99,8 @@ class ClassificationConfig:
 
     def __post_init__(self) -> None:
         """Validate classification methods and numerical settings."""
-        if self.ground_method not in ("csf", "pmf", "smrf", "ptd"):
-            raise ValueError("ground_method must be 'csf', 'pmf', 'smrf', or 'ptd'")
+        if self.ground_method not in ("csf", "pmf", "smrf", "ptd", "envelope"):
+            raise ValueError("ground_method must be 'csf', 'pmf', 'smrf', 'ptd' or 'envelope'")
         positive = {
             "outlier_radius": self.outlier_radius,
             "csf_resolution": self.csf_resolution,
@@ -104,6 +118,10 @@ class ClassificationConfig:
             "ptd_angle": self.ptd_angle,
             "ptd_distance": self.ptd_distance,
             "ptd_spacing": self.ptd_spacing,
+            "envelope_cell": self.envelope_cell,
+            "envelope_smoothness": self.envelope_smoothness,
+            "envelope_evidence_threshold": self.envelope_evidence_threshold,
+            "envelope_keep_bare": self.envelope_keep_bare,
         }
         invalid = [name for name, value in positive.items() if not np.isfinite(value) or value <= 0]
         if invalid:
@@ -113,6 +131,10 @@ class ClassificationConfig:
         check_ensemble(self.ptd_tilt_runs, self.ptd_tilt, self.ptd_votes)
         if self.outlier_min_neighbors < 1 or self.hag_neighbors < 1 or self.csf_rigidness < 1:
             raise ValueError("Neighbor counts and CSF rigidness must be positive integers")
+        if self.envelope_iterations < 1:
+            raise ValueError("envelope_iterations must be a positive integer")
+        if not np.isfinite(self.envelope_keep) or not 0 <= self.envelope_keep <= self.envelope_keep_bare:
+            raise ValueError("envelope_keep must be between 0 and envelope_keep_bare")
         thresholds = (self.vegetation_low, self.vegetation_medium, self.vegetation_high)
         if not np.isfinite(thresholds).all() or not thresholds[0] < thresholds[1] < thresholds[2]:
             raise ValueError("Vegetation thresholds must be finite and strictly increasing")
@@ -147,6 +169,18 @@ class ClassificationConfig:
         }
 
     @property
+    def envelope_parameters(self) -> dict:
+        """Keyword arguments for :func:`alsdb.methods.envelope.envelope_ground`."""
+        return {
+            "cell": self.envelope_cell,
+            "smoothness": self.envelope_smoothness,
+            "iterations": self.envelope_iterations,
+            "evidence_threshold": self.envelope_evidence_threshold,
+            "keep": self.envelope_keep,
+            "keep_bare": self.envelope_keep_bare,
+        }
+
+    @property
     def active(self) -> bool:
         """Whether ingestion changes classification labels."""
         return self.enabled or self.denoise
@@ -159,9 +193,9 @@ class ClassificationConfig:
 
 
 def ground_stage(config: ClassificationConfig) -> dict:
-    """Build the configured PDAL ground-classification stage (not for PTD)."""
-    if config.ground_method == "ptd":
-        raise ValueError("PTD is not a PDAL stage; use alsdb.methods.ptd.ptd_ground")
+    """Build the configured PDAL ground-classification stage (not for PTD or the envelope)."""
+    if config.ground_method in ("ptd", "envelope"):
+        raise ValueError(f"{config.ground_method} is not a PDAL stage; see alsdb.methods.{config.ground_method}")
     ignore = "Classification[7:7],Classification[18:18]"
     if config.ground_method == "pmf":
         return {
@@ -211,8 +245,9 @@ def denoise_stages(config: ClassificationConfig) -> list[dict]:
 def classification_stages(config: ClassificationConfig) -> list[dict]:
     """Build ground, HAG, and vegetation stages for an enabled configuration.
 
-    With PTD the ground stage is left out: ground is assigned beforehand by
-    :func:`alsdb.methods.ptd.ptd_ground`.
+    With PTD and the robust envelope the ground stage is left out: ground is
+    assigned beforehand by :func:`alsdb.methods.ptd.ptd_ground` or
+    :func:`alsdb.methods.envelope.envelope_ground`.
     """
     if not config.enabled:
         return []
@@ -222,7 +257,7 @@ def classification_stages(config: ClassificationConfig) -> list[dict]:
         config.vegetation_medium,
         config.vegetation_high,
     )
-    ground = [] if config.ground_method == "ptd" else [ground_stage(config)]
+    ground = [] if config.ground_method in ("ptd", "envelope") else [ground_stage(config)]
     return [
         *ground,
         {

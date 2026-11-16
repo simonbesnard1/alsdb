@@ -220,18 +220,24 @@ class ALSTile:
 
     def _apply_reclassification(self, data: np.ndarray) -> np.ndarray:
         """
-        Classify ground (CSF, PMF, SMRF or PTD) and vegetation by HAG.
+        Classify ground (CSF, PMF, SMRF, PTD or envelope) and vegetation by HAG.
 
         Thresholds are in metres.  Data must already be in a metric CRS
         (use reproject_to to ensure this for feet-based source files).
         Only unclassified (class 1) points are relabelled.
         """
         original = data["Classification"].copy()
-        if self._classification.ground_method == "ptd":
-            from alsdb.methods.ptd import ptd_ground
+        if self._classification.ground_method in ("ptd", "envelope"):
+            if self._classification.ground_method == "ptd":
+                from alsdb.methods.ptd import ptd_ground
 
-            ground = ptd_ground(data, workers=self._classification_workers,
-                                **self._classification.ptd_parameters)  # fmt: skip
+                ground = ptd_ground(data, workers=self._classification_workers,
+                                    **self._classification.ptd_parameters)  # fmt: skip
+            else:
+                from alsdb.methods.envelope import envelope_ground
+
+                ground = envelope_ground(data, workers=self._classification_workers,
+                                         **self._classification.envelope_parameters)  # fmt: skip
             data = data.copy()
             noise = np.isin(original, (7, 18))
             data["Classification"][~noise] = 1

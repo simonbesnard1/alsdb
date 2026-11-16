@@ -73,7 +73,7 @@ def main(verbose: bool) -> None:
 @click.option("--classify", is_flag=True, help="Classify ground and vegetation during ingestion.")
 @click.option(
     "--ground-method",
-    type=click.Choice(["csf", "ptd", "smrf", "pmf"]),
+    type=click.Choice(["csf", "ptd", "envelope", "smrf", "pmf"]),
     default="csf",
     show_default=True,
     help="Ground classifier used with --classify.",

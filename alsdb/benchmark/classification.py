@@ -7,6 +7,8 @@ Classifiers compared (each cited where it is run):
   filter (Pingel et al. 2013), as implemented in PDAL (Butler et al. 2021);
 - PTD, progressive TIN densification (Axelsson 2000), lasR's implementation
   (Roussel, r-lidar/PTD) compiled into alsdb (:mod:`alsdb.methods.ptd`);
+- the robust envelope seeded by a single PTD run
+  (:mod:`alsdb.methods.envelope`; Kraus & Pfeifer 1998);
 - LAStools ``lasground`` (rapidlasso GmbH), run as an external program.
 
 Point labels are scored with the type I (ground rejected) and type II
@@ -585,6 +587,10 @@ def method_parameters(method: str, ptd: PTDParameters | None = None) -> dict:
         return {k: v for k, v in stage.items() if k not in ("type", "ignore")}
     if method == "ptd":
         return asdict(ptd or PTDParameters())
+    if method == "envelope":
+        from alsdb.methods.envelope import DEFAULTS, PTD_SEED
+
+        return {**DEFAULTS, "seed": PTD_SEED}
     if method == "lastools":
         return {"options": list(LASGROUND_OPTIONS)}
     raise ValueError(f"unknown classification method: {method}")
@@ -609,6 +615,12 @@ def _file_classifier(
         start = time.perf_counter()
         ground = ptd_ground(points, **asdict(ptd or PTDParameters()))
         return ClassificationRun("ptd", ground, time.perf_counter() - start)
+    if method == "envelope":
+        from alsdb.methods.envelope import envelope_ground
+
+        start = time.perf_counter()
+        ground = envelope_ground(points)
+        return ClassificationRun("envelope", ground, time.perf_counter() - start)
     neutral_input = work_dir / f"unclassified{input_path.suffix.lower()}"
     neutral_pipeline = [
         {"type": "readers.las", "filename": str(input_path)},
@@ -632,7 +644,7 @@ def _file_classifier(
 
 def _runs(methods, ptd):
     """Yield the method, optional PTD settings, and parameter JSON for each run."""
-    valid = {"csf", "pmf", "smrf", "ptd", "lastools"}
+    valid = {"csf", "pmf", "smrf", "ptd", "envelope", "lastools"}
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")
@@ -664,7 +676,7 @@ def run_file_benchmark(
     """
     if boundary_width <= 0:
         raise ValueError("boundary_width must be positive")
-    valid = {"csf", "pmf", "smrf", "ptd", "lastools"}
+    valid = {"csf", "pmf", "smrf", "ptd", "envelope", "lastools"}
     unknown = set(methods) - valid
     if unknown:
         raise ValueError(f"unknown classification methods: {sorted(unknown)}")

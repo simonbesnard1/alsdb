@@ -91,7 +91,7 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf"],
-        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "envelope", "lastools"],
     )
     p.add_argument("--boundary-width", type=float, default=5.0)
     p.add_argument("--tiles", type=int, help="only process the first N files")
