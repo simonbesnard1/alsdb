@@ -310,6 +310,17 @@ def test_scene_benchmark_scores_and_resumes(tmp_path):
     assert len(list(csv.DictReader(out.open()))) == 1
 
 
+def test_scene_benchmark_runs_the_envelope_classifier(tmp_path):
+    pytest.importorskip("alsdb.methods._ptd_native")
+    from alsdb.benchmark.classification import run_scene_benchmark
+
+    _write_scene(tmp_path / "scenes" / "rolling")
+    out = run_scene_benchmark(tmp_path / "scenes", tmp_path / "out", methods=("envelope",))
+    rows = list(csv.DictReader(out.open()))
+    assert [(r["method"], r["status"]) for r in rows] == [("envelope", "ok")], rows[0].get("error")
+    assert float(rows[0]["dtm_mae"]) < 0.5
+
+
 def test_dtm_references_give_self_and_consensus_scores(tmp_path):
     from alsdb.benchmark.classification import build_dtm_references, run_scene_benchmark
 

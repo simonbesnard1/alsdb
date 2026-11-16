@@ -109,7 +109,7 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf", "ptd"],
-        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "envelope", "lastools"],
     )
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--lastools-dir", help="folder containing lasground64")
@@ -126,7 +126,7 @@ def main(argv=None):
         "--tools",
         nargs="+",
         default=["csf", "pmf", "smrf", "ptd"],
-        choices=["csf", "pmf", "smrf", "ptd", "lastools"],
+        choices=["csf", "pmf", "smrf", "ptd", "envelope", "lastools"],
     )
     p.add_argument("--tolerance", type=float, default=0.25, help="agreement tolerance (m)")
     p.add_argument("--max-density", type=float, help="thin denser surveys to this (points/m2)")
