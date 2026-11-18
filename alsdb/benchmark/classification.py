@@ -7,7 +7,7 @@ Classifiers compared (each cited where it is run):
   filter (Pingel et al. 2013), as implemented in PDAL (Butler et al. 2021);
 - PTD, progressive TIN densification (Axelsson 2000), lasR's implementation
   (Roussel, r-lidar/PTD) compiled into alsdb (:mod:`alsdb.methods.ptd`);
-- the robust envelope seeded by a single PTD run
+- the robust envelope seeded by the PTD tilt ensemble
   (:mod:`alsdb.methods.envelope`; Kraus & Pfeifer 1998);
 - LAStools ``lasground`` (rapidlasso GmbH), run as an external program.
 
@@ -588,9 +588,9 @@ def method_parameters(method: str, ptd: PTDParameters | None = None) -> dict:
     if method == "ptd":
         return asdict(ptd or PTDParameters())
     if method == "envelope":
-        from alsdb.methods.envelope import DEFAULTS, PTD_SEED
+        from alsdb.methods.envelope import DEFAULTS, PTD_SEED, REVISION
 
-        return {**DEFAULTS, "seed": PTD_SEED}
+        return {**DEFAULTS, "seed": PTD_SEED, "revision": REVISION}
     if method == "lastools":
         return {"options": list(LASGROUND_OPTIONS)}
     raise ValueError(f"unknown classification method: {method}")

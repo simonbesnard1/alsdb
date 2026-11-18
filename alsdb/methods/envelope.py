@@ -4,8 +4,8 @@
 
 """Robust-envelope ground classification.
 
-A single progressive TIN densification run (PTD; Axelsson 2000) seeds a
-robust surface fit to all last returns in the spirit of Kraus & Pfeifer's
+Progressive TIN densification (PTD; Axelsson 2000), run as alsdb's tilt
+ensemble, seeds a robust surface fit to all last returns in the spirit of Kraus & Pfeifer's
 (1998) robust interpolation: a thin-plate grid is fitted by iteratively
 reweighted least squares, where returns above the surface lose weight so the
 surface settles on the lower envelope of the data. Two changes make it work
@@ -22,8 +22,13 @@ across forest types:
   all last returns puts the surface inside a closed canopy, from where the
   reweighting never descends.
 
-Ground is then every candidate within ``keep`` (vegetated) to ``keep_bare``
-(bare) metres above the final surface. The surface is solved in overlapping
+Ground is then every seed point within ``keep`` (vegetated) to ``keep_bare``
+(bare) metres above the final surface, plus the other candidates within that
+tolerance that lie in a gap of the seed, farther than ``gap`` from every kept
+seed point. Without the gap rule the envelope accepts grass and low shrubs
+within ``keep`` of the surface wherever the cloud is dense: at full density
+that doubled PTD's commission; at low density the seed has gaps everywhere
+and the rule changes nothing. The surface is solved in overlapping
 blocks, each pulled weakly (``anchor``) towards one coarse fit of the same
 data: where no return supports the surface (closed canopy without ground
 hits) this keeps the thin plate on the terrain trend instead of a free
@@ -31,10 +36,11 @@ extrapolation, which is worth a third of the error in dense tropical forest;
 a stronger pull trades cliffs for shrub patches (see the benchmark pages). The DTM itself is built from those
 points as usual (TIN); the surface only selects them.
 
-Measured against hand-corrected IGN Lidar HD (Petit Buech) and Robson Creek
-decimated to 0.5-4 pulses/m2, the method lowers the DTM error of the PTD tilt
-ensemble by a fifth to a third in dense tropical forest and matches it on
-alpine terrain; see doc/chm_methods.md.
+Against hand-corrected IGN Lidar HD (Petit Buech, Vizzavona) and Robson Creek
+decimated to 0.5-8 pulses/m2 it lowered the DTM error of the PTD tilt ensemble
+most in dense tropical forest at low density; it is weaker on bare rock under
+sparse trees at full density and on closed shrub patches without ground
+returns beneath them (see doc/benchmarking.md).
 
 References
 ----------
@@ -77,10 +83,15 @@ DEFAULTS = {
     "anchor": 1e-3,  # pull of every grid node towards one coarse (4 x cell) fit of the same data
     "block": 128,  # nodes per side of the blocks the grid is solved in, and their overlap
     "overlap": 32,
+    "gap": 2.0,  # non-seed candidates are ground only farther than this from every kept seed point (m)
 }
-# The single PTD run that seeds the surface: alsdb's tuned settings, no tilt ensemble.
+# Revision of the algorithm, recorded with benchmark scores. 1: anchor only on grids above
+# 4 x block^2 nodes; 2: anchor whenever the grid is split into blocks; 3: seeded by the PTD
+# tilt ensemble (was a single run) and non-seed points added only in seed gaps (``gap``).
+REVISION = 3
+# The PTD run that seeds the surface: alsdb's tuned settings and tilt ensemble (ptd.DEFAULTS).
 PTD_SEED = {"seed_resolution": 10.0, "angle": 45.0, "distance": 1.0, "spacing": 0.25,
-            "tilt_runs": 1, "tilt": 10.0, "votes": 1}  # fmt: skip
+            "tilt_runs": 8, "tilt": 10.0, "votes": 3}  # fmt: skip
 
 
 def vegetation_evidence(points, cell=5.0):
@@ -215,7 +226,7 @@ def fit_surface(grid, located, z, w, smoothness, *, block=128, overlap=32, worke
 
     i, j, fu, fv = located
     coarse_nodes = None
-    if anchor and x is not None and grid.size > 4 * block * block:
+    if anchor and x is not None and (grid.nx > block or grid.ny > block):  # split into blocks
         coarse = _Grid(x, y, grid.cell * 4)
         coarse_nodes = fit_surface(coarse, coarse._locate(x, y), z, w, smoothness * 16,
                                    block=10**6, overlap=0, workers=1, anchor=0.0)  # fmt: skip
@@ -318,8 +329,20 @@ def envelope_ground(points, *, workers=1, seed=None, ptd_parameters=None, **para
         w_sym = 1.0 / (1.0 + (r / s_sym) ** 2)
         w = prior * ((1 - v) * w_sym + v * w_env)
     tolerance = p["keep"] + (p["keep_bare"] - p["keep"]) * (1 - v)
+    within = r <= tolerance
+    kept_seed = within & is_seed
+    added = np.flatnonzero(within & ~is_seed)
+    if len(added) and p["gap"] > 0:
+        from scipy.spatial import cKDTree
+
+        if kept_seed.any():
+            tree = cKDTree(np.column_stack((x[kept_seed], y[kept_seed])))
+            d, _ = tree.query(np.column_stack((x[added], y[added])), k=1,
+                              distance_upper_bound=p["gap"], workers=max(1, workers))  # fmt: skip
+            added = added[~np.isfinite(d)]
     ground = np.zeros(n, bool)
-    ground[cand[r <= tolerance]] = True
+    ground[cand[kept_seed]] = True
+    ground[cand[added]] = True
     logger.debug("Envelope ground: %d seed, %d candidates, %d ground", int(seed.sum()), len(cand),
                  int(ground.sum()))  # fmt: skip
     return ground

@@ -311,8 +311,8 @@ compares ground classifiers with the reference classification of real LAS/LAZ
 files: CSF (Zhang et al. 2016), PMF (Zhang et al. 2003) and SMRF (Pingel et al.
 2013) as in PDAL, PTD (Axelsson 2000) as compiled into alsdb from lasR's
 implementation (identical to lasR's Python binding pyLASR on identical
-coordinates when it was added), the robust envelope seeded by a
-single PTD run (`envelope`; Kraus & Pfeifer 1998 weights scaled by the local
+coordinates when it was added), the robust envelope seeded by the
+PTD tilt ensemble (`envelope`; Kraus & Pfeifer 1998 weights scaled by the local
 multi-return share, see the algorithms page), and optionally LAStools
 `lasground` as an external program. Each classifier
 sees every class reset to 1 except noise (7, 18), which it skips. Unclassified

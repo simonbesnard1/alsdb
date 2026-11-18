@@ -155,3 +155,34 @@ def test_anchor_changes_little_where_the_surface_is_supported():
     anchored = envelope.fit_surface(grid, located, z, w, 0.1, block=40, overlap=12, anchor=1e-3, x=x, y=y)
     d = np.abs(grid.sample(free, x, y) - grid.sample(anchored, x, y))
     assert d[w > 0].mean() < 0.01
+
+
+def test_a_grid_split_into_blocks_is_anchored(monkeypatch):
+    """Revision 2: a small grid that still spans several blocks gets the coarse anchor."""
+    pts, truth, _ = scene(n=4000, size=90.0)
+    x, y, z = (pts[k].astype(float) for k in "XYZ")
+    grid = _Grid(x, y, 1.0)
+    calls = []
+    real = envelope._solve_block
+    monkeypatch.setattr(envelope, "_solve_block", lambda job: calls.append(job[8] is not None) or real(job))
+    envelope.fit_surface(grid, grid._locate(x, y), z, truth.astype(float), 0.1, block=40, overlap=12,
+                         anchor=1e-3, x=x, y=y)
+    blocks = [c for c in calls]
+    assert blocks and all(blocks[1:]), "every block of the fine grid carries the anchor"
+
+
+def test_non_seed_points_are_added_only_in_seed_gaps():
+    """Revision 3: next to kept seed ground, low returns within `keep` are not added (grass);
+    in a gap of the seed, ground returns are."""
+    pts, truth, _ = scene(n=8000, size=90.0)
+    seed = truth.copy()
+    hole = np.hypot(pts["X"] - 60, pts["Y"] - 30) < 6  # the seed misses this ground
+    seed[hole] = False
+    near = (~truth) & ~hole  # the 0.3 m shrubs next to seed ground ...
+    pts["NumberOfReturns"][near] = 1  # ... as single returns, like grass: last-return candidates
+    ground = envelope_ground(pts, seed=seed, keep=0.4)  # a keep loose enough to reach the shrubs
+    inner = np.hypot(pts["X"] - 60, pts["Y"] - 30) < 3.5  # farther than `gap` (2 m) from the rim
+    assert ground[inner & truth].mean() > 0.9, "ground in the seed gap is recovered"
+    assert ground[near].mean() < 0.05, "shrubs beside kept seed ground are not added"
+    loose = envelope_ground(pts, seed=seed, keep=0.4, gap=0.0)
+    assert loose[near].mean() > 0.5, "without the gap rule they would be"

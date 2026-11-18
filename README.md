@@ -192,16 +192,16 @@ CHM errors from about 1 pulse/m² up and is recommended; CSF held up best across
 failed below about 2 pulses/m² with PDAL's defaults
 ([doc/benchmarking.md](doc/benchmarking.md#ground-classification)).
 
-`envelope` (alsdb) seeds a robust thin-plate surface with a single PTD run and
-refits it to all last returns with Kraus & Pfeifer's (1998) asymmetric
-weights, scaled by the local share of multi-return pulses: a lower envelope
-under vegetation (sheds the low vegetation PTD accepts), a symmetric fit on
-bare ground (keeps the cliffs PTD rejects). On tiles decimated to 0.5 and
-1 pulse/m² it halved the DTM error of the tilt ensemble in dense tropical
-forest (0.75 vs 1.46 m at 0.5 pulses/m²) and matched it on alpine terrain; a
-500 m tile takes about 5 s on 8 threads after the 2 s PTD seed, or 14 s on
-one thread with the optional `scikit-sparse` (CHOLMOD) installed (`envelope_*`
-settings of `ClassificationConfig`; `alsdb.methods.envelope`).
+`envelope` (alsdb) seeds a robust thin-plate surface with the PTD tilt
+ensemble and refits it to all last returns with Kraus & Pfeifer's (1998)
+asymmetric weights, scaled by the local share of multi-return pulses: a lower
+envelope under vegetation (sheds the low vegetation PTD accepts), a symmetric
+fit on bare ground (keeps the cliffs PTD rejects); other returns are added
+only where the seed leaves a gap. It gains most in dense tropical forest at
+low density and is weaker on bare rock under sparse trees at full density; it
+costs the ensemble plus 20 s to 2 min per 500 m tile on 8 threads (`envelope_*`
+settings of `ClassificationConfig`; `alsdb.methods.envelope`; figures in
+[doc/benchmarking.md](doc/benchmarking.md#ground-classification)).
 
 Enabled classification settings and their stable fingerprint are recorded in
 the ingestion manifest. Re-ingesting a file with different settings requires

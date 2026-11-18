@@ -81,7 +81,7 @@ class ClassificationConfig:
     ptd_tilt: float = 10.0
     ptd_votes: int = 3
     # Robust envelope (alsdb.methods.envelope.DEFAULTS); its seeding
-    # PTD run uses alsdb's tuned single-run settings, not the fields above.
+    # PTD run is alsdb's tilt ensemble with its default settings, not the fields above.
     envelope_cell: float = 1.0
     envelope_smoothness: float = 0.1
     envelope_iterations: int = 5

@@ -59,15 +59,16 @@ To classify at ingest, pass a ``ClassificationConfig`` to
        ``ptd_tilt_runs`` 8, ``ptd_tilt`` 10°, ``ptd_votes`` 3; ``ptd_tilt_runs=1`` is a single run
        (lasR's ``classify_with_ptd`` uses angle 30°, distance 2 m)
    * - ``"envelope"``
-     - **Robust envelope** (alsDB): a single PTD run seeds a robust thin-plate surface fitted to
+     - **Robust envelope** (alsDB): the PTD tilt ensemble seeds a robust thin-plate surface fitted to
        all last returns by iteratively reweighted least squares (Kraus & Pfeifer 1998). The asymmetry of
        the weights follows the local share of multi-return pulses: under vegetation the surface is a lower
        envelope and sheds the low vegetation PTD accepts; on bare ground (no multiple returns) the weights
-       are symmetric and the surface follows the cliffs and crests PTD rejects. Ground = returns within
-       ``envelope_keep`` (vegetated) to ``envelope_keep_bare`` (bare) of the surface.
+       are symmetric and the surface follows the cliffs and crests PTD rejects. Ground = seed points within
+       ``envelope_keep`` (vegetated) to ``envelope_keep_bare`` (bare) of the surface, plus other last
+       returns within that tolerance where the seed leaves a gap of more than 2 m.
      - ``envelope_cell`` 1 m, ``envelope_smoothness`` 0.1, ``envelope_iterations`` 5,
-       ``envelope_evidence_threshold`` 0.2, ``envelope_keep`` 0.1 m, ``envelope_keep_bare`` 1 m; the seeding
-       PTD run uses alsDB's single-run settings (angle 45°, distance 1 m)
+       ``envelope_evidence_threshold`` 0.2, ``envelope_keep`` 0.1 m, ``envelope_keep_bare`` 1 m; the seed is
+       the PTD tilt ensemble with its defaults
 
 Options for all methods: optional outlier removal (``denoise``), and points of
 ``source_classes`` (default 1) sorted into low, medium and high vegetation
@@ -80,15 +81,15 @@ MAE is 0.24 m (PTD), 0.42 (PMF), 0.59 (SMRF), 0.64 (CSF). The tilt ensemble
 helps most on sparse data. Above 45° of slope every filter is off by 0.5 m or
 more. The robust envelope targets the two ways PTD fails at low density:
 low vegetation accepted as ground under canopy and ground rejected on steep
-bare rock. On tiles decimated to 0.5 and 1 pulse/m² (``classification-files``
-against the full-density ground, interior 300 m of each 500 m tile) it halved
-the DTM MAE of the tilt ensemble in dense tropical forest (Robson Creek:
-0.75 vs 1.46 m at 0.5 pulses/m², 0.55 vs 0.76 at 1) and matched or bettered it
-on alpine terrain (Petit Buëch: 0.34 vs 0.39 at 0.5, 0.25 vs 0.25 at 1);
-closed shrub patches without any return beneath them stay in the ground (a
-known limit of a lower envelope, tunable with ``anchor``). A 500 m tile takes
-about 5 s on 8 threads after the 2 s PTD seed. Full-benchmark figures follow in
-the benchmark pages.
+bare rock; its seed-gap rule keeps it from accepting grass at high density.
+In local tests (``classification-files`` scoring, single tiles) it improved on
+the tilt ensemble most in dense tropical forest at low density (Robson Creek,
+0.5 pulses/m²: 1.07 vs 1.70 m DTM MAE) and slightly at full density under
+canopy (Petit Buëch, 38 points/m²: 0.054 vs 0.060), and was worse on bare rock
+under sparse trees at full density (0.141 vs 0.105) and on closed shrub patches
+without ground returns beneath them. It costs the ensemble plus the surface
+fit: 20-30 s per 500 m tile at 1 pulse/m² and 2-3 minutes at full density on
+8 threads. Full-benchmark figures are in the benchmark pages.
 
 Terrain model and height above ground
 =====================================
