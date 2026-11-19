@@ -87,14 +87,17 @@ def query_to_array(
         unknown = set(attrs) - LAS_ATTRIBUTES.keys()
         if unknown:
             raise ValueError(f"Unknown LAS attributes: {sorted(unknown)}")
+        # Ask only for the fields the array stores; the others read as zeros below.
+        stored = {arr.schema.attr(i).name for i in range(arr.schema.nattr)}
+        query_attrs = [a for a in attrs if a in stored]
         yr_dim = arr.schema.domain.dim("Year")
         y0 = year if year is not None else int(yr_dim.domain[0])
         y1 = (year + 1) if year is not None else int(yr_dim.domain[1]) + 1
         if bbox is not None:
             min_x, min_y, max_x, max_y = bbox
-            data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
+            data = arr.query(attrs=query_attrs)[min_x:max_x, min_y:max_y, y0:y1]
         else:
-            data = arr.query(attrs=attrs)[:, :, y0:y1]
+            data = arr.query(attrs=query_attrs)[:, :, y0:y1]
 
     n = len(data["X"])
     logger.debug("Queried %d points from TileDB", n)
@@ -362,6 +365,7 @@ def run_tiled(
     gc_every: int = 100,
     skip: set[int] | frozenset[int] = frozenset(),
     parallel: str = "threads",
+    indices=None,
     **kwargs,
 ) -> None:
     """Run *worker_fn* over all *tiles*, sequentially, in threads or in processes.
@@ -370,7 +374,8 @@ def run_tiled(
     ``worker_fn(provider, query_bbox, crop_bbox, store, tile_index, **kwargs)``.
     Progress is logged every *progress_every* tiles, and ``gc.collect()`` runs
     every *gc_every* tiles to free reference cycles of PDAL/GDAL objects.
-    Tiles in *skip* keep their index but are not processed. Results are
+    Tiles in *skip* keep their index but are not processed. *indices* gives
+    each tile's index in its full grid when *tiles* is a subset of it. Results are
     consumed as tiles finish, so one slow tile does not idle the others.
 
     ``parallel="processes"`` (with ``n_workers > 1``) runs the tiles in
@@ -386,9 +391,10 @@ def run_tiled(
     if parallel not in ("threads", "processes"):
         raise ValueError("parallel must be 'threads' or 'processes'")
     total = len(tiles)
+    index_of = (lambda i: i) if indices is None else indices.__getitem__
     completed = 0
     if skip:
-        completed = sum(1 for i in range(total) if i in skip)
+        completed = sum(1 for i in range(total) if index_of(i) in skip)
         logger.info("run_tiled: resuming, %d/%d tiles already complete", completed, total)
 
     def _note_progress() -> None:
@@ -403,7 +409,7 @@ def run_tiled(
         idx, (query_bbox, crop_bbox) = item
         return worker_fn(provider, query_bbox, crop_bbox, store, idx, **kwargs)
 
-    todo = (item for item in enumerate(tiles) if item[0] not in skip)
+    todo = ((index_of(i), tile) for i, tile in enumerate(tiles) if index_of(i) not in skip)
     if parallel == "processes" and n_workers > 1:
         import pickle
 

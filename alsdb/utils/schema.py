@@ -142,6 +142,17 @@ class TileDBSchemaConfig:
     # last bit (1e-15 relative), as they add the points in stored order.
     cell_order: str = "hilbert"
     capacity: int = 100_000
+    # Point fields stored as attributes (None: every field of LAS_ATTRIBUTES).
+    # Fields left out read back as zeros. alsdb's products read none of
+    # GpsTime, PointSourceId, Red, Green, Blue, UserData, KeyPoint, Synthetic,
+    # ScanDirectionFlag or EdgeOfFlightLine; on 1.4 PNOA tiles GpsTime and RGB
+    # are 5-6 of the ~21 bytes per point.
+    attributes: tuple[str, ...] | None = None
+    # Store Z as integers of this step (m) instead of float64 (TileDB
+    # FloatScaleFilter, offset 0, 4 bytes). Exact when every Z is a multiple of
+    # the step, as LAS coordinates are (scale 0.01 or 0.001 m): 0.001 halved
+    # to quartered Z's bytes on PNOA tiles (4.6-5.5 -> 1.3-1.9 bytes/point).
+    z_scale: float | None = None
 
     @classmethod
     def for_crs(cls, crs: str, **kwargs) -> "TileDBSchemaConfig":
@@ -263,10 +274,22 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
             filters=_FILTERS_YEAR,  # DoubleDelta → Zstd (int16 compatible)
         ),
     )
-    attrs = [
-        tiledb.Attr(name=name, dtype=dtype, filters=_attr_filters(name))
-        for name, dtype in LAS_ATTRIBUTES.items()
-    ]
+    names = list(LAS_ATTRIBUTES) if cfg.attributes is None else list(dict.fromkeys(cfg.attributes))
+    unknown = set(names) - LAS_ATTRIBUTES.keys()
+    if unknown:
+        raise ValueError(f"Unknown LAS attributes: {sorted(unknown)}")
+    if "Z" not in names:
+        raise ValueError("The schema must store Z")
+    if cfg.z_scale is not None and not (np.isfinite(cfg.z_scale) and cfg.z_scale > 0):
+        raise ValueError("z_scale must be finite and positive")
+
+    def filters(name):
+        if name == "Z" and cfg.z_scale is not None:
+            return tiledb.FilterList([tiledb.FloatScaleFilter(cfg.z_scale, 0.0, 4),
+                                      tiledb.ByteShuffleFilter(), tiledb.ZstdFilter(level=9)])  # fmt: skip
+        return _attr_filters(name)
+
+    attrs = [tiledb.Attr(name=name, dtype=LAS_ATTRIBUTES[name], filters=filters(name)) for name in names]
     return tiledb.ArraySchema(
         domain=domain,
         attrs=attrs,

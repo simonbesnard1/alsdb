@@ -90,12 +90,14 @@ class ALSProvider(TileDBProvider):
             One row per point; columns are ``X``, ``Y``, ``Year``, and the
             requested attributes.
         """
-        attrs = attributes or _ALL_ATTRS
         y0, y1_inc = (year, year) if year is not None else self._year_range()
         # +1: TileDB-Py int-dimension slices are exclusive-end (like Python slices)
         y1 = y1_inc + 1
 
         with self.open("r") as arr:
+            stored = [arr.schema.attr(i).name for i in range(arr.schema.nattr)]
+            # Default: the fields this array stores (a trimmed schema keeps fewer).
+            attrs = attributes or [a for a in _ALL_ATTRS if a in stored]
             data = arr.query(attrs=attrs)[min_x:max_x, min_y:max_y, y0:y1]
 
         df = pd.DataFrame(data)

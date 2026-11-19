@@ -132,6 +132,8 @@ def compute_chm(
     ground_extrapolation: bool = True,
     fill_max_cells: int = 4,
     parallel: str = "threads",
+    tile_indices=None,
+    coordination: str = "local",
 ) -> None:
     """Compute a canopy height model and write it to Zarr.
 
@@ -143,6 +145,12 @@ def compute_chm(
     ``None`` disables a flag. Outside the ground hull the terrain is the
     nearest ground return (flagged ``terrain_extrapolated``);
     ``ground_extrapolation=False`` leaves it missing.
+
+    ``coordination`` lets many jobs fill one store (e.g. Slurm array jobs):
+    ``"register"`` records the run once (no tiles), ``"worker"`` computes only
+    ``tile_indices`` (indices of the tiles of the full grid) of a registered
+    run, and ``"finish"`` marks it complete; every call needs the same
+    ``bbox`` and settings. ``"local"`` (default) does all three in one call.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at
@@ -178,12 +186,20 @@ def compute_dtm(
     ground_extrapolation: bool = True,
     ground_classes: tuple[int, ...] = GROUND_CLASSES,
     parallel: str = "threads",
+    tile_indices=None,
+    coordination: str = "local",
 ) -> None:
     """Compute a digital terrain model and write it to Zarr.
 
     Outside the ground hull the terrain is the nearest ground return;
     ``ground_extrapolation=False`` leaves it missing, and
     ``max_ground_distance`` limits support.
+
+    ``coordination`` lets many jobs fill one store (e.g. Slurm array jobs):
+    ``"register"`` records the run once (no tiles), ``"worker"`` computes only
+    ``tile_indices`` (indices of the tiles of the full grid) of a registered
+    run, and ``"finish"`` marks it complete; every call needs the same
+    ``bbox`` and settings. ``"local"`` (default) does all three in one call.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at
@@ -216,10 +232,18 @@ def compute_dsm(
     ground_outlier_removal: bool = True,
     source_version: str | None = None,
     parallel: str = "threads",
+    tile_indices=None,
+    coordination: str = "local",
 ) -> None:
     """Compute a digital surface model and write it to Zarr.
 
     ``exclude_classes`` are left out of the surface.
+
+    ``coordination`` lets many jobs fill one store (e.g. Slurm array jobs):
+    ``"register"`` records the run once (no tiles), ``"worker"`` computes only
+    ``tile_indices`` (indices of the tiles of the full grid) of a registered
+    run, and ``"finish"`` marks it complete; every call needs the same
+    ``bbox`` and settings. ``"local"`` (default) does all three in one call.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at
@@ -276,11 +300,19 @@ def compute_all(
     ground_extrapolation: bool = True,
     fill_max_cells: int = 4,
     parallel: str = "threads",
+    tile_indices=None,
+    coordination: str = "local",
 ) -> None:
     """Compute DTM, DSM and CHM on one grid and write them to Zarr.
 
     Accepts the options of :func:`compute_chm`, :func:`compute_dtm` and
     :func:`compute_dsm`.
+
+    ``coordination`` lets many jobs fill one store (e.g. Slurm array jobs):
+    ``"register"`` records the run once (no tiles), ``"worker"`` computes only
+    ``tile_indices`` (indices of the tiles of the full grid) of a registered
+    run, and ``"finish"`` marks it complete; every call needs the same
+    ``bbox`` and settings. ``"local"`` (default) does all three in one call.
 
     ``parallel="processes"`` runs the tiles of ``n_workers > 1`` in worker
     processes instead of threads: faster on many cores (threads level off at

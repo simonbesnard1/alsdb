@@ -200,7 +200,19 @@ def compute_products(provider, store, products, options):
     halo = (
         (config.fill_max_cells + 1) * resolution if config.pit_fill and "chm" in products else 0.0
     )
-    tiles = list(grid.tiles(tile_size, buffer + halo))
+    coordination = options.get("coordination", "local")
+    if coordination not in ("local", "register", "worker", "finish"):
+        raise ValueError("coordination must be 'local', 'register', 'worker' or 'finish'")
+    tile_indices = options.get("tile_indices")
+    if tile_indices is not None:
+        if coordination not in ("local", "worker"):
+            raise ValueError("tile_indices go with coordination='local' or 'worker'")
+        tile_indices = sorted({int(i) for i in tile_indices})
+        tiles = [grid.tile(i, tile_size, buffer + halo) for i in tile_indices]
+    elif coordination == "worker":
+        raise ValueError("coordination='worker' needs tile_indices")
+    else:
+        tiles = list(grid.tiles(tile_size, buffer + halo)) if coordination == "local" else []
     quality = options.get("quality", True)
     clean_ground = options.get("ground_outlier_removal", True)
     exclude = options.get("dsm_exclude_classes", options.get("exclude_classes", (7, 18)))
@@ -238,13 +250,23 @@ def compute_products(provider, store, products, options):
             **({"quality_layers": 2} if product == "chm" and quality else {}),
             backend=backend if product == "chm" else {},
         )
-    needed = [
-        p
-        for p in products
-        if not store.check_run(
-            p, resolution, year, configurations[p], overwrite=options.get("overwrite", False)
-        )
-    ]
+    if coordination in ("worker", "finish"):
+        _coordinated(store, products, resolution, year, configurations, coordination)
+        if coordination == "finish":
+            names = [n for p in products for n in (CHM_VARIABLES if p == "chm" and quality else (p,))]
+            store.record_data_years([(_res_key(resolution), n, int(year)) for n in names])
+            for product in products:
+                store.finish_run(product, resolution, year)
+            return
+        needed = list(products)
+    else:
+        needed = [
+            p
+            for p in products
+            if not store.check_run(
+                p, resolution, year, configurations[p], overwrite=options.get("overwrite", False)
+            )
+        ]
     if not needed:
         return
     crs = array_crs(provider)
@@ -256,6 +278,11 @@ def compute_products(provider, store, products, options):
     written = []
     for product in needed:
         names = CHM_VARIABLES if product == "chm" and quality else (product,)
+        written.extend(names)
+        if coordination == "worker":  # registered: only skip what this run already wrote
+            done = store.completed_tiles(product, resolution, year)
+            skip = done if skip is None else skip & done
+            continue
         for name in names:
             store.ensure_group(name, resolution, bbox, crs, tile_size)
         if product == "chm" and quality:
@@ -274,9 +301,16 @@ def compute_products(provider, store, products, options):
         # A tile is skippable only if every product being computed finished it.
         done = store.completed_tiles(product, resolution, year) if resumed else set()
         skip = done if skip is None else skip & done
-        written.extend(names)
-    # Size the arrays for this year now, so tile workers only write chunks.
-    store.prepare_tile_writes(written, resolution, year)
+    if coordination == "worker":
+        # Chunks and tile markers only: shapes, time axis and attributes were
+        # set by the registering call and stay untouched, so jobs on other
+        # nodes can write side by side.
+        store._in_worker = True
+    else:
+        # Size the arrays for this year now, so tile workers only write chunks.
+        store.prepare_tile_writes(written, resolution, year)
+        if coordination == "register":  # data_years are set by coordination="finish"
+            return
     try:
         run_tiled(
             _worker,
@@ -284,6 +318,7 @@ def compute_products(provider, store, products, options):
             tiles,
             store,
             options.get("n_workers", 1),
+            indices=tile_indices,
             skip=skip or frozenset(),
             parallel=options.get("parallel", "threads"),
             resolution=resolution,
@@ -298,8 +333,36 @@ def compute_products(provider, store, products, options):
         if input_revision(provider) != revision:
             raise RuntimeError("Input fragments changed during processing; rerun on stable input")
     except Exception:
-        for product in needed:
-            store.finish_run(product, resolution, year, failed=True)
+        if coordination == "local":  # a failed worker job leaves the shared run running
+            for product in needed:
+                store.finish_run(product, resolution, year, failed=True)
         raise
-    for product in needed:
-        store.finish_run(product, resolution, year)
+    if coordination == "local":
+        for product in needed:
+            store.finish_run(product, resolution, year)
+
+
+def _res_key(resolution):
+    from alsdb.storage.zarr_store import _res_str
+
+    return _res_str(resolution)
+
+
+def _coordinated(store, products, resolution, year, configurations, coordination):
+    """Check that a registered run with these settings exists."""
+    import hashlib
+    import json
+
+    for product in products:
+        configuration = json.loads(json.dumps(configurations[product], sort_keys=True, allow_nan=False))
+        fingerprint = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()
+        try:
+            record = store._root[_res_key(resolution)][product].attrs.get("processing_runs", {}).get(str(year))
+        except KeyError:
+            record = None
+        if not record or record.get("fingerprint") != fingerprint:
+            raise RuntimeError(
+                f"{product} {year}: no registered run with these settings; call with "
+                "coordination='register' first (same bbox and settings)"
+            )
+

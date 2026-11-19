@@ -226,7 +226,13 @@ class ALSZarrStore:
         return pending
 
     def record_data_years(self, written) -> None:
-        """Add the years of *written* (from :meth:`take_pending_years`) to ``data_years``."""
+        """Add the years of *written* (from :meth:`take_pending_years`) to ``data_years``.
+
+        A no-op in chunk-writing mode (a worker process, or a coordinated
+        worker job): attributes are left to the parent or the finishing call.
+        """
+        if self._in_worker:
+            return
         for res_key, variable, year in sorted(set(written)):
             with self._group_lock(res_key):
                 arr = self._root[res_key][variable]

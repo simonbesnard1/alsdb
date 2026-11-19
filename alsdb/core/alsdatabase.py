@@ -365,14 +365,16 @@ class ALSDatabase(TileDBProvider):
         if not self.array_exists():
             self.create(crs=crs)
         year_arr = np.full(len(x), year, dtype=np.int16)
-        # Fill any schema attributes missing from this tile (e.g. RGB absent in
-        # intensity-only datasets) with zeros so TileDB always gets a complete row.
+        # Write exactly the schema's attributes: fields it does not store (a
+        # trimmed schema) are dropped, fields a tile lacks (e.g. RGB in
+        # intensity-only data) are zeros, so TileDB always gets a complete row.
         n = len(x)
         with self.open("r") as _arr:
-            for i in range(_arr.schema.nattr):
-                a = _arr.schema.attr(i)
-                if a.name not in attrs:
-                    attrs[a.name] = np.zeros(n, dtype=a.dtype)
+            schema_attrs = [_arr.schema.attr(i) for i in range(_arr.schema.nattr)]
+        attrs = {
+            a.name: attrs[a.name] if a.name in attrs else np.zeros(n, dtype=a.dtype)
+            for a in schema_attrs
+        }
         self._write_to_tiledb((x, y, year_arr), attrs)
         logger.debug("Wrote %d points (year=%d) to %s", len(x), year, self.array_uri)
 

@@ -55,6 +55,27 @@ class GridSpec:
         # Protect against roundoff at the far outside edge, after ownership.
         return inside, np.minimum(row, self.ny - 1) * self.nx + np.minimum(col, self.nx - 1)
 
+    def tile_layout(self, tile_size):
+        """(rows, cols) of the tiles of *tile_size*, in the order of :meth:`tiles`."""
+        n = round(tile_size / self.resolution)
+        return math.ceil(self.ny / n), math.ceil(self.nx / n)
+
+    def tile(self, index, tile_size, buffer=0.0):
+        """The (query, crop) bboxes of tile *index* of :meth:`tiles`, without listing the others."""
+        n = round(tile_size / self.resolution)
+        rows, cols = self.tile_layout(tile_size)
+        if not 0 <= index < rows * cols:
+            raise IndexError(f"tile {index} outside the {rows} x {cols} tiles of this grid")
+        row, col = (index // cols) * n, (index % cols) * n
+        crop = (
+            self.x0 + col * self.resolution,
+            self.y1 - min(row + n, self.ny) * self.resolution,
+            self.x0 + min(col + n, self.nx) * self.resolution,
+            self.y1 - row * self.resolution,
+        )
+        x0, y0, x1, y1 = crop
+        return (x0 - buffer, y0 - buffer, x1 + buffer, y1 + buffer), crop
+
     def tiles(self, tile_size, buffer=0.0):
         ratio = tile_size / self.resolution
         if tile_size <= 0 or not np.isclose(ratio, round(ratio), rtol=0, atol=1e-9):
