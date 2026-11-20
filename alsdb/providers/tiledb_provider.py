@@ -175,6 +175,7 @@ class TileDBProvider:
         """Return the picklable state: everything but the TileDB context."""
         state = self.__dict__.copy()
         state.pop("ctx", None)
+        state.pop("_exists", None)
         state["_schema_cache"] = None
         return state
 
@@ -203,6 +204,7 @@ class TileDBProvider:
         clone._raw_cfg = {**self._raw_cfg, **{k: str(v) for k, v in overrides.items()}}
         clone.ctx = tiledb.Ctx(tiledb.Config(clone._raw_cfg))
         clone._schema_cache = None
+        clone._exists = False
         return clone
 
     # ------------------------------------------------------------------
@@ -210,8 +212,25 @@ class TileDBProvider:
     # ------------------------------------------------------------------
 
     def array_exists(self) -> bool:
-        """Return True if the TileDB array already exists."""
-        return tiledb.array_exists(self.array_uri, ctx=self.ctx)
+        """Return True if the TileDB array already exists.
+
+        One listing of the array's ``__schema`` folder, not an open:
+        ``tiledb.array_exists`` opens the array, which reads the metadata of
+        every fragment not yet consolidated. Ingest asks once per file, and on
+        S3 that became millions of requests per batch (HTTP 429 from Ceph).
+        An array once seen is remembered (``create(overwrite=True)`` forgets).
+        """
+        if getattr(self, "_exists", False):
+            return True
+        if tiledb.object_type(self.array_uri, ctx=self.ctx) != "array":
+            return False
+        schema_dir = self.array_uri.rstrip("/") + "/__schema"
+        try:  # object_type also says "array" after a delete (TileDB SC-27854)
+            exists = bool(tiledb.VFS(ctx=self.ctx).ls(schema_dir))
+        except tiledb.TileDBError:
+            exists = False
+        self._exists = exists
+        return exists
 
     def open(self, mode: str = "r") -> tiledb.Array:
         """Open the TileDB array in the given mode (``"r"`` or ``"w"``)."""

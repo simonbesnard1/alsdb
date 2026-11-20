@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Trimmed schemas, integer Z, tile-by-index and coordinated (multi-job) product runs."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import tiledb
@@ -117,3 +119,32 @@ def test_worker_settings_must_match_the_registered_run(provider, tmp_path):
     compute_dtm(provider, store, **common, coordination="register")
     with pytest.raises(RuntimeError, match="no registered run"):
         compute_dtm(provider, store, **common, coordination="worker", tile_indices=[0], dtm_method="idw")
+
+
+def test_array_exists_lists_the_schema_instead_of_opening_the_array(tmp_path, monkeypatch):
+    """On S3 every open reads all unconsolidated fragment metadata (HTTP 429 at scale)."""
+    db, *_ = _array(tmp_path, "exists")
+    fresh = ALSDatabase(storage_type="local", uri=db.array_uri)
+    opened = []
+    real = tiledb.open
+    monkeypatch.setattr(tiledb, "open", lambda *a, **k: opened.append(a) or real(*a, **k))
+    assert fresh.array_exists() and fresh.array_exists()
+    assert opened == []
+    assert not ALSDatabase(storage_type="local", uri=str(tmp_path / "missing")).array_exists()
+
+
+def test_ingest_without_consolidation_leaves_the_metadata_unconsolidated(tmp_path):
+    import glob
+
+    files = sorted(glob.glob("data/example_als/PNOA_2021_*.laz"))
+    if not files:
+        pytest.skip("sample PNOA tile not available")
+    from alsdb.core.alstile import ALSTile
+
+    db = ALSDatabase(storage_type="local", uri=str(tmp_path / "noc"), schema_cfg=SCHEMA_CFG)
+    db.create(crs=ALSTile(files[0]).target_crs)  # the sample reports EPSG:3042
+    db.ingest_many(files, consolidate=False)
+    commits = tmp_path / "noc" / "__commits"
+    assert not list(commits.glob("*.con")), "no consolidated commits written"
+    db.ingest_many(files, overwrite=False)  # already ingested: skipped, nothing written
+    assert db.load_manifest()[Path(files[0]).name]["status"] == "ok"

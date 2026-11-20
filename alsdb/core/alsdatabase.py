@@ -185,6 +185,7 @@ class ALSDatabase(TileDBProvider):
             logger.info("Removing existing array at %s", self.array_uri)
             tiledb.remove(self.array_uri, ctx=self.ctx)
             self._schema_cache = None
+            self._exists = False
 
         cfg = self._schema_cfg
         if cfg is None:
@@ -626,6 +627,7 @@ class ALSDatabase(TileDBProvider):
         classification_config: ClassificationConfig | None = None,
         optimize: bool = False,
         classification_workers: int | None = None,
+        consolidate: bool = True,
     ) -> dict[str, int]:
         """
         Ingest a list of LAZ files, skipping already-ingested ones.
@@ -654,6 +656,11 @@ class ALSDatabase(TileDBProvider):
             If ``True``, wipe the array and re-ingest all files from scratch,
             ignoring the manifest.  If ``False`` (default), files already
             marked ``"ok"`` in the manifest are skipped.
+        consolidate:
+            Consolidate the array metadata after each *consolidate_every*
+            files. ``False`` when other processes write to the same array at
+            the same time: consolidating while they write races with their
+            commits; consolidate once they have all finished.
         optimize:
             Also merge the per-file fragments at the end (:meth:`optimize`).
             Off by default: with 100 fragments of 3 M points on a local disk
@@ -806,7 +813,7 @@ class ALSDatabase(TileDBProvider):
             # Consolidate only metadata — fast, near-zero memory. "array_meta"
             # merges the per-file manifest entries, so opening the array stays
             # quick. Fragment data consolidation is deferred to the end.
-            if newly_written > 0:
+            if newly_written > 0 and consolidate:
                 for meta_mode in ("commits", "fragment_meta", "array_meta"):
                     try:
                         self.consolidate(mode=meta_mode)
