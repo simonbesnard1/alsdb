@@ -148,3 +148,23 @@ def test_ingest_without_consolidation_leaves_the_metadata_unconsolidated(tmp_pat
     assert not list(commits.glob("*.con")), "no consolidated commits written"
     db.ingest_many(files, overwrite=False)  # already ingested: skipped, nothing written
     assert db.load_manifest()[Path(files[0]).name]["status"] == "ok"
+
+
+def test_registering_again_replaces_an_unfinished_run_but_not_a_completed_one(tmp_path):
+    db, *_ = _array(tmp_path, "rereg")
+    common = dict(resolution=1.0, bbox=BBOX, year=YEAR, tile_size=250.0)
+    store = ALSZarrStore(str(tmp_path / "s.zarr"))
+    compute_dtm(db, store, **common, coordination="register")
+    compute_dtm(db, store, **common, coordination="worker", tile_indices=[0, 1])
+    assert store.completed_tiles("dtm", 1.0, YEAR) == {0, 1}
+    x, y, attrs = _make_synthetic_points(np.random.default_rng(1))  # more input: new fragments
+    db.write(x[:10], y[:10], YEAR, {k: v[:10] for k, v in attrs.items()})
+    with pytest.raises(RuntimeError, match="no registered run"):  # workers notice the change
+        compute_dtm(db, store, **common, coordination="worker", tile_indices=[2])
+    compute_dtm(db, store, **common, coordination="register")  # unfinished: replaced, stale tiles cleared
+    assert ALSZarrStore(str(tmp_path / "s.zarr")).completed_tiles("dtm", 1.0, YEAR) == set()
+    compute_dtm(db, store, **common, coordination="worker", tile_indices=list(range(16)))
+    compute_dtm(db, store, **common, coordination="finish")
+    db.write(x[10:20], y[10:20], YEAR, {k: v[10:20] for k, v in attrs.items()})
+    with pytest.raises(ValueError, match="different processing configuration"):
+        compute_dtm(db, store, **common, coordination="register")  # completed: kept unless overwrite

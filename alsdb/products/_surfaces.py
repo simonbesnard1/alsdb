@@ -250,6 +250,7 @@ def compute_products(provider, store, products, options):
             **({"quality_layers": 2} if product == "chm" and quality else {}),
             backend=backend if product == "chm" else {},
         )
+    reregister = set()
     if coordination in ("worker", "finish"):
         _coordinated(store, products, resolution, year, configurations, coordination)
         if coordination == "finish":
@@ -260,13 +261,23 @@ def compute_products(provider, store, products, options):
             return
         needed = list(products)
     else:
-        needed = [
-            p
-            for p in products
-            if not store.check_run(
-                p, resolution, year, configurations[p], overwrite=options.get("overwrite", False)
-            )
-        ]
+        needed = []
+        for p in products:
+            try:
+                complete = store.check_run(
+                    p, resolution, year, configurations[p], overwrite=options.get("overwrite", False)
+                )
+            except ValueError:
+                # Registering again after the input or settings changed: a run
+                # that never finished (e.g. registered while the array was
+                # still being ingested) is replaced; a completed one is kept
+                # unless overwrite=True.
+                if coordination != "register" or _run_status(store, p, resolution, year) == "complete":
+                    raise
+                reregister.add(p)
+                complete = False
+            if not complete:
+                needed.append(p)
     if not needed:
         return
     crs = array_crs(provider)
@@ -296,7 +307,7 @@ def compute_products(provider, store, products, options):
             year,
             configurations[product],
             CHM_VARIABLES if product == "chm" else names,
-            resume=resume,
+            resume=resume and product not in reregister,
         )
         # A tile is skippable only if every product being computed finished it.
         done = store.completed_tiles(product, resolution, year) if resumed else set()
@@ -340,6 +351,15 @@ def compute_products(provider, store, products, options):
     if coordination == "local":
         for product in needed:
             store.finish_run(product, resolution, year)
+
+
+def _run_status(store, product, resolution, year):
+    """Status of the recorded run of *product* / *year*, or None."""
+    try:
+        records = store._root[_res_key(resolution)][product].attrs.get("processing_runs", {})
+    except KeyError:
+        return None
+    return (records.get(str(year)) or {}).get("status")
 
 
 def _res_key(resolution):
