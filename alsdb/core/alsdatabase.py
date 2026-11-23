@@ -397,8 +397,11 @@ class ALSDatabase(TileDBProvider):
         Does **not** touch the manifest — that is the caller's responsibility.
         Returns ``(n_points, manifest_entry)``.
 
-        Raises ``ValueError`` on CRS mismatch.
+        Raises ``ValueError`` on CRS mismatch, and
+        :class:`~alsdb.tile.tile.CorruptLASError` (a ``ValueError``) for a
+        damaged file, before any point is read.
         """
+        laz_path = Path(laz_path)
         filename = laz_path.name
         classification_config = classification_config or ClassificationConfig(enabled=False)
         tile = _tile or ALSTile(
