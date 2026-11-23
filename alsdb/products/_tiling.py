@@ -57,6 +57,28 @@ def release_query_buffers() -> None:
         gc.collect(0)
 
 
+# S3 answers under load that are worth retrying (Ceph sends HTTP 429 without a
+# code TileDB's retry logic recognises; curl errors are dropped connections).
+_TRANSIENT_S3 = ("429", "Too Many Requests", "SlowDown", "curlCode", "Could not connect")
+
+
+def _retry_transient(fn, *, tries=7, first_wait=2.0):
+    """Call *fn*, retrying TileDB errors that look like S3 throttling, with backoff."""
+    import time
+
+    import tiledb
+
+    for attempt in range(tries):
+        try:
+            return fn()
+        except tiledb.TileDBError as exc:
+            if attempt == tries - 1 or not any(k in str(exc) for k in _TRANSIENT_S3):
+                raise
+            wait = first_wait * 2**attempt
+            logger.warning("S3 throttled or dropped a read (%s); retry in %.0f s", str(exc)[:120], wait)
+            time.sleep(wait)
+
+
 def query_to_array(
     provider: TileDBProvider,
     bbox: tuple[float, float, float, float] | None,
@@ -82,6 +104,10 @@ def query_to_array(
         Structured numpy array with X, Y and the selected LAS attribute fields.
         ``attributes=None`` preserves the default of reading all attributes.
     """
+    return _retry_transient(lambda: _query_to_array(provider, bbox, year, attributes))
+
+
+def _query_to_array(provider, bbox, year, attributes):
     with provider.open("r") as arr:
         attrs = list(LAS_ATTRIBUTES if attributes is None else dict.fromkeys(attributes))
         unknown = set(attrs) - LAS_ATTRIBUTES.keys()

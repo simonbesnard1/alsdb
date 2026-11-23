@@ -9,6 +9,7 @@ import tiledb
 
 from alsdb.core.alsdatabase import ALSDatabase
 from alsdb.methods._grid import GridSpec
+from alsdb.products._tiling import _retry_transient as _ORIG_RETRY
 from alsdb.products._tiling import query_to_array
 from alsdb.products.chm import compute_all, compute_dtm
 from alsdb.storage.zarr_store import ALSZarrStore
@@ -168,3 +169,28 @@ def test_registering_again_replaces_an_unfinished_run_but_not_a_completed_one(tm
     db.write(x[10:20], y[10:20], YEAR, {k: v[10:20] for k, v in attrs.items()})
     with pytest.raises(ValueError, match="different processing configuration"):
         compute_dtm(db, store, **common, coordination="register")  # completed: kept unless overwrite
+
+
+def test_tile_queries_retry_s3_throttling_but_not_other_errors(tmp_path, monkeypatch):
+    import alsdb.products._tiling as tiling
+
+    db, x, *_ = _array(tmp_path, "throttle")
+    real_open = db.open
+    failures = {"n": 2}
+
+    def flaky(mode="r"):
+        if failures["n"]:
+            failures["n"] -= 1
+            raise tiledb.TileDBError("S3: Cannot retrieve S3 object size [HTTP Response Code: 429]")
+        return real_open(mode)
+
+    monkeypatch.setattr(db, "open", flaky)
+    monkeypatch.setattr(tiling, "_retry_transient",
+                        lambda fn, **k: tiling.__dict__["_retry_transient_orig"](fn, first_wait=0.01, **k))
+    monkeypatch.setitem(tiling.__dict__, "_retry_transient_orig", _ORIG_RETRY)
+    pts = query_to_array(db, BBOX, YEAR, attributes=("Z",))
+    assert len(pts) == len(x) and failures["n"] == 0
+
+    monkeypatch.setattr(db, "open", lambda mode="r": (_ for _ in ()).throw(tiledb.TileDBError("schema mismatch")))
+    with pytest.raises(tiledb.TileDBError, match="schema mismatch"):
+        query_to_array(db, BBOX, YEAR, attributes=("Z",))

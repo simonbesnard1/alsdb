@@ -25,7 +25,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "tiledb==0.35.2",
+    "tiledb==0.36.1",
     "zarr>=3.0",
     "numpy>=1.26",
     "pandas>=2.0",
@@ -90,10 +90,13 @@ pytest-cov = ">=5.0"
 scikit-learn = ">=1.3"
 joblib = ">=1.3"
 scikit-sparse = ">=0.5.1,<0.6"
+# libpdal-hdf 2.10 is built against HDF5 2 but does not require it; without
+# this pin the solver pairs it with HDF5 1.14 and PDAL prints plugin errors.
+hdf5 = ">=2"
 
 [tool.pixi.pypi-dependencies]
 alsdb = { path = ".", editable = true }
-tiledb = "==0.35.2"
+tiledb = "==0.36.1"
 
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
@@ -119,9 +122,6 @@ convention = "numpy"
 # Optional compiled constrained-Delaunay backend.
 [tool.pixi.feature.spikefree.dependencies]
 cgal-cpp = ">=6,<7"
-# libpdal-hdf 2.10 is built against HDF5 2 but does not require it; without
-# this pin the solver pairs it with HDF5 1.14 and PDAL prints plugin errors.
-hdf5 = ">=2"
 pybind11 = ">=2.13"
 cxx-compiler = "*"
 
@@ -131,7 +131,7 @@ build-spikefree = "python -m alsdb.methods._build_spikefree"
 # Optional R + lasR (r-lidar, GPL-3) for the alsdb.benchmark.lasr reference.
 # lasR is compiled from r-universe into the env: pixi run -e lasr install-lasr
 [tool.pixi.feature.lasr.dependencies]
-python = "3.14.*"  # tiledb 0.35.2 has no 3.15 wheel
+python = "3.14.*"  # tiledb 0.36.1 has no 3.15 wheel
 r-base = "4.4.*"
 r-terra = "*"
 r-codetools = "*"
@@ -141,7 +141,7 @@ proj = "*"
 cxx-compiler = "*"
 make = "*"
 pkg-config = "*"
-# As in spikefree: libpdal-hdf needs HDF5 2 but does not declare it, and
+# As in the base dependencies: libpdal-hdf needs HDF5 2 but does not declare it, and
 # without the pin every PDAL call printed HDF plugin load errors.
 hdf5 = ">=2"
 # libpdal-tiledb 2.10.2 build 5 links libaws-c-s3.so.1.1 without requiring
@@ -181,9 +181,14 @@ PYTHONNOUSERSITE = "1"  # packages in ~/.local/lib/python3.13 otherwise shadow t
 # batched S3 reads, and its query exhausted 14 GB on a 4 km2 block.
 gedidb = { git = "https://github.com/simonbesnard1/gedidb.git", rev = "a75ff1e58a98074bd71c02b2d3d2da44ee5f4f47" }
 
+# Same Python in the ingest (default) and product (spikefree) environments;
+# left free, the solver put default on 3.13 when PDAL moved to 2.10.
+[tool.pixi.feature.py314.dependencies]
+python = "3.14.*"
+
 [tool.pixi.environments]
-default = { features = [] }
-spikefree = { features = ["spikefree"] }
+default = { features = ["py314"] }
+spikefree = { features = ["py314", "spikefree"] }
 lasr = { features = ["lasr"] }
 helios = { features = ["helios"], no-default-feature = true }
 gedi = { features = ["gedi"] }
