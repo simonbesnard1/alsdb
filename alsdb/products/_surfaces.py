@@ -254,7 +254,9 @@ def compute_products(provider, store, products, options):
     if coordination in ("worker", "finish"):
         _coordinated(store, products, resolution, year, configurations, coordination)
         if coordination == "finish":
-            names = [n for p in products for n in (CHM_VARIABLES if p == "chm" and quality else (p,))]
+            names = [
+                n for p in products for n in (CHM_VARIABLES if p == "chm" and quality else (p,))
+            ]
             store.record_data_years([(_res_key(resolution), n, int(year)) for n in names])
             for product in products:
                 store.finish_run(product, resolution, year)
@@ -265,14 +267,21 @@ def compute_products(provider, store, products, options):
         for p in products:
             try:
                 complete = store.check_run(
-                    p, resolution, year, configurations[p], overwrite=options.get("overwrite", False)
+                    p,
+                    resolution,
+                    year,
+                    configurations[p],
+                    overwrite=options.get("overwrite", False),
                 )
             except ValueError:
                 # Registering again after the input or settings changed: a run
                 # that never finished (e.g. registered while the array was
                 # still being ingested) is replaced; a completed one is kept
                 # unless overwrite=True.
-                if coordination != "register" or _run_status(store, p, resolution, year) == "complete":
+                if (
+                    coordination != "register"
+                    or _run_status(store, p, resolution, year) == "complete"
+                ):
                     raise
                 reregister.add(p)
                 complete = False
@@ -374,10 +383,16 @@ def _coordinated(store, products, resolution, year, configurations, coordination
     import json
 
     for product in products:
-        configuration = json.loads(json.dumps(configurations[product], sort_keys=True, allow_nan=False))
+        configuration = json.loads(
+            json.dumps(configurations[product], sort_keys=True, allow_nan=False)
+        )
         fingerprint = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()
         try:
-            record = store._root[_res_key(resolution)][product].attrs.get("processing_runs", {}).get(str(year))
+            record = (
+                store._root[_res_key(resolution)][product]
+                .attrs.get("processing_runs", {})
+                .get(str(year))
+            )
         except KeyError:
             record = None
         if not record or record.get("fingerprint") != fingerprint:
@@ -385,4 +400,3 @@ def _coordinated(store, products, resolution, year, configurations, coordination
                 f"{product} {year}: no registered run with these settings; call with "
                 "coordination='register' first (same bbox and settings)"
             )
-

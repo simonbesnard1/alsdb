@@ -75,7 +75,9 @@ def _retry_transient(fn, *, tries=7, first_wait=2.0):
             if attempt == tries - 1 or not any(k in str(exc) for k in _TRANSIENT_S3):
                 raise
             wait = first_wait * 2**attempt
-            logger.warning("S3 throttled or dropped a read (%s); retry in %.0f s", str(exc)[:120], wait)
+            logger.warning(
+                "S3 throttled or dropped a read (%s); retry in %.0f s", str(exc)[:120], wait
+            )
             time.sleep(wait)
 
 

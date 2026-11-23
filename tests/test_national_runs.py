@@ -13,8 +13,7 @@ from alsdb.products._tiling import _retry_transient as _ORIG_RETRY
 from alsdb.products._tiling import query_to_array
 from alsdb.products.chm import compute_all, compute_dtm
 from alsdb.storage.zarr_store import ALSZarrStore
-from alsdb.utils.schema import LAS_ATTRIBUTES, TileDBSchemaConfig
-
+from alsdb.utils.schema import TileDBSchemaConfig
 from tests.conftest import BBOX, CRS, SCHEMA_CFG, YEAR, _make_synthetic_points
 
 KEEP = ("Z", "Intensity", "ReturnNumber", "NumberOfReturns", "Classification", "ScanAngleRank",
@@ -32,7 +31,7 @@ def _array(tmp_path, name, **schema):
 
 
 def test_trimmed_schema_stores_only_the_kept_fields_and_reads_the_rest_as_zeros(tmp_path):
-    db, x, y, attrs = _array(tmp_path, "trim", attributes=KEEP)
+    db, x, _, _ = _array(tmp_path, "trim", attributes=KEEP)
     with tiledb.open(db.array_uri) as arr:
         assert [arr.schema.attr(i).name for i in range(arr.schema.nattr)] == list(KEEP)
     pts = query_to_array(db, BBOX, YEAR, attributes=("Z", "Classification", "GpsTime"))
@@ -47,7 +46,7 @@ def test_trimmed_schema_stores_only_the_kept_fields_and_reads_the_rest_as_zeros(
 
 
 def test_integer_z_reads_back_bit_identical(tmp_path):
-    db, x, y, attrs = _array(tmp_path, "zint", attributes=KEEP, z_scale=0.001)
+    db, *_ = _array(tmp_path, "zint", attributes=KEEP, z_scale=0.001)
     full, *_ = _array(tmp_path, "full")
     a = np.sort(query_to_array(db, BBOX, YEAR, attributes=("Z",))["Z"])
     b = np.sort(query_to_array(full, BBOX, YEAR, attributes=("Z",))["Z"])
@@ -87,7 +86,7 @@ def test_tile_by_index_matches_the_tile_listing():
 
 
 def test_coordinated_jobs_fill_one_store_like_a_single_run(provider, tmp_path):
-    common = dict(resolution=1.0, bbox=BBOX, year=YEAR, tile_size=250.0)
+    common = {"resolution": 1.0, "bbox": BBOX, "year": YEAR, "tile_size": 250.0}
     single = ALSZarrStore(str(tmp_path / "single.zarr"))
     compute_dtm(provider, single, **common)
     shared = ALSZarrStore(str(tmp_path / "shared.zarr"))
@@ -100,7 +99,9 @@ def test_coordinated_jobs_fill_one_store_like_a_single_run(provider, tmp_path):
         compute_dtm(provider, job, **common, coordination="worker", tile_indices=indices)
     record = shared._root["1m"]["dtm"].attrs["processing_runs"][str(YEAR)]
     assert record["status"] == "running"  # workers never finish the run
-    compute_dtm(provider, ALSZarrStore(str(tmp_path / "shared.zarr")), **common, coordination="finish")
+    compute_dtm(
+        provider, ALSZarrStore(str(tmp_path / "shared.zarr")), **common, coordination="finish"
+    )
     final = ALSZarrStore(str(tmp_path / "shared.zarr"))
     assert final._root["1m"]["dtm"].attrs["processing_runs"][str(YEAR)]["status"] == "complete"
     assert YEAR in final._root["1m"]["dtm"].attrs["data_years"]
@@ -109,17 +110,21 @@ def test_coordinated_jobs_fill_one_store_like_a_single_run(provider, tmp_path):
     assert np.isfinite(a).any() and np.array_equal(a, b, equal_nan=True)
     assert final.completed_tiles("dtm", 1.0, YEAR) == set(range(16))
     # a rerun of a finished job resumes: nothing is recomputed, nothing is cleared
-    compute_dtm(provider, ALSZarrStore(str(tmp_path / "shared.zarr")), **common, coordination="register")
+    compute_dtm(
+        provider, ALSZarrStore(str(tmp_path / "shared.zarr")), **common, coordination="register"
+    )
     assert np.array_equal(ALSZarrStore(str(tmp_path / "shared.zarr")).to_dataset(1.0)["dtm"].values, a,
                           equal_nan=True)  # fmt: skip
 
 
 def test_worker_settings_must_match_the_registered_run(provider, tmp_path):
-    common = dict(resolution=1.0, bbox=BBOX, year=YEAR, tile_size=250.0)
+    common = {"resolution": 1.0, "bbox": BBOX, "year": YEAR, "tile_size": 250.0}
     store = ALSZarrStore(str(tmp_path / "s.zarr"))
     compute_dtm(provider, store, **common, coordination="register")
     with pytest.raises(RuntimeError, match="no registered run"):
-        compute_dtm(provider, store, **common, coordination="worker", tile_indices=[0], dtm_method="idw")
+        compute_dtm(
+            provider, store, **common, coordination="worker", tile_indices=[0], dtm_method="idw"
+        )
 
 
 def test_array_exists_lists_the_schema_instead_of_opening_the_array(tmp_path, monkeypatch):
@@ -153,7 +158,7 @@ def test_ingest_without_consolidation_leaves_the_metadata_unconsolidated(tmp_pat
 
 def test_registering_again_replaces_an_unfinished_run_but_not_a_completed_one(tmp_path):
     db, *_ = _array(tmp_path, "rereg")
-    common = dict(resolution=1.0, bbox=BBOX, year=YEAR, tile_size=250.0)
+    common = {"resolution": 1.0, "bbox": BBOX, "year": YEAR, "tile_size": 250.0}
     store = ALSZarrStore(str(tmp_path / "s.zarr"))
     compute_dtm(db, store, **common, coordination="register")
     compute_dtm(db, store, **common, coordination="worker", tile_indices=[0, 1])
@@ -162,13 +167,17 @@ def test_registering_again_replaces_an_unfinished_run_but_not_a_completed_one(tm
     db.write(x[:10], y[:10], YEAR, {k: v[:10] for k, v in attrs.items()})
     with pytest.raises(RuntimeError, match="no registered run"):  # workers notice the change
         compute_dtm(db, store, **common, coordination="worker", tile_indices=[2])
-    compute_dtm(db, store, **common, coordination="register")  # unfinished: replaced, stale tiles cleared
+    compute_dtm(
+        db, store, **common, coordination="register"
+    )  # unfinished: replaced, stale tiles cleared
     assert ALSZarrStore(str(tmp_path / "s.zarr")).completed_tiles("dtm", 1.0, YEAR) == set()
     compute_dtm(db, store, **common, coordination="worker", tile_indices=list(range(16)))
     compute_dtm(db, store, **common, coordination="finish")
     db.write(x[10:20], y[10:20], YEAR, {k: v[10:20] for k, v in attrs.items()})
     with pytest.raises(ValueError, match="different processing configuration"):
-        compute_dtm(db, store, **common, coordination="register")  # completed: kept unless overwrite
+        compute_dtm(
+            db, store, **common, coordination="register"
+        )  # completed: kept unless overwrite
 
 
 def test_tile_queries_retry_s3_throttling_but_not_other_errors(tmp_path, monkeypatch):
@@ -185,12 +194,17 @@ def test_tile_queries_retry_s3_throttling_but_not_other_errors(tmp_path, monkeyp
         return real_open(mode)
 
     monkeypatch.setattr(db, "open", flaky)
-    monkeypatch.setattr(tiling, "_retry_transient",
-                        lambda fn, **k: tiling.__dict__["_retry_transient_orig"](fn, first_wait=0.01, **k))
+    monkeypatch.setattr(
+        tiling,
+        "_retry_transient",
+        lambda fn, **k: tiling.__dict__["_retry_transient_orig"](fn, first_wait=0.01, **k),
+    )
     monkeypatch.setitem(tiling.__dict__, "_retry_transient_orig", _ORIG_RETRY)
     pts = query_to_array(db, BBOX, YEAR, attributes=("Z",))
     assert len(pts) == len(x) and failures["n"] == 0
 
-    monkeypatch.setattr(db, "open", lambda mode="r": (_ for _ in ()).throw(tiledb.TileDBError("schema mismatch")))
+    monkeypatch.setattr(
+        db, "open", lambda mode="r": (_ for _ in ()).throw(tiledb.TileDBError("schema mismatch"))
+    )
     with pytest.raises(tiledb.TileDBError, match="schema mismatch"):
         query_to_array(db, BBOX, YEAR, attributes=("Z",))

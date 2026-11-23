@@ -55,18 +55,22 @@ def dtm_error(pts, ground, terrain, where):
     """Mean absolute error of a TIN of the *ground* points against *terrain* at the points *where*."""
     from scipy.interpolate import LinearNDInterpolator
 
-    tin = LinearNDInterpolator(np.column_stack((pts["X"][ground], pts["Y"][ground])), pts["Z"][ground])
+    tin = LinearNDInterpolator(
+        np.column_stack((pts["X"][ground], pts["Y"][ground])), pts["Z"][ground]
+    )
     z = tin(pts["X"][where], pts["Y"][where])
     ok = np.isfinite(z)
     return float(np.abs(z[ok] - terrain(pts["X"][where][ok], pts["Y"][where][ok])).mean())
 
 
 def test_vegetation_evidence_is_high_in_the_patch_and_low_on_bare_ground():
-    pts, truth, _ = scene()
+    pts, _, _ = scene()
     share = vegetation_evidence(pts, cell=5.0)
     patch = np.hypot(pts["X"] - 30, pts["Y"] - 60) < 5
     bare = np.hypot(pts["X"] - 100, pts["Y"] - 30) < 10
-    assert share[patch].mean() > 0.25  # 30 % penetration, diluted by the 15 m window; above the 0.2 threshold
+    assert (
+        share[patch].mean() > 0.25
+    )  # 30 % penetration, diluted by the 15 m window; above the 0.2 threshold
     assert share[bare].mean() < 0.15
 
 
@@ -88,7 +92,9 @@ def test_envelope_removes_the_shrub_tops_and_keeps_the_cliff():
     seed = (pts["NumberOfReturns"] == 1) | patch
     ground = envelope_ground(pts, seed=seed)
     tops = (np.hypot(pts["X"] - 30, pts["Y"] - 60) < 5) & ~truth  # the rim is a transition zone
-    assert ground[tops].mean() < 0.3, "most shrub tops go; a few stay where no return reached the ground nearby"
+    assert ground[tops].mean() < 0.3, (
+        "most shrub tops go; a few stay where no return reached the ground nearby"
+    )
     assert ground[patch & truth].mean() > 0.9, "the ground returns under the patch are kept"
     # what matters: the terrain model under the patch is close to the terrain, not 1.5 m up
     assert dtm_error(pts, ground, terrain, tops) < 0.5
@@ -137,7 +143,9 @@ def test_blocked_fit_matches_a_single_block_fit():
     located = grid._locate(x, y)
     w = truth.astype(float)
     whole = envelope.fit_surface(grid, located, z, w, 0.1, block=10_000, anchor=0.0)
-    blocked = envelope.fit_surface(grid, located, z, w, 0.1, block=40, overlap=12, workers=2, anchor=0.0)
+    blocked = envelope.fit_surface(
+        grid, located, z, w, 0.1, block=40, overlap=12, workers=2, anchor=0.0
+    )
     # free block boundaries are hidden by the overlap blending: agreement at supported points;
     # inside the unsupported patch both are extrapolations and may differ
     d = np.abs(grid.sample(whole, x, y) - grid.sample(blocked, x, y))
@@ -151,8 +159,12 @@ def test_anchor_changes_little_where_the_surface_is_supported():
     grid = _Grid(x, y, 1.0)
     located = grid._locate(x, y)
     w = truth.astype(float)
-    free = envelope.fit_surface(grid, located, z, w, 0.1, block=40, overlap=12, anchor=0.0, x=x, y=y)
-    anchored = envelope.fit_surface(grid, located, z, w, 0.1, block=40, overlap=12, anchor=1e-3, x=x, y=y)
+    free = envelope.fit_surface(
+        grid, located, z, w, 0.1, block=40, overlap=12, anchor=0.0, x=x, y=y
+    )
+    anchored = envelope.fit_surface(
+        grid, located, z, w, 0.1, block=40, overlap=12, anchor=1e-3, x=x, y=y
+    )
     d = np.abs(grid.sample(free, x, y) - grid.sample(anchored, x, y))
     assert d[w > 0].mean() < 0.01
 
@@ -164,9 +176,21 @@ def test_a_grid_split_into_blocks_is_anchored(monkeypatch):
     grid = _Grid(x, y, 1.0)
     calls = []
     real = envelope._solve_block
-    monkeypatch.setattr(envelope, "_solve_block", lambda job: calls.append(job[8] is not None) or real(job))
-    envelope.fit_surface(grid, grid._locate(x, y), z, truth.astype(float), 0.1, block=40, overlap=12,
-                         anchor=1e-3, x=x, y=y)
+    monkeypatch.setattr(
+        envelope, "_solve_block", lambda job: calls.append(job[8] is not None) or real(job)
+    )
+    envelope.fit_surface(
+        grid,
+        grid._locate(x, y),
+        z,
+        truth.astype(float),
+        0.1,
+        block=40,
+        overlap=12,
+        anchor=1e-3,
+        x=x,
+        y=y,
+    )
     blocks = [c for c in calls]
     assert blocks and all(blocks[1:]), "every block of the fine grid carries the anchor"
 

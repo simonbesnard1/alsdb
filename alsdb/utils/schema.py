@@ -289,7 +289,9 @@ def create_schema(cfg: TileDBSchemaConfig) -> tiledb.ArraySchema:
                                       tiledb.ByteShuffleFilter(), tiledb.ZstdFilter(level=9)])  # fmt: skip
         return _attr_filters(name)
 
-    attrs = [tiledb.Attr(name=name, dtype=LAS_ATTRIBUTES[name], filters=filters(name)) for name in names]
+    attrs = [
+        tiledb.Attr(name=name, dtype=LAS_ATTRIBUTES[name], filters=filters(name)) for name in names
+    ]
     return tiledb.ArraySchema(
         domain=domain,
         attrs=attrs,

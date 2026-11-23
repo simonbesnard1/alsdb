@@ -133,7 +133,10 @@ class ClassificationConfig:
             raise ValueError("Neighbor counts and CSF rigidness must be positive integers")
         if self.envelope_iterations < 1:
             raise ValueError("envelope_iterations must be a positive integer")
-        if not np.isfinite(self.envelope_keep) or not 0 <= self.envelope_keep <= self.envelope_keep_bare:
+        if (
+            not np.isfinite(self.envelope_keep)
+            or not 0 <= self.envelope_keep <= self.envelope_keep_bare
+        ):
             raise ValueError("envelope_keep must be between 0 and envelope_keep_bare")
         thresholds = (self.vegetation_low, self.vegetation_medium, self.vegetation_high)
         if not np.isfinite(thresholds).all() or not thresholds[0] < thresholds[1] < thresholds[2]:
@@ -195,7 +198,9 @@ class ClassificationConfig:
 def ground_stage(config: ClassificationConfig) -> dict:
     """Build the configured PDAL ground-classification stage (not for PTD or the envelope)."""
     if config.ground_method in ("ptd", "envelope"):
-        raise ValueError(f"{config.ground_method} is not a PDAL stage; see alsdb.methods.{config.ground_method}")
+        raise ValueError(
+            f"{config.ground_method} is not a PDAL stage; see alsdb.methods.{config.ground_method}"
+        )
     ignore = "Classification[7:7],Classification[18:18]"
     if config.ground_method == "pmf":
         return {

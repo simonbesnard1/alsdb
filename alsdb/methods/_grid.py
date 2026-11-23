@@ -61,7 +61,7 @@ class GridSpec:
         return math.ceil(self.ny / n), math.ceil(self.nx / n)
 
     def tile(self, index, tile_size, buffer=0.0):
-        """The (query, crop) bboxes of tile *index* of :meth:`tiles`, without listing the others."""
+        """Return the (query, crop) bboxes of tile *index* of :meth:`tiles`, without listing the others."""
         n = round(tile_size / self.resolution)
         rows, cols = self.tile_layout(tile_size)
         if not 0 <= index < rows * cols:

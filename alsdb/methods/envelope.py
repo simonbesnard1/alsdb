@@ -177,15 +177,18 @@ def _blocks(n, block, overlap):
 
 
 def _ramp(n, lo_edge, hi_edge, overlap):
-    """Blend weights along one axis: 1 inside, 0 on the outer quarter of an inner overlap
-    (a free block boundary is unreliable, badly so across a cliff), linear in between."""
+    """Blend weights along one axis: 1 inside, 0 at a block edge, linear in between.
+
+    The weight reaches 0 on the outer quarter of an inner overlap: a free block
+    boundary is unreliable, badly so across a cliff.
+    """
     w = np.ones(n)
     margin = max(1, overlap // 4)
     ramp = np.concatenate([np.zeros(margin), np.linspace(0.0, 1.0, overlap - margin + 2)[1:-1]])
     if not lo_edge:
         w[:overlap] = ramp
     if not hi_edge:
-        w[n - overlap:] = ramp[::-1]
+        w[n - overlap :] = ramp[::-1]
     return w
 
 
@@ -211,7 +214,20 @@ def _solve_block(args):
     return spsolve(K.tocsc(), b)
 
 
-def fit_surface(grid, located, z, w, smoothness, *, block=128, overlap=32, workers=1, anchor=1e-3, x=None, y=None):
+def fit_surface(
+    grid,
+    located,
+    z,
+    w,
+    smoothness,
+    *,
+    block=128,
+    overlap=32,
+    workers=1,
+    anchor=1e-3,
+    x=None,
+    y=None,
+):
     """Weighted thin-plate grid fit: min sum w (z - S(x, y))^2 + smoothness * sum (lap S)^2.
 
     The grid is solved in overlapping blocks (direct factorisation each; free
