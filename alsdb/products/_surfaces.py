@@ -38,14 +38,28 @@ CHM_VARIABLES = (
 
 
 def input_revision(provider):
-    """Fingerprint visible fragments; ingestion/consolidation invalidates reuse."""
+    """Fingerprint the array's fragments by name; ingestion/consolidation invalidates reuse.
+
+    A fragment name holds its write timestamps and a unique ID, so the
+    fingerprint changes when fragments are written, consolidated or vacuumed,
+    and not when only fragment metadata or commits are consolidated. It is
+    read from one listing of ``__fragments`` (1,000 names per S3 request):
+    ``tiledb.array_fragments`` reads every fragment's metadata, which on S3
+    took 546 s for 63,118 fragments (8 s for the listing) and, run by every
+    job of a cluster product run, sent millions of requests (HTTP 429).
+    """
     import hashlib
     import json
 
     import tiledb
 
-    fragments = tiledb.array_fragments(provider.array_uri, ctx=provider.ctx)
-    records = sorted(zip(fragments.uri, fragments.timestamp_range, fragments.cell_num))
+    folder = provider.array_uri.rstrip("/") + "/__fragments"
+    vfs = tiledb.VFS(ctx=provider.ctx)
+    if vfs.is_dir(folder):
+        records = sorted(uri.rstrip("/").rsplit("/", 1)[-1] for uri in vfs.ls(folder))
+    else:  # array format older than 12: fragments next to the schema
+        fragments = tiledb.array_fragments(provider.array_uri, ctx=provider.ctx)
+        records = sorted(zip(fragments.uri, fragments.timestamp_range, fragments.cell_num))
     return hashlib.sha256(json.dumps(records).encode()).hexdigest()
 
 

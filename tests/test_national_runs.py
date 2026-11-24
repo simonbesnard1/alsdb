@@ -208,3 +208,21 @@ def test_tile_queries_retry_s3_throttling_but_not_other_errors(tmp_path, monkeyp
     )
     with pytest.raises(tiledb.TileDBError, match="schema mismatch"):
         query_to_array(db, BBOX, YEAR, attributes=("Z",))
+
+
+def test_input_revision_lists_fragment_names_instead_of_reading_their_metadata(
+    tmp_path, monkeypatch
+):
+    """array_fragments reads every fragment's metadata: 546 s for 63,118 fragments on S3."""
+    from alsdb.products._surfaces import input_revision
+
+    db, x, y, attrs = _array(tmp_path, "revision")
+    monkeypatch.setattr(
+        tiledb, "array_fragments", lambda *a, **k: pytest.fail("reads fragment metadata")
+    )
+    before = input_revision(db)
+    db.consolidate(mode="fragment_meta")
+    db.consolidate(mode="commits")
+    assert input_revision(db) == before  # metadata consolidation: same input
+    db.write(x[:10], y[:10], YEAR, {k: v[:10] for k, v in attrs.items()})
+    assert input_revision(db) != before  # a new fragment
