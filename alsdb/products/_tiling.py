@@ -365,9 +365,10 @@ def _map_in_processes(items, n_workers, initargs):
     items = iter(items)
     sentinel = object()
     context = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(
+    pool = ProcessPoolExecutor(
         n_workers, mp_context=context, initializer=_init_tile_worker, initargs=initargs
-    ) as pool:
+    )
+    try:
         pending = set()
         for item in items:
             pending.add(pool.submit(_run_tile, item))
@@ -381,6 +382,43 @@ def _map_in_processes(items, n_workers, initargs):
                 if item is not sentinel:
                     pending.add(pool.submit(_run_tile, item))
                 yield result
+    finally:
+        _shutdown_pool(pool)
+
+
+def _shutdown_pool(pool, grace=60.0):
+    """Shut a process pool down without waiting forever for its workers to exit.
+
+    ``with ProcessPoolExecutor()`` joins every worker without a limit: a
+    cluster job whose 784 tiles were all written waited 2.5 h for one worker
+    that never exited (after a burst of S3 errors) until Slurm cancelled it.
+    Every tile is written before its result is returned, so once the results
+    are in, workers still alive after *grace* seconds are terminated. Exits
+    are watched on the process sentinels and only signals are sent: the
+    pool's own management thread reaps the processes, and joining them here
+    as well races with it.
+    """
+    import time
+    from multiprocessing.connection import wait as ready
+
+    processes = list((getattr(pool, "_processes", None) or {}).values())  # private, stable
+    pool.shutdown(wait=False, cancel_futures=True)
+
+    def wait_exits(waiting, timeout):
+        deadline = time.monotonic() + timeout
+        while waiting and (left := deadline - time.monotonic()) > 0:
+            for sentinel in ready(list(waiting), left):
+                waiting.pop(sentinel)
+        return waiting
+
+    alive = wait_exits({p.sentinel: p for p in processes}, grace)
+    if alive:
+        logger.warning("run_tiled: %d worker processes did not exit in %.0f s; terminating them",
+                       len(alive), grace)  # fmt: skip
+        for process in alive.values():
+            process.terminate()
+        for process in wait_exits(alive, 5).values():
+            process.kill()
 
 
 def run_tiled(

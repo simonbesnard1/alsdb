@@ -226,3 +226,23 @@ def test_input_revision_lists_fragment_names_instead_of_reading_their_metadata(
     assert input_revision(db) == before  # metadata consolidation: same input
     db.write(x[:10], y[:10], YEAR, {k: v[:10] for k, v in attrs.items()})
     assert input_revision(db) != before  # a new fragment
+
+
+def test_a_worker_that_never_exits_does_not_block_the_pool_shutdown():
+    """A job whose tiles were all written waited 2.5 h for one worker to exit."""
+    import multiprocessing
+    import multiprocessing.connection
+    import time
+    from concurrent.futures import ProcessPoolExecutor
+
+    from alsdb.products._tiling import _shutdown_pool
+
+    pool = ProcessPoolExecutor(2, mp_context=multiprocessing.get_context("spawn"))
+    pool.submit(time.sleep, 3600)  # a worker stuck for an hour
+    assert pool.submit(abs, -1).result() == 1  # the other one answers
+    sentinels = [p.sentinel for p in pool._processes.values()]
+    t0 = time.monotonic()
+    _shutdown_pool(pool, grace=1.0)
+    assert time.monotonic() - t0 < 30
+    exited = multiprocessing.connection.wait(sentinels, timeout=10)  # the pool's thread reaps them
+    assert len(exited) == len(sentinels) == 2

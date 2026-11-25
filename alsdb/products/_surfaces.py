@@ -1,5 +1,6 @@
 """Shared buffered workers, provenance and restart handling for surface products."""
 
+import logging
 from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
@@ -35,6 +36,9 @@ CHM_VARIABLES = (
     "chm_pulse_density",
     "chm_scan_angle",
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def input_revision(provider):
@@ -364,6 +368,7 @@ def compute_products(provider, store, products, options):
             quality=quality,
             ground_outlier_removal=clean_ground,
         )
+        logger.info("tiles done; checking that the input fragments did not change")
         if input_revision(provider) != revision:
             raise RuntimeError("Input fragments changed during processing; rerun on stable input")
     except Exception:
