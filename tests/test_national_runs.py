@@ -246,3 +246,15 @@ def test_a_worker_that_never_exits_does_not_block_the_pool_shutdown():
     assert time.monotonic() - t0 < 30
     exited = multiprocessing.connection.wait(sentinels, timeout=10)  # the pool's thread reaps them
     assert len(exited) == len(sentinels) == 2
+
+
+def test_every_s3_setting_is_a_tiledb_option_and_dead_requests_fail_within_a_minute():
+    """Unknown keys are ignored silently: max_retries/backoff_* never had an effect."""
+    from alsdb.providers.tiledb_provider import TileDBProvider
+
+    known = {k for k, _ in tiledb.Config().items()}
+    db = TileDBProvider(storage_type="s3", uri="s3://bucket/array", url="https://s3.example.org",
+                        credentials={"AccessKeyId": "x", "SecretAccessKey": "y"})  # fmt: skip
+    s3 = {k: v for k, v in db._raw_cfg.items() if k.startswith("vfs.s3.")}
+    assert not set(s3) - known, sorted(set(s3) - known)
+    assert int(s3["vfs.s3.request_timeout_ms"]) <= 60_000

@@ -389,11 +389,12 @@ def _map_in_processes(items, n_workers, initargs):
 def _shutdown_pool(pool, grace=60.0):
     """Shut a process pool down without waiting forever for its workers to exit.
 
-    ``with ProcessPoolExecutor()`` joins every worker without a limit: a
-    cluster job whose 784 tiles were all written waited 2.5 h for one worker
-    that never exited (after a burst of S3 errors) until Slurm cancelled it.
-    Every tile is written before its result is returned, so once the results
-    are in, workers still alive after *grace* seconds are terminated. Exits
+    Runs on the way out only: after the last tile, or after a worker's error
+    has been raised. ``with ProcessPoolExecutor()`` joins every worker without
+    a limit, so one worker still waiting on S3 kept a job alive whose 784
+    tiles were all written (2.5 h, until Slurm cancelled it), and a job whose
+    worker had already failed. Every tile is written before its result is
+    returned, so workers still alive after *grace* seconds are terminated. Exits
     are watched on the process sentinels and only signals are sent: the
     pool's own management thread reaps the processes, and joining them here
     as well races with it.

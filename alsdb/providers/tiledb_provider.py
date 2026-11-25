@@ -123,19 +123,23 @@ class TileDBProvider:
             "sm.num_tiledb_threads": reader_threads,
             "sm.compute_concurrency_level": reader_threads,
             "sm.io_concurrency_level": reader_threads,
-            # Ceph compatibility: disable chunked payload signing (XAmzContentSHA256Mismatch)
-            "vfs.s3.aws_payload_signing": "false",
             # Multipart upload — required for large LAZ files
             "vfs.s3.use_multipart_upload": "true",
             "vfs.s3.multipart_part_size": "52428800",  # 50 MB
-            "vfs.s3.multipart_threshold": "52428800",
             "vfs.s3.max_parallel_ops": "8",
-            # Timeouts and retries
+            # Timeouts and retries. request_timeout_ms is an idle timeout (no byte
+            # received for that long), not a limit on the whole transfer: 10 min
+            # let a read on a connection that died in an S3 outage wait ~50 min
+            # (x connect_max_tries) before failing, and cluster jobs sat for hours.
+            # 60 s without a byte means the request is dead; a slow transfer is not
+            # cut off. connect_max_tries and connect_scale_factor (ms, doubled per
+            # try: 0.5, 1, 2, 4 s) are TileDB's retry settings; the max_retries /
+            # backoff_* keys used before were not TileDB options and were ignored
+            # (as were aws_payload_signing and multipart_threshold, now removed).
             "vfs.s3.connect_timeout_ms": "60000",
-            "vfs.s3.request_timeout_ms": "600000",
-            "vfs.s3.max_retries": "10",
-            "vfs.s3.backoff_scale": "2.0",
-            "vfs.s3.backoff_max_ms": "120000",
+            "vfs.s3.request_timeout_ms": "60000",
+            "vfs.s3.connect_max_tries": "5",
+            "vfs.s3.connect_scale_factor": "500",
         }
 
         if credentials:
