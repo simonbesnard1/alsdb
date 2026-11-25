@@ -258,3 +258,42 @@ def test_every_s3_setting_is_a_tiledb_option_and_dead_requests_fail_within_a_min
     s3 = {k: v for k, v in db._raw_cfg.items() if k.startswith("vfs.s3.")}
     assert not set(s3) - known, sorted(set(s3) - known)
     assert int(s3["vfs.s3.request_timeout_ms"]) <= 60_000
+
+
+def test_a_kept_reader_opens_the_array_once_and_recovers_from_a_failed_query(tmp_path, monkeypatch):
+    """Each open re-reads every fragment's metadata (35 MB per tile on the national arrays)."""
+    import pickle
+
+    db, *_ = _array(tmp_path, "kept")
+    expected = np.sort(query_to_array(db, BBOX, YEAR, attributes=("Z",))["Z"])
+    opens = []
+    real = tiledb.open
+    monkeypatch.setattr(
+        tiledb, "open", lambda *a, **k: opens.append(k.get("mode")) or real(*a, **k)
+    )
+    reader = db.with_config()
+    reader.keep_reader_open()
+    for _ in range(3):
+        assert np.array_equal(
+            np.sort(query_to_array(reader, BBOX, YEAR, attributes=("Z",))["Z"]), expected
+        )
+    assert opens == ["r"]  # one open for three tiles
+    with pytest.raises(RuntimeError), reader.open("r"):
+        raise RuntimeError("S3 dropped the read")  # a failed query drops the handle
+    query_to_array(reader, BBOX, YEAR, attributes=("Z",))
+    assert opens == ["r", "r"]
+    # never shared with another process or a copy
+    assert pickle.loads(pickle.dumps(reader)).__dict__.get("_reader") is None
+    assert not reader.with_config().__dict__.get("_keep_reader")
+
+
+def test_tile_workers_in_processes_give_the_same_products_as_threads(tmp_path):
+    db, *_ = _array(tmp_path, "procs")
+    common = {"resolution": 1.0, "bbox": BBOX, "year": YEAR, "tile_size": 250.0}
+    out = {}
+    for mode in ("threads", "processes"):
+        store = ALSZarrStore(str(tmp_path / f"{mode}.zarr"))
+        compute_dtm(db, store, **common, n_workers=2, parallel=mode)
+        out[mode] = store.to_dataset(1.0)["dtm"].values
+    assert np.isfinite(out["threads"]).any()
+    assert np.array_equal(out["threads"], out["processes"], equal_nan=True)

@@ -180,6 +180,8 @@ class TileDBProvider:
         state = self.__dict__.copy()
         state.pop("ctx", None)
         state.pop("_exists", None)
+        state.pop("_reader", None)  # an open array belongs to its process
+        state.pop("_keep_reader", None)
         state["_schema_cache"] = None
         return state
 
@@ -209,6 +211,8 @@ class TileDBProvider:
         clone.ctx = tiledb.Ctx(tiledb.Config(clone._raw_cfg))
         clone._schema_cache = None
         clone._exists = False
+        clone._reader = None
+        clone._keep_reader = False
         return clone
 
     # ------------------------------------------------------------------
@@ -237,8 +241,39 @@ class TileDBProvider:
         return exists
 
     def open(self, mode: str = "r") -> tiledb.Array:
-        """Open the TileDB array in the given mode (``"r"`` or ``"w"``)."""
+        """Open the TileDB array in the given mode (``"r"`` or ``"w"``).
+
+        After :meth:`keep_reader_open`, ``open("r")`` returns one shared read
+        handle (closing it, or leaving its ``with`` block, keeps it open).
+        """
+        if mode == "r" and getattr(self, "_keep_reader", False):
+            if getattr(self, "_reader", None) is None:
+                self._reader = tiledb.open(self.array_uri, mode="r", ctx=self.ctx)
+            return _SharedReader(self)
         return tiledb.open(self.array_uri, mode=mode, ctx=self.ctx)
+
+    def keep_reader_open(self) -> None:
+        """Reuse one read handle for every later ``open("r")`` of this provider.
+
+        Opening an array reads the metadata of all its fragments: 35 MB per
+        open for 80,000 fragments on S3, about as much as the points of a
+        500 m tile, and a tile worker opened the array for every tile. For a
+        single process reading tiles one at a time from input that does not
+        change during the run (not for threads sharing the provider, and not
+        while fragments are being written: the handle sees the array as it was
+        when opened). A query that fails drops the handle; the next open makes
+        a fresh one.
+        """
+        self._keep_reader = True
+        self._reader = None
+
+    def _drop_reader(self) -> None:
+        reader, self._reader = getattr(self, "_reader", None), None
+        if reader is not None:
+            try:
+                reader.close()
+            except tiledb.TileDBError:
+                pass
 
     @property
     def schema(self) -> tiledb.ArraySchema:
@@ -247,3 +282,24 @@ class TileDBProvider:
             with self.open("r") as arr:
                 self._schema_cache = arr.schema
         return self._schema_cache
+
+
+class _SharedReader:
+    """The provider's kept read handle: usable like an open array, never closed by its users."""
+
+    def __init__(self, provider):
+        self._provider = provider
+
+    def __enter__(self):
+        return self._provider._reader
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:  # e.g. an S3 error mid-query: start the next query afresh
+            self._provider._drop_reader()
+        return False
+
+    def close(self) -> None:
+        """Keep the shared handle open (it lives as long as its provider)."""
+
+    def __getattr__(self, name):
+        return getattr(self._provider._reader, name)

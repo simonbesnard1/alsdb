@@ -338,6 +338,10 @@ def _init_tile_worker(worker_fn, provider, store, kwargs, threads):
         "sm.compute_concurrency_level": n, "sm.io_concurrency_level": n,
         "sm.tile_cache_size": str(128 * 1024**2),
     })  # fmt: skip
+    if hasattr(provider, "keep_reader_open"):
+        # one open per worker, not per tile: an open re-reads every fragment's
+        # metadata (35 MB for 80,000 fragments, ~40% of a tile's S3 traffic)
+        provider.keep_reader_open()
     _TILE_WORKER.update(fn=worker_fn, provider=provider, store=store, kwargs=kwargs, done=0)
 
 
