@@ -26,6 +26,8 @@ from alsdb.products._tiling import (
     run_tiled,
 )
 
+from alsdb.providers.tiledb_provider import TileDBProvider
+
 CHM_VARIABLES = (
     "chm",
     "chm_quality",
@@ -234,13 +236,17 @@ def compute_products(provider, store, products, options):
     quality = options.get("quality", True)
     clean_ground = options.get("ground_outlier_removal", True)
     exclude = options.get("dsm_exclude_classes", options.get("exclude_classes", (7, 18)))
-    revision = input_revision(provider)
+    revision = None
+    source = None
+    if type(provider) is TileDBProvider:
+        revision = input_revision(provider)
+        source = str(provider.array_uri)
     base = {
         "bbox": list(bbox),
         "resolution": resolution,
         "tile_size": tile_size,
         "tile_buffer": buffer,
-        "source": str(provider.array_uri),
+        "source": source,
         "source_version": options.get("source_version"),
         "source_revision": revision,
         "ground_outlier_removal": clean_ground,
@@ -368,9 +374,9 @@ def compute_products(provider, store, products, options):
             quality=quality,
             ground_outlier_removal=clean_ground,
         )
-        logger.info("tiles done; checking that the input fragments did not change")
-        if input_revision(provider) != revision:
-            raise RuntimeError("Input fragments changed during processing; rerun on stable input")
+        if type(provider) is TileDBProvider:
+            if input_revision(provider) != revision:
+                raise RuntimeError("Input fragments changed during processing; rerun on stable input")
     except Exception:
         if coordination == "local":  # a failed worker job leaves the shared run running
             for product in needed:
@@ -379,7 +385,6 @@ def compute_products(provider, store, products, options):
     if coordination == "local":
         for product in needed:
             store.finish_run(product, resolution, year)
-
 
 def _run_status(store, product, resolution, year):
     """Status of the recorded run of *product* / *year*, or None."""

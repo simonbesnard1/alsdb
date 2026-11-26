@@ -41,6 +41,7 @@ import numpy as np
 from alsdb.methods._terrain import GROUND_CLASSES
 from alsdb.methods._terrain import VEG_CLASSES as _VEG_CLASSES
 from alsdb.methods.rasterise import _NOISE_CLASSES, _PITFREE_THRESHOLDS
+from alsdb.providers.copc_provider import COPCProvider
 
 if TYPE_CHECKING:
     from alsdb.providers.tiledb_provider import TileDBProvider
@@ -94,7 +95,7 @@ def _validate_grid_alignment(tile_size: float, resolution: float) -> None:
 
 
 def compute_chm(
-    provider: TileDBProvider,
+    provider: TileDBProvider | COPCProvider,
     store: ALSZarrStore,
     resolution: float = 1.0,
     bbox: tuple[float, float, float, float] | None = None,
@@ -168,7 +169,7 @@ def compute_chm(
 
 
 def compute_dtm(
-    provider: TileDBProvider,
+    provider: TileDBProvider | COPCProvider,
     store: ALSZarrStore,
     resolution: float = 1.0,
     bbox: tuple[float, float, float, float] | None = None,

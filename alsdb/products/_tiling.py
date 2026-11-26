@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
+from alsdb.providers.copc_provider import COPCProvider
 
 import numpy as np
 import pdal
@@ -82,7 +83,7 @@ def _retry_transient(fn, *, tries=7, first_wait=2.0):
 
 
 def query_to_array(
-    provider: TileDBProvider,
+    provider: TileDBProvider | COPCProvider,
     bbox: tuple[float, float, float, float] | None,
     year: int | None = None,
     attributes: tuple[str, ...] | None = None,
@@ -106,10 +107,20 @@ def query_to_array(
         Structured numpy array with X, Y and the selected LAS attribute fields.
         ``attributes=None`` preserves the default of reading all attributes.
     """
+
     return _retry_transient(lambda: _query_to_array(provider, bbox, year, attributes))
 
 
 def _query_to_array(provider, bbox, year, attributes):
+
+    if type(provider) is COPCProvider:
+        return provider.query_to_array(
+            bbox=bbox,
+            year=year,
+            attributes=attributes,
+        )
+
+    # TileDBProvider
     with provider.open("r") as arr:
         attrs = list(LAS_ATTRIBUTES if attributes is None else dict.fromkeys(attributes))
         unknown = set(attrs) - LAS_ATTRIBUTES.keys()
@@ -150,6 +161,9 @@ def array_crs(provider) -> str:
     Returns an empty string if no CRS has been written (e.g. the array was
     created without one).
     """
+    if type(provider) is COPCProvider:
+        return ""
+
     with provider.open("r") as arr:
         return arr.meta.get("crs", "")
 
@@ -172,6 +186,13 @@ def array_data_bbox(provider) -> tuple[float, float, float, float]:
     RuntimeError
         If the array is empty (no points ingested yet).
     """
+
+    if type(provider) is COPCProvider:
+        bbox = provider.data_bbox()
+        if bbox is None:
+            raise RuntimeError("COPC source contains no data.")
+        return tuple(float(v) for v in bbox)
+
     with provider.open("r") as arr:
         ned = arr.nonempty_domain()
     if ned is None:
@@ -202,6 +223,10 @@ def check_year_exists(year: int, provider) -> bool:
     Logs a warning and returns ``False`` when the year is outside the stored
     range, so callers can bail out early.
     """
+
+    if type(provider) is COPCProvider:
+        return True
+
     with provider.open("r") as arr:
         ned = arr.nonempty_domain()
     if ned is None:

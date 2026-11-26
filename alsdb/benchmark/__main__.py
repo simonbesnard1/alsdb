@@ -75,6 +75,9 @@ def main(argv=None):
         from alsdb.benchmark.timing import main as timing_main
 
         return timing_main(argv[1:] if argv[0] == "timing" else ["report", *argv[1:]])
+    if argv and argv[0] == "storage":
+        from alsdb.benchmark.storage import main as storage_main
+        return storage_main(argv[1:])
 
     parser = argparse.ArgumentParser(prog="python -m alsdb.benchmark")
     sub = parser.add_subparsers(dest="command", required=True)
